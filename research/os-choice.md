@@ -2,7 +2,7 @@
 
 ## Decision
 
-**Raspberry Pi OS Lite (Bookworm)** is the operating system for FrameLink.
+**Raspberry Pi OS Lite (Trixie, Debian 13)** is the operating system for FrameLink. (The original research was written against Bookworm; the same rationale applies on Trixie, which became the current Raspberry Pi OS base in late 2025. See the [build guides under docs/](../docs/) for Trixie-specific commands and packages.)
 
 ## Requirements
 
@@ -71,7 +71,7 @@ Full GNOME desktop variant of Ubuntu for Pi.
 
 **Why not chosen:** GNOME desktop uses ~800 MB-1 GB at idle. With Chromium, total RAM usage would approach or exceed 2 GB, causing heavy swapping. Not viable for a 2 GB device.
 
-### Raspberry Pi OS Desktop (Bookworm)
+### Raspberry Pi OS Desktop (Trixie)
 
 Full desktop variant of Raspberry Pi OS with the PIXEL/Wayland desktop environment.
 

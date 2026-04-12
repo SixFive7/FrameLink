@@ -116,7 +116,7 @@ Low-level WebRTC SFU library (Node.js with C++ worker). Powerful but requires bu
 
 Maximum-flexibility approach using GStreamer pipelines for WebRTC.
 
-**Why not chosen:** Pi 5 + Bookworm has known GStreamer/libcamera issues. Requires building everything from scratch — signaling, room management, client UI. More of a toolkit than a solution.
+**Why not chosen:** Pi 5 GStreamer/libcamera integration (originally an issue on Bookworm, largely resolved on Trixie) would still require building everything from scratch — signaling, room management, client UI. More of a toolkit than a solution.
 
 ### OpenVidu
 
@@ -158,7 +158,7 @@ Open-source web conferencing platform for education.
 
 Raspberry Pi camera-to-WebRTC bridge.
 
-**Why not chosen:** Dead project. Does not work on Pi 5 or Bookworm.
+**Why not chosen:** Dead project. Does not work on Pi 5 / modern Debian (Bookworm or Trixie).
 
 ### Asterisk + WebRTC
 

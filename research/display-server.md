@@ -53,7 +53,7 @@ Reference Wayland compositor from freedesktop.org. Used in some Yocto/embedded s
 ### Installation
 
 ```bash
-sudo apt install labwc chromium-browser
+sudo apt install labwc chromium
 ```
 
 ### Autostart (cage-equivalent kiosk behavior)
@@ -61,7 +61,7 @@ sudo apt install labwc chromium-browser
 File: `~/.config/labwc/autostart`
 
 ```bash
-chromium-browser \
+chromium \
   --kiosk \
   --noerrdialogs \
   --disable-infobars \
@@ -72,7 +72,6 @@ chromium-browser \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \
   --use-fake-ui-for-media-stream \
-  --enable-features=WebRTCPipeWireCapturer \
   http://localhost:8888
 ```
 
@@ -90,7 +89,8 @@ chromium-browser \
 | `--disable-background-timer-throttling` | Prevent timer throttling (important for WebRTC) |
 | `--disable-renderer-backgrounding` | Prevent renderer deprioritization |
 | `--use-fake-ui-for-media-stream` | Hide the camera/mic recording indicator |
-| `--enable-features=WebRTCPipeWireCapturer` | Enable PipeWire capture for Wayland screen sharing |
+
+> On Trixie, Chromium 130+ enables PipeWire camera capture by default, so the previously used `--enable-features=WebRTCPipeWireCapturer` flag has been dropped.
 
 ### Known Issues: Pi 5 + DSI Display
 
