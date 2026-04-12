@@ -19,12 +19,16 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 | Camera | [Raspberry Pi Camera Module 3, 12MP, Auto-Focus, IMX708](https://www.waveshare.com/raspberry-pi-camera-module-3.htm?sku=23943) | Raspberry Pi Camera module 3 | Raspberry Pi Foundation | 23943 |
 | Power supply | [Official 27W USB Type-C Power Supply (White, EU)](https://www.waveshare.com/raspberry-pi-5-official-27w-psu.htm?sku=25910) | Raspberry Pi 5 Official 27W PSU White EU | Raspberry Pi Foundation | 25910 |
 | Cooling | [Aluminum Heatsink with Thermal Pads and Spring-Loaded Push Pins](https://www.waveshare.com/pi5-active-cooler-c.htm) | Pi5-Active-Cooler-C | Waveshare | 26415 |
+| Mic array | [ReSpeaker XVF3800 USB 4-Mic Array](https://thepihut.com/products/respeaker-xmos-xvf3800-ai-powered-4-mic-array-for-clear-voice-even-in-noise) | ReSpeaker XVF3800 | Seeed Studio | 101991441 |
+| Speaker (option A) | [Adafruit Mono Enclosed Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/3351/6612456) | 3351 | Adafruit | 3351 |
+| Speaker (option B) | [PUI Audio Enclosed Oval Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/pui-audio-inc/AS07104PO-LW152-R/4835136) | AS07104PO-LW152-R | PUI Audio | AS07104PO-LW152-R |
+| Speaker cable | [Adafruit JST PH 2-Pin Cable 100mm](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/261/5353586) | 261 | Adafruit | 261 |
 | Call button | GPIO momentary push button (TBD) | — | — | — |
-| Audio | USB speakerphone (TBD) | — | — | — |
+| Network cable | RJ45 Cat5e/Cat6 Ethernet cable — preferred over WiFi for reliability | — | — | — |
 
 ## Software Stack
 
-- **OS**: Raspberry Pi OS Lite (Bookworm) — first-party hardware support, built-in overlayfs for SD card longevity, largest Pi kiosk community
+- **OS**: Raspberry Pi OS Lite (Trixie, Debian 13) — first-party hardware support, built-in overlayfs for SD card longevity, largest Pi kiosk community
 - **Display server**: Wayland with labwc compositor — official default since Oct 2024, GPU-accelerated compositing
 - **Photo slideshow**: [Immich Kiosk](https://github.com/damongolding/immich-kiosk) — connects to an existing Immich server, runs inside an iframe in the SPA
 - **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU — auto-reconnect, built-in TURN, adaptive bitrate, single Docker container
@@ -50,6 +54,9 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
   +-- Chromium kiosk (auto-restart on crash)
   +-- Watchdog (memory monitor, scheduled restart)
   +-- ZRAM (compressed swap)
+
+[USB devices]
+  +-- ReSpeaker XVF3800 (4-mic array + speaker amp, USB audio)
 ```
 
 ### Server (Docker)
@@ -88,19 +95,32 @@ Key design decisions and the reasoning behind them:
 - [Video Calling Platform](research/video-calling.md) — why LiveKit over 20 other candidates, with Janus as fallback
 - [Display Server & Compositor](research/display-server.md) — why Wayland with labwc over X11 and cage
 - [Kiosk Switching Architecture](research/kiosk-architecture.md) — why SPA with iframe over tab switching
-- [Camera & Audio](research/camera-audio.md) — v4l2loopback bridge for Camera Module 3, USB speakerphone for audio
+- [Camera & Audio](research/camera-audio.md) — v4l2loopback bridge for Camera Module 3, ReSpeaker XVF3800 mic array + enclosed speaker for audio
 - [2GB RAM Feasibility](research/ram-feasibility.md) — budget analysis, mitigations, and mandatory hardware validation plan
 
 ## Build Guide
 
-The full step-by-step implementation plan is in [docs/build-guide.md](docs/build-guide.md). It covers 6 phases:
+The build is split into one hardware guide and ten software guides, each stepping through validated instructions only:
 
-1. **Hardware Validation** — go/no-go gate proving 2GB RAM can handle the workload
-2. **Server Setup** — LiveKit + token service + SSL on Docker
-3. **SPA Development** — the custom kiosk shell (slideshow iframe + video grid + LiveKit client)
-4. **Pi System Services** — camera bridge, GPIO daemon, Chromium launcher as systemd services
-5. **Reliability Hardening** — watchdog, scheduled restarts, SD card protection
-6. **Multi-Device Deployment** — golden image, per-device config, household rollout
+1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
+2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
+3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
+4. [Kiosk base](docs/4-kiosk-base.md) — labwc + Chromium fullscreen
+5. [Camera bridge](docs/5-camera-bridge.md) — v4l2loopback + libcamera pipeline
+6. [WebRTC hardware validation](docs/6-webrtc-validation.md) — the 2 GB go/no-go gate
+7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker, token service, SSL
+8. [Kiosk SPA](docs/8-spa.md) — slideshow iframe, video grid, LiveKit client
+9. [GPIO button daemon](docs/9-gpio-button.md) — Python gpiozero → WebSocket toggle
+10. [systemd services & reliability](docs/10-systemd-and-reliability.md) — services, watchdog, SD protection
+11. [Multi-device deployment](docs/11-multi-device-deploy.md) — golden image, per-device identity, household rollout
+
+## To Do
+
+- [ ] **A/B test speakers** — compare Adafruit 3351 vs PUI AS07104PO-LW152-R for voice clarity, volume, and AEC performance with the XVF3800. Pick one.
+- [ ] **Design 3D-printed case** — wall-mounted enclosure holding display, Pi, XVF3800 + camera assembly (top), and speaker (bottom). Three acoustically separated chambers for AEC. See [case design notes](research/camera-audio.md#aec-acoustic-echo-cancellation-design).
+- [ ] **Tune XVF3800 AEC** — adjust `AUDIO_MGR_SYS_DELAY`, amp enable (`GPO_WRITE_VALUE 31 0`), and ALSA mixer levels during Phase 1 hardware validation.
+- [ ] **Source remaining parts** — USB-C to USB-A cables (×2), GPIO buttons (×2), microSD cards (×2), foam tape for speaker isolation.
+- [ ] **If neither enclosed speaker is loud/clear enough** — consider Tectonic TEBM28C10-4/B BMR driver with 3D-printed sealed chamber (~80-110ml). See [speaker research](research/camera-audio.md#speaker-selection).
 
 ## Key Risk
 
