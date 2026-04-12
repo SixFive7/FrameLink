@@ -100,19 +100,20 @@ Key design decisions and the reasoning behind them:
 
 ## Build Guide
 
-The build is split into one hardware guide and ten software guides, each stepping through validated instructions only:
+The build is split into one hardware guide and eleven software guides, each stepping through validated instructions only:
 
 1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
 2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
 3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
-4. [Kiosk base](docs/4-kiosk-base.md) — labwc + Chromium fullscreen
-5. [Camera bridge](docs/5-camera-bridge.md) — v4l2loopback + libcamera pipeline
-6. [WebRTC hardware validation](docs/6-webrtc-validation.md) — the 2 GB go/no-go gate
-7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker, token service, SSL
-8. [Kiosk SPA](docs/8-spa.md) — slideshow iframe, video grid, LiveKit client
-9. [GPIO button daemon](docs/9-gpio-button.md) — Python gpiozero → WebSocket toggle
-10. [systemd services & reliability](docs/10-systemd-and-reliability.md) — services, watchdog, SD protection
-11. [Multi-device deployment](docs/11-multi-device-deploy.md) — golden image, per-device identity, household rollout
+4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, AEC tuning
+5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
+6. [Camera bridge](docs/6-camera-bridge.md) — v4l2loopback + libcamera pipeline
+7. [WebRTC hardware validation](docs/7-webrtc-validation.md) — the 2 GB go/no-go gate
+8. [LiveKit server deployment](docs/8-livekit-server.md) — Docker, token service, SSL
+9. [Kiosk SPA](docs/9-spa.md) — slideshow iframe, video grid, LiveKit client
+10. [GPIO button daemon](docs/10-gpio-button.md) — Python gpiozero → WebSocket toggle
+11. [systemd services & reliability](docs/11-systemd-and-reliability.md) — services, watchdog, SD protection
+12. [Multi-device deployment](docs/12-multi-device-deploy.md) — golden image, per-device identity, household rollout
 
 ## To Do
 

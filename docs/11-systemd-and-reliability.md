@@ -1,4 +1,4 @@
-# Software Build Guide 10 — systemd Services & Reliability Hardening
+# Software Build Guide 11 — systemd Services & Reliability Hardening
 
 Turn the camera bridge, SPA static server, GPIO daemon, and Chromium kiosk into systemd services with the correct dependency ordering, so the Pi comes up into a working kiosk state from cold boot. Then harden for 24/7 unattended operation: memory watchdog, `/dev/video8` watchdog, nightly Chromium restart, overlayfs, `/tmp` on tmpfs, volatile journald, and unattended security updates.
 
@@ -79,7 +79,7 @@ WantedBy=graphical.target
 ```
 camera-bridge.service   (starts first, creates /dev/video8)
 spa-server.service      (starts, serves SPA on :8888)
-gpio-daemon.service     (starts, listens for button presses — see guide 09)
+gpio-daemon.service     (starts, listens for button presses — see guide 10)
 chromium-kiosk.service  (starts last, loads SPA in fullscreen)
 ```
 

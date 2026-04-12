@@ -1,4 +1,4 @@
-# Software Build Guide 05 — Camera Bridge (v4l2loopback)
+# Software Build Guide 06 — Camera Bridge (v4l2loopback)
 
 Bridge the Pi Camera Module 3 (libcamera) to a standard V4L2 device so Chromium's `getUserMedia()` can see it. Install GStreamer and `v4l2loopback`, load the kernel module persistently, run the GStreamer pipeline, and verify the resulting `/dev/video8` shows up in Chromium.
 
@@ -34,7 +34,7 @@ Bridge the Pi Camera Module 3 (libcamera) to a standard V4L2 device so Chromium'
    EOF
    ```
 
-4. **Test the GStreamer pipeline manually** — this reads from the Pi Camera via libcamera and writes frames to `/dev/video8`. The Camera Module 3 is natively landscape (16:9), and our display is rotated to landscape too (see [guide 3 (hardware configuration)](3-hardware-configuration.md) for the TTY and [guide 4 step 5](4-kiosk-base.md) for labwc), so the camera and display orientations match — **no `videoflip`/rotation filter is needed in the pipeline**.
+4. **Test the GStreamer pipeline manually** — this reads from the Pi Camera via libcamera and writes frames to `/dev/video8`. The Camera Module 3 is natively landscape (16:9), and our display is rotated to landscape too (see [guide 3 (hardware configuration)](3-hardware-configuration.md) for the TTY and [guide 5 step 5](5-kiosk-base.md) for labwc), so the camera and display orientations match — **no `videoflip`/rotation filter is needed in the pipeline**.
 
    ![RUN](https://img.shields.io/badge/👤-RUN-blue?style=flat-square)
 

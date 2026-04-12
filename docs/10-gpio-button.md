@@ -1,4 +1,4 @@
-# Software Build Guide 09 — GPIO Button Daemon
+# Software Build Guide 10 — GPIO Button Daemon
 
 Wire up the physical call button to a Python daemon that watches the GPIO pin and sends a toggle command to the SPA over a localhost WebSocket.
 

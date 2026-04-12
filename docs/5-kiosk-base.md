@@ -1,4 +1,4 @@
-# Software Build Guide 04 — Kiosk Base (labwc + Chromium)
+# Software Build Guide 05 — Kiosk Base (labwc + Chromium)
 
 Install the Wayland compositor (`labwc`) and Chromium, enable console autologin, and wire up a labwc autostart entry that launches Chromium fullscreen with the kiosk flag set. After this guide the Pi boots directly into a browser on the DSI display.
 

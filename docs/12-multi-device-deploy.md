@@ -1,4 +1,4 @@
-# Software Build Guide 11 — Multi-Device Deployment
+# Software Build Guide 12 — Multi-Device Deployment
 
 Scale from one working prototype to the full household rollout. Capture a golden SD-card image (or an Ansible playbook), flash and configure per-device identity, boot each unit, run a multi-device soak test, then deploy to each household.
 
@@ -54,13 +54,14 @@ Store the device identity in a config file (e.g., `/home/framelink/config.json`)
 | ---                                                                | ---                                             | ---              | ---                        |
 | [02 SD flash & first boot](2-sd-flash-first-boot.md)               | Get Pi online with Trixie Lite + base packages  | 0.5 day          | Hardware guide complete    |
 | [03 Hardware configuration](3-hardware-configuration.md)           | DSI display + kernel parameters                 | 0.5 day          | 02                         |
-| [04 Kiosk base](4-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 03                         |
-| [05 Camera bridge](5-camera-bridge.md)                             | v4l2loopback + libcamera pipeline               | 0.5 day          | 04                         |
-| [06 WebRTC hardware validation](6-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 05                         |
-| [07 LiveKit server](7-livekit-server.md)                           | LiveKit + token service + SSL                   | 1 day            | 06 pass                    |
-| [08 SPA](8-spa.md)                                                 | Build the kiosk shell + LiveKit client          | 3-5 days         | 07                         |
-| [09 GPIO button daemon](9-gpio-button.md)                          | Python gpiozero daemon                          | 0.5 day          | 08                         |
-| [10 systemd & reliability](10-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 09                         |
-| [11 Multi-device deploy](11-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 10                         |
+| [04 Audio configuration](4-audio-configuration.md)                 | XVF3800 pinning, amp enable, AEC tuning         | 0.5-1 day        | 03                         |
+| [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
+| [06 Camera bridge](6-camera-bridge.md)                             | v4l2loopback + libcamera pipeline               | 0.5 day          | 05                         |
+| [07 WebRTC hardware validation](7-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 06                         |
+| [08 LiveKit server](8-livekit-server.md)                           | LiveKit + token service + SSL                   | 1 day            | 07 pass                    |
+| [09 SPA](9-spa.md)                                                 | Build the kiosk shell + LiveKit client          | 3-5 days         | 08                         |
+| [10 GPIO button daemon](10-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 09                         |
+| [11 systemd & reliability](11-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 10                         |
+| [12 Multi-device deploy](12-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 11                         |
 
-Total estimated: ~10-15 days of focused work, assuming the hardware validation gate (guide 06) passes.
+Total estimated: ~10-15 days of focused work, assuming the hardware validation gate (guide 07) passes.

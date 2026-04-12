@@ -1,4 +1,4 @@
-# Software Build Guide 06 — WebRTC Hardware Validation
+# Software Build Guide 07 — WebRTC Hardware Validation
 
 > **Purpose:** Prove that the 2 GB Pi 5 can handle 5 incoming WebRTC video streams before writing any production code. This is the single highest risk in the project. If this step fails, either switch to Pi 5 4GB or reduce the maximum participant count.
 

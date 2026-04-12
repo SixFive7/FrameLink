@@ -1,4 +1,4 @@
-# Software Build Guide 07 — LiveKit Server Deployment
+# Software Build Guide 08 — LiveKit Server Deployment
 
 Deploy the production LiveKit SFU on the Docker host. Write `docker-compose.yml` and `livekit.yaml`, stand up a minimal JWT token service, put the WebSocket endpoint behind the existing nginx reverse proxy with SSL, and expose the TURN/UDP ports directly. Verify end-to-end with `livekit-cli`, including a TURN path from a network that cannot reach the server directly.
 

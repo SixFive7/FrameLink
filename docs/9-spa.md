@@ -1,4 +1,4 @@
-# Software Build Guide 08 — Kiosk SPA (Shell + LiveKit Client)
+# Software Build Guide 09 — Kiosk SPA (Shell + LiveKit Client)
 
 Build the custom single-page application that runs in Chromium on each Pi. This is the brain of the terminal — it manages the slideshow iframe, video grid, LiveKit connection, and GPIO commands.
 
@@ -60,7 +60,7 @@ Use a lightweight static file server running on the Pi:
 python3 -m http.server 8888 --directory /home/framelink/spa/
 ```
 
-(Or use Node.js `serve`, caddy, or any static server.) Run as a systemd service that starts before Chromium — see [guide 10 (systemd services & reliability)](10-systemd-and-reliability.md).
+(Or use Node.js `serve`, caddy, or any static server.) Run as a systemd service that starts before Chromium — see [guide 11 (systemd services & reliability)](11-systemd-and-reliability.md).
 
 ### 5. Test locally
 
