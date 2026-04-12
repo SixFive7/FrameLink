@@ -6,7 +6,7 @@ Configure the Pi's kernel and firmware to recognise the attached hardware. After
 
 ## Steps
 
-1. **Enable the 10.1" DSI touch display and rotate the console to landscape.** On a stock Raspberry Pi OS install the DSI port is idle — `display_auto_detect=1` only recognises the *official* Raspberry Pi 7" DSI panel, not Waveshare panels. You have to load the Waveshare overlay explicitly. The overlay used below is what [Waveshare's 10.1-DSI-TOUCH-A wiki](https://www.waveshare.com/wiki/10.1-DSI-TOUCH-A) instructs for Raspberry Pi OS on a Pi 5, matched to our 800×1280 panel and the DSI cable on the heatsink-side port (the LAN-side port would need a `,dsi0` suffix). The panel is natively portrait, so we also add `fbcon=rotate:1` to the kernel command line so the framebuffer console renders landscape. (Wayland rotation is handled separately once labwc is installed — see [guide 4](4-kiosk-base.md).)
+1. **Enable the 10.1" DSI touch display and rotate the console to landscape.** On a stock Raspberry Pi OS install the DSI port is idle — `display_auto_detect=1` only recognises the *official* Raspberry Pi 7" DSI panel, not Waveshare panels. You have to load the Waveshare overlay explicitly. The overlay used below is what [Waveshare's 10.1-DSI-TOUCH-A wiki](https://www.waveshare.com/wiki/10.1-DSI-TOUCH-A) instructs for Raspberry Pi OS on a Pi 5, matched to our 800×1280 panel and the DSI cable on the heatsink-side port (the LAN-side port would need a `,dsi0` suffix). The panel is natively portrait, so we also add `fbcon=rotate:1` to the kernel command line so the framebuffer console renders landscape. (Wayland rotation is handled separately once labwc is installed — see [guide 5](5-kiosk-base.md).)
 
     The command block does three things in sequence, all idempotent (running it more than once does not duplicate lines):
 
@@ -23,8 +23,13 @@ Configure the Pi's kernel and firmware to recognise the attached hardware. After
     sudo reboot
     ```
 
-    _(OUTPUT to be captured on the next fresh-card run.)_
+    ![OUTPUT](https://img.shields.io/badge/🍓-OUTPUT-success?style=flat-square)
 
-    After the reboot the Waveshare display should show a **landscape** text console on the DSI panel — no GUI yet, that comes in [guide 4](4-kiosk-base.md). If the text is upside down instead of right-side-up, change `fbcon=rotate:1` to `fbcon=rotate:3` in `/boot/firmware/cmdline.txt` and reboot.
+    ```text
+    dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a
+    client_loop: send disconnect: Connection reset
+    ```
+
+    After the reboot the Waveshare display should show a **landscape** text console on the DSI panel — no GUI yet, that comes in [guide 5](5-kiosk-base.md). If the text is upside down instead of right-side-up, change `fbcon=rotate:1` to `fbcon=rotate:3` in `/boot/firmware/cmdline.txt` and reboot.
 
 **Checkpoint:** the DSI display is lit with a landscape text console after the reboot, and the Pi comes back up reachable over SSH.
