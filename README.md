@@ -125,4 +125,4 @@ The build is split into one hardware guide and eleven software guides, each step
 
 ## Key Risk
 
-**2GB RAM + 5 software-decoded WebRTC streams is unvalidated.** Pi 5 has no hardware H.264 decode. Estimated 700-1000 MB during a 6-way call, but Chromium leaks memory over hours and nobody has publicly run this workload. ZRAM, adaptive bitrate, and low resolution (360-480p) are planned mitigations. Hardware validation on a real Pi 5 prototype is the **first step before any production code** — see the [validation plan](research/ram-feasibility.md#hardware-validation-plan).
+**2GB RAM + 5 software-decoded WebRTC streams is unvalidated.** Pi 5 has no hardware H.264 decode. Estimated 770-1130 MB during a 6-way call, but Chromium leaks memory over hours and nobody has publicly run this workload. ZRAM, two-layer simulcast publishing (180p + 720p), and LiveKit adaptive-layer selection (small tiles subscribe to the 180p layer) are the planned mitigations. Hardware validation on a real Pi 5 prototype is the **first step before any production code** — see the [validation plan](research/ram-feasibility.md#hardware-validation-plan).

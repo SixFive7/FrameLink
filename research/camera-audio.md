@@ -49,11 +49,54 @@ This runs as a systemd service that starts at boot before Chromium.
 
 **Pi 5 has no hardware H.264 encoder.** The BCM2712 SoC dropped both H.264 encode and decode from the hardware. The only hardware codec on Pi 5 is HEVC (H.265) decode. WebRTC uses VP8, VP9, or H.264 — none of which have hardware acceleration on Pi 5.
 
-All video encoding for the outgoing stream is **software-only** on the quad Cortex-A76 cores (2.4 GHz). At 480p30, software VP8 encoding is expected to use ~10-15% of one core. At 720p30, ~20-30%. Using 480p for the outgoing stream is recommended to reduce CPU load.
+All video encoding for the outgoing stream is **software-only** on the quad Cortex-A76 cores (2.4 GHz). At 480p30, software VP8 encoding is expected to use ~10-15% of one core. At 720p30, ~20-30%. The chosen publish plan uses two-layer simulcast (180p + 720p at 30fps) rather than a single layer — see "Capture vs Publish Resolution Strategy" below for the rationale and the fallback order under CPU pressure.
 
 #### Alternative: USB Webcam
 
 A USB webcam works natively in Chromium with zero bridge or workaround. If the v4l2loopback bridge proves unstable or too resource-heavy, a USB webcam is the simplest fallback. Trade-off: lower image quality than the Camera Module 3, and an additional USB device.
+
+### Architectural Alternative Considered: Native GStreamer Publisher
+
+An alternative architecture was evaluated in detail: instead of Chromium calling `getUserMedia` on a v4l2loopback device, a separate GStreamer-based publisher process would capture directly from libcamera, encode with a native VP8 encoder, and publish to LiveKit as a distinct "camera bot" participant (e.g. `pi-01-cam`) via the LiveKit Go SDK or WHIP. Chromium would be a pure subscriber with no local capture.
+
+On paper this has meaningful efficiency advantages:
+
+- Eliminates v4l2loopback's two per-frame kernel copies on the publish path.
+- Moves the software VP8 encoder out of Chromium's renderer process, saving roughly 15-25% of one A76 core and the encoder's working-set RAM inside Chromium.
+- Decouples publishing from Chromium's lifecycle — a Chromium crash no longer takes down outgoing media for the whole call.
+- Fits Janus's native architectural shape (publisher and subscriber as separate handles) more cleanly than LiveKit's, in the event of a future SFU switch.
+
+It was rejected in favour of keeping Chromium as the publisher. The driving requirements:
+
+1. **Low-latency fullscreen self-view.** Users must be able to tap their own tile and see themselves fill the screen, WhatsApp-style, with ~30-80ms end-to-end mirror latency at the panel's native resolution. The Chromium-owned `MediaStreamTrack` path delivers this natively (same-process GPU compositor). The publisher-process alternatives either round-trip self-view through the SFU (100-150ms lag — reads as visibly broken at fullscreen), or tee the GStreamer pipeline to a second v4l2loopback preview branch (more complexity, partially defeats the efficiency argument, and requires a single preview resolution that works both for a small tile and fullscreen).
+
+2. **Instant local mute for audio and video.** `MediaStreamTrack.enabled = false` is a one-line local operation with zero IPC. Publisher-process alternatives require a control channel (LiveKit data channel or localhost HTTP shim) plus 50-100 lines of coordination code between the SPA and the publisher, with 50-200ms round-trip latency.
+
+3. **Self-view layout flexibility.** Self-view is not a peer tile — it renders mirrored, PIP-style, and expands to fullscreen on tap. This is straightforward only when the SPA owns the local track as a `MediaStreamTrack`.
+
+4. **Single LiveKit participant per device.** The dual-participant (viewer + camera-bot) model of the publisher-process approach complicates tile rendering (SPA must group participants by a `deviceId` metadata convention), doubles the JWT and reconnect surface, and introduces failure modes where one half of the pair is present and the other is not. One participant per physical unit is substantially simpler.
+
+Costs accepted by staying with Chromium-as-publisher:
+
+- Chromium's WebRTC engine runs software VP8 encode inside the renderer process. Budget ~15-25% of one A76 core at 480p30, more at 720p. Encoder reference frames live in Chromium's RSS.
+- A Chromium crash takes outgoing camera/audio down for the whole call. Mitigated by systemd `Restart=always` (see guide 11).
+- v4l2loopback remains in the dependency tree, with a kernel module dependency and two per-frame kernel copies on the publish path.
+
+### Capture vs Publish Resolution Strategy
+
+Capture resolution (what `getUserMedia` returns) and publish resolution (what the encoder sends over the network) are independent knobs optimising for different things.
+
+**Capture** is set via `getUserMedia` constraints. The raw `MediaStreamTrack` powers the local self-view, including the tap-to-fullscreen expanded view. Those frames never touch an encoder or the network, so capture resolution is free to be as large as the Camera Module 3 can deliver at 30 fps. Capturing at the sensor's native max video mode gives the sharpest fullscreen self-view at zero incremental CPU or bandwidth cost on the publish path.
+
+**Publish** is configured per simulcast layer via `RTCRtpSender.setParameters({ encodings: [...] })` with `scaleResolutionDownBy` per layer. The encoder downscales capture frames once before encoding; the scale filter itself is cheap compared to encode. Publish cost is driven by:
+
+- Publisher-side software VP8 encode CPU (no hardware encode on Pi 5).
+- Uplink bandwidth (typical household ~3-10 Mbps).
+- Subscribe-side software VP8 decode CPU on every other Pi in the call.
+
+**Chosen plan:** two-layer simulcast, Layer 1 at 180p and Layer 2 at 720p, both at 30 fps, both derived from the single capture track via the encoder's pre-encode downscale. No second `getUserMedia` call, no second v4l2 device. LiveKit's adaptive-layer selection gives small-tile subscribers the cheap 180p layer and larger tiles or fullscreen-promoted tiles the 720p layer.
+
+**Fallback order under CPU pressure.** If WebRTC hardware validation (guide 7) shows the publisher cannot sustain both layers, Layer 2 drops from 720p to 480p before being removed entirely. Layer 1 stays at 180p regardless, so LiveKit's adaptive mechanism always has a cheap layer to pick for small-tile subscribers. Capture resolution stays at the sensor's native max video mode in all cases — reducing capture resolution buys nothing for the publish budget and degrades the fullscreen self-view for no gain.
 
 ---
 

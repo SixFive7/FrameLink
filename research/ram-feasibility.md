@@ -16,11 +16,11 @@ Each FrameLink unit may receive up to 5 simultaneous video streams from other pa
 | Chromium main + GPU process | ~150 MB | Pi forum reports |
 | Renderer: SPA + WebRTC JS heap | ~200-300 MB | General WebRTC estimates |
 | 5x VP8 480p software decode | ~100-200 MB | Per-stream analysis (~20-40 MB each) |
-| 1x camera encode (outgoing 480p) | ~50 MB | Estimated |
+| 1x camera encode (outgoing 180p + 720p simulcast) | ~120-180 MB | 720p reference frames dominate; 180p layer adds ~10-20 MB |
 | Immich Kiosk iframe (hidden during call) | ~50-100 MB | Chromium renderer baseline |
-| **Total estimated** | **~700-1000 MB** | |
+| **Total estimated** | **~770-1130 MB** | |
 | **System total** | **2048 MB** | |
-| **Headroom** | **~1000-1300 MB** | |
+| **Headroom** | **~920-1280 MB** | |
 
 ### Why This Looks Feasible
 
@@ -57,7 +57,11 @@ Instead of hiding the Immich Kiosk iframe with CSS `display:none` (which keeps t
 
 ### Reduce Resolution
 
-480p is already more than sufficient for a 10.1" display with 5 tiles. Consider 360p or even 240p — at ~360x256 pixels per tile, 240p is visually adequate and dramatically reduces decode CPU and memory.
+The primary publish plan uses two-layer simulcast: Layer 1 at 180p and Layer 2 at 720p, both at 30 fps (see [camera-audio.md - Capture vs Publish Resolution Strategy](camera-audio.md#capture-vs-publish-resolution-strategy) for the rationale). LiveKit's adaptive-layer selection picks the 180p layer for small tiles and the 720p layer for fullscreen-promoted or speaker-promoted tiles. Most of the time, every Pi is subscribing to every other Pi's 180p layer — which dominates the decode budget on a 2GB unit.
+
+If the publisher cannot sustain both layers under CPU validation, Layer 2 drops from 720p to 480p before being removed; Layer 1 stays at 180p as a permanent floor so the adaptive mechanism always has a cheap layer to select. On the subscriber side, `setVideoQuality('LOW')` can force-cap all incoming streams as a further emergency lever, and hidden or offscreen video elements are automatically paused by LiveKit.
+
+Capture resolution (what `getUserMedia` returns) stays at the camera's native max video mode regardless — it is independent of publish resolution, powers self-view including tap-to-fullscreen, and costs nothing on the network or encoder path.
 
 ### Reduce Framerate
 
