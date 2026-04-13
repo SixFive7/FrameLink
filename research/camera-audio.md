@@ -86,7 +86,13 @@ Costs accepted by staying with Chromium-as-publisher:
 
 Capture resolution (what `getUserMedia` returns) and publish resolution (what the encoder sends over the network) are independent knobs optimising for different things.
 
-**Capture** is set via `getUserMedia` constraints. The raw `MediaStreamTrack` powers the local self-view, including the tap-to-fullscreen expanded view. Those frames never touch an encoder or the network, so capture resolution is free to be as large as the Camera Module 3 can deliver at 30 fps. Capturing at the sensor's native max video mode gives the sharpest fullscreen self-view at zero incremental CPU or bandwidth cost on the publish path.
+**Capture** is set via `getUserMedia` constraints. The raw `MediaStreamTrack` powers the local self-view, including the tap-to-fullscreen expanded view. Those frames never touch an encoder or the network, so capture resolution is free to match the camera's native capability. The chosen capture mode is **2304×1296 @ 56 fps** — the IMX708's native HD video mode (2×2 binned, 56.03 fps exact). Aspect ratio is exact 16:9, so 720p (1280×720) and 180p (320×180) both map cleanly via fractional `scaleResolutionDownBy` values (1.8 and 7.2 respectively). Using the sensor's native mode avoids libcamera-side downsampling or framerate throttling and delivers the sharpest, smoothest fullscreen self-view at zero incremental publish-path cost.
+
+Native IMX708 sensor modes for reference:
+
+- 4608×2592 @ 14 fps (full-resolution stills)
+- **2304×1296 @ 56 fps** (the chosen video mode)
+- 1536×864 @ 120 fps (further binned, not used)
 
 **Publish** is configured per simulcast layer via `RTCRtpSender.setParameters({ encodings: [...] })` with `scaleResolutionDownBy` per layer. The encoder downscales capture frames once before encoding; the scale filter itself is cheap compared to encode. Publish cost is driven by:
 
@@ -94,9 +100,11 @@ Capture resolution (what `getUserMedia` returns) and publish resolution (what th
 - Uplink bandwidth (typical household ~3-10 Mbps).
 - Subscribe-side software VP8 decode CPU on every other Pi in the call.
 
-**Chosen plan:** two-layer simulcast, Layer 1 at 180p and Layer 2 at 720p, both at 30 fps, both derived from the single capture track via the encoder's pre-encode downscale. No second `getUserMedia` call, no second v4l2 device. LiveKit's adaptive-layer selection gives small-tile subscribers the cheap 180p layer and larger tiles or fullscreen-promoted tiles the 720p layer.
+**Chosen plan:** two-layer simulcast, Layer 1 at 180p and Layer 2 at 720p, **both at 56 fps** matching the capture rate end-to-end, both derived from the single capture track via the encoder's pre-encode downscale. No second `getUserMedia` call, no second v4l2 device. LiveKit's adaptive-layer selection gives small-tile subscribers the cheap 180p layer and larger tiles or fullscreen-promoted tiles the 720p layer.
 
-**Fallback order under CPU pressure.** If WebRTC hardware validation (guide 7) shows the publisher cannot sustain both layers, Layer 2 drops from 720p to 480p before being removed entirely. Layer 1 stays at 180p regardless, so LiveKit's adaptive mechanism always has a cheap layer to pick for small-tile subscribers. Capture resolution stays at the sensor's native max video mode in all cases — reducing capture resolution buys nothing for the publish budget and degrades the fullscreen self-view for no gain.
+**Cost of 56 fps end-to-end.** Publishing at 56 fps rather than a conventional 30 fps multiplies every framerate-linear cost across the call by roughly 1.87×: publisher encode CPU, subscriber decode CPU on every other Pi, and uplink bandwidth. At 720p56 on software VP8, budget ~37-56% of one A76 core for the Layer 2 encode alone, plus a smaller amount for Layer 1. The 10.1" DSI panel runs at 60 Hz, so a 56 fps subscriber stream produces a ~1.25-second cadence where one frame holds for two refresh intervals — minor visual judder, visible on motion. These costs are accepted for the smoothness benefit of matching the sensor's native framerate end-to-end rather than throttling at the encoder boundary.
+
+**Fallback order under CPU pressure.** If WebRTC hardware validation (guide 7) shows the publisher cannot sustain both layers at 56 fps, the first step down is capping both layers at 30 fps via `encodings[n].maxFramerate` — capture stays at 56 so self-view is unaffected, only the wire and encoder see the lower rate. If 30 fps is still insufficient, Layer 2 drops from 720p to 480p, then is removed entirely. Layer 1 stays at 180p regardless, so LiveKit's adaptive mechanism always has a cheap layer to pick for small-tile subscribers. Capture mode stays at 2304×1296 @ 56 fps in all cases — reducing capture buys nothing for the publish budget and degrades fullscreen self-view for no gain.
 
 ---
 

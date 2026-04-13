@@ -16,7 +16,7 @@ Each FrameLink unit may receive up to 5 simultaneous video streams from other pa
 | Chromium main + GPU process | ~150 MB | Pi forum reports |
 | Renderer: SPA + WebRTC JS heap | ~200-300 MB | General WebRTC estimates |
 | 5x VP8 480p software decode | ~100-200 MB | Per-stream analysis (~20-40 MB each) |
-| 1x camera encode (outgoing 180p + 720p simulcast) | ~120-180 MB | 720p reference frames dominate; 180p layer adds ~10-20 MB |
+| 1x camera encode (outgoing 180p + 720p @ 56 fps simulcast) | ~120-180 MB | 720p reference frames dominate; 180p layer adds ~10-20 MB; RAM is resolution-linear, not framerate-linear |
 | Immich Kiosk iframe (hidden during call) | ~50-100 MB | Chromium renderer baseline |
 | **Total estimated** | **~770-1130 MB** | |
 | **System total** | **2048 MB** | |
@@ -65,7 +65,9 @@ Capture resolution (what `getUserMedia` returns) stays at the camera's native ma
 
 ### Reduce Framerate
 
-15fps instead of 30fps halves the decode work per stream. For a video call between family members (not gaming or sports), 15fps is acceptable.
+The publish plan runs at **56 fps** to match the IMX708's native 2304×1296 sensor mode end-to-end — roughly 1.87× the encode and decode cost of a 30 fps plan. This is the framerate cost accepted to avoid frame-rate conversion anywhere in the pipeline and to deliver the smoothest possible fullscreen self-view.
+
+If CPU validation shows the publisher cannot sustain both simulcast layers at 56 fps, the first mitigation is capping both layers at 30 fps via `encodings[n].maxFramerate`. Capture stays at 56 fps so self-view is unaffected — only the encoder and the wire see the reduced rate. Further reductions to 15 fps are acceptable for a family video call (not gaming or sports) if CPU validation demands it.
 
 ### Scheduled Chromium Restart
 
