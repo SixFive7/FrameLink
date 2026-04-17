@@ -138,10 +138,9 @@ The build is split into one hardware guide and eleven software guides, each step
 
 ## License and name
 
-FrameLink is dual-licensed to keep the documentation genuinely open while preserving the project's identity:
+FrameLink is released under a single license chosen to keep the project genuinely open while preserving its identity:
 
-- **Code** (scripts, configuration, any future source) — [Apache License 2.0](LICENSE).
-- **Documentation** (everything under [docs/](docs/) and [research/](research/), including images) — [Creative Commons Attribution-ShareAlike 4.0 International](LICENSE-docs) (CC BY-SA 4.0). Attribute the project and keep derivatives under the same license.
-- **Name and branding** — the name "FrameLink", the project's visual identity, and the distinctive build-guide layout are **not** covered by the licenses above. See [TRADEMARK.md](TRADEMARK.md) for what's permitted and what isn't.
+- **Everything in this repository** (code, configuration, documentation, build guides, research notes, images) — [European Union Public Licence v1.2](LICENSE) (EUPL-1.2). The EUPL is a copyleft license drafted by the European Commission and designed to cover works of any kind, not just software. Derivatives must remain under the EUPL or a [compatible copyleft license](https://joinup.ec.europa.eu/collection/eupl/matrix-eupl-compatible-open-source-licences) such as GPL-3.0, AGPL-3.0, CC BY-SA 4.0, or MPL-2.0.
+- **Name and branding** — the name "FrameLink", the project's visual identity, and the distinctive build-guide layout are **not** covered by the EUPL. See [TRADEMARK.md](TRADEMARK.md) for what's permitted and what isn't.
 
 Copyright © Jori Huisman.

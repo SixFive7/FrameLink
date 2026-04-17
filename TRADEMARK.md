@@ -1,6 +1,6 @@
 # Trademark and name usage
 
-**"FrameLink"** is the name of this project. The name, any associated logo or branding, and the distinctive visual style of the build guides are **not** covered by the code or documentation licenses in this repository ([LICENSE](LICENSE), [LICENSE-docs](LICENSE-docs)) and are **not** licensed for reuse.
+**"FrameLink"** is the name of this project. The name, any associated logo or branding, and the distinctive visual style of the build guides are **not** covered by the [repository license](LICENSE) (EUPL-1.2) and are **not** licensed for reuse.
 
 This document exists so that readers, forkers, and contributors understand what they may and may not do with the name.
 
@@ -28,7 +28,7 @@ The name and visual identity are the trust signal. Keeping them reserved for thi
 
 The name "FrameLink" is currently claimed as an **unregistered trademark** of the project maintainer (Jori Huisman). It is not yet registered with BOIP, EUIPO, or any other trademark authority. Rights may be registered in the future as the project grows.
 
-Unregistered or not, copyright licenses (Apache-2.0, CC BY-SA 4.0) do **not** grant trademark rights. See Apache-2.0 §6 and CC BY-SA 4.0 §2(b)(2) — both are explicit on this point. The permissions in [LICENSE](LICENSE) and [LICENSE-docs](LICENSE-docs) apply to the code and documentation only, not to the name.
+Unregistered or not, the EUPL does **not** grant trademark rights. See [EUPL-1.2 Article 5, "Legal Protection"](LICENSE): *"This Licence does not grant permission to use the trade names, trademarks, service marks, or names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the copyright notice."* The permissions in [LICENSE](LICENSE) apply to the contents of this repository, not to the name.
 
 ## Questions
 
