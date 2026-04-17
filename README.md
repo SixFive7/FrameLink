@@ -1,5 +1,14 @@
 # FrameLink
 
+> [!WARNING]
+> # 🚧 WORK IN PROGRESS — NOT COMPLETE OR CORRECT 🚧
+>
+> **This repository is actively being built and is not finished.** Build guides, hardware choices, software configuration, and documentation are all subject to change. Steps may be missing, incorrect, untested, or out of order. Do not rely on any part of this repo to produce a working FrameLink unit yet.
+>
+> Expect breaking changes without notice until this banner is removed.
+
+---
+
 A Raspberry Pi-based digital photo frame with one-button video calling. Designed for elderly family members with dementia — always showing familiar photos, with a simple physical button to start a face-to-face video call with up to 6 devices in a shared room.
 
 ## Concept
