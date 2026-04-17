@@ -135,3 +135,13 @@ The build is split into one hardware guide and eleven software guides, each step
 ## Key Risk
 
 **2GB RAM + 5 software-decoded WebRTC streams is unvalidated.** Pi 5 has no hardware H.264 decode. Estimated 770-1130 MB during a 6-way call, but Chromium leaks memory over hours and nobody has publicly run this workload. ZRAM, two-layer simulcast publishing (180p + 720p @ 56 fps, matching the IMX708's native sensor mode end-to-end), and LiveKit adaptive-layer selection (small tiles subscribe to the 180p layer) are the planned mitigations. Hardware validation on a real Pi 5 prototype is the **first step before any production code** — see the [validation plan](research/ram-feasibility.md#hardware-validation-plan).
+
+## License and name
+
+FrameLink is dual-licensed to keep the documentation genuinely open while preserving the project's identity:
+
+- **Code** (scripts, configuration, any future source) — [Apache License 2.0](LICENSE).
+- **Documentation** (everything under [docs/](docs/) and [research/](research/), including images) — [Creative Commons Attribution-ShareAlike 4.0 International](LICENSE-docs) (CC BY-SA 4.0). Attribute the project and keep derivatives under the same license.
+- **Name and branding** — the name "FrameLink", the project's visual identity, and the distinctive build-guide layout are **not** covered by the licenses above. See [TRADEMARK.md](TRADEMARK.md) for what's permitted and what isn't.
+
+Copyright © Jori Huisman.
