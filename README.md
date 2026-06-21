@@ -117,8 +117,8 @@ The build is split into one hardware guide and eleven software guides, each step
 4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, AEC tuning
 5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
 6. [Camera bridge](docs/6-camera-bridge.md) — v4l2loopback + libcamera pipeline
-7. [WebRTC hardware validation](docs/7-webrtc-validation.md) — the 2 GB go/no-go gate
-8. [LiveKit server deployment](docs/8-livekit-server.md) — Docker, token service, SSL
+7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker, token service, SSL
+8. [WebRTC hardware validation](docs/8-webrtc-validation.md) — the 2 GB go/no-go gate
 9. [Kiosk SPA](docs/9-spa.md) — slideshow iframe, video grid, LiveKit client
 10. [GPIO button daemon](docs/10-gpio-button.md) — Python gpiozero → WebSocket toggle
 11. [systemd services & reliability](docs/11-systemd-and-reliability.md) — services, watchdog, SD protection

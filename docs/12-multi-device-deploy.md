@@ -57,8 +57,8 @@ Store the device identity in a config file (e.g., `/home/framelink/config.json`)
 | [04 Audio configuration](4-audio-configuration.md)                 | XVF3800 pinning, amp enable, AEC tuning         | 0.5-1 day        | 03                         |
 | [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
 | [06 Camera bridge](6-camera-bridge.md)                             | v4l2loopback + libcamera pipeline               | 0.5 day          | 05                         |
-| [07 WebRTC hardware validation](7-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 06                         |
-| [08 LiveKit server](8-livekit-server.md)                           | LiveKit + token service + SSL                   | 1 day            | 07 pass                    |
+| [07 LiveKit server](7-livekit-server.md)                           | LiveKit + token service + SSL                   | 1 day            | 06                         |
+| [08 WebRTC hardware validation](8-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 07                         |
 | [09 SPA](9-spa.md)                                                 | Build the kiosk shell + LiveKit client          | 3-5 days         | 08                         |
 | [10 GPIO button daemon](10-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 09                         |
 | [11 systemd & reliability](11-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 10                         |
