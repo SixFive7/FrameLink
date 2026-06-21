@@ -64,8 +64,7 @@ Wants=spa-server.service camera-bridge.service
 
 [Service]
 Environment=XDG_RUNTIME_DIR=/run/user/1000
-ExecStartPre=/bin/bash -c "sed -i 's/\"exited_cleanly\":false/\"exited_cleanly\":true/' ~/.config/chromium/Default/Preferences 2>/dev/null || true"
-ExecStart=/usr/bin/labwc -s "chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --no-first-run --auto-accept-camera-and-microphone-capture --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding --use-fake-ui-for-media-stream http://localhost:8888"
+ExecStart=/usr/bin/labwc -s "chromium --ozone-platform=wayland --user-data-dir=/tmp/framelink-chromium --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble --no-first-run --auto-accept-camera-and-microphone-capture --disable-features=UsePipeWireCamera --autoplay-policy=no-user-gesture-required --disable-background-timer-throttling --disable-renderer-backgrounding http://localhost:8888"
 Restart=always
 RestartSec=5
 User=framelink
