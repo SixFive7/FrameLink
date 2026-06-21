@@ -1,0 +1,2 @@
+# Per-device runtime config holds the device's long-lived LiveKit token — never commit it.
+config.json
