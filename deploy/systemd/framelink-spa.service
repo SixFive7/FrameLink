@@ -1,0 +1,12 @@
+[Unit]
+Description=FrameLink SPA static server (busybox httpd)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/busybox httpd -f -p 127.0.0.1:8888 -h /home/framelink/FrameLink/app
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,30 @@
+[Unit]
+Description=Chromium Kiosk Browser
+After=graphical-session.target framelink-spa.service
+Wants=framelink-spa.service
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+Environment="WAYLAND_DISPLAY=wayland-0"
+ExecStartPre=/bin/bash -c 'while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done'
+ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done'
+ExecStart=/usr/bin/chromium \
+  --ozone-platform=wayland \
+  --user-data-dir=/tmp/framelink-chromium \
+  --kiosk \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --no-first-run \
+  --auto-accept-camera-and-microphone-capture \
+  --disable-features=UsePipeWireCamera \
+  --autoplay-policy=no-user-gesture-required \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  http://localhost:8888/
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
