@@ -1,5 +1,6 @@
 import { LitElement, html, css } from './vendor/lit-all.min.js';
 import { CallClient } from './livekit.js';
+import { connectControl } from './control.js';
 import './frame-grid.js';
 import './frame-setup.js';
 
@@ -72,6 +73,7 @@ class FrameApp extends LitElement {
     this._iframeTimer = null;
     this._byId = new Map();
     this.call = null;
+    this._control = null;
   }
 
   async connectedCallback() {
@@ -79,6 +81,8 @@ class FrameApp extends LitElement {
     await this._loadConfig();
     this._armIframeRetry();
     window.addEventListener('keydown', this._onKey);
+    // GPIO button daemon (Phase C). The dev keyboard 'c' remains a fallback.
+    this._control = connectControl({ onCommand: (cmd) => this._onCommand(cmd) });
     if (!this.config.token) { this.needsToken = true; return; }
     this._startCall();
   }
@@ -87,6 +91,7 @@ class FrameApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('keydown', this._onKey);
     clearTimeout(this._iframeTimer);
+    if (this._control) this._control.close();
   }
 
   async _loadConfig() {
@@ -180,6 +185,14 @@ class FrameApp extends LitElement {
     this.config = { ...this.config, token };
     this.needsToken = false;
     this._startCall();
+  }
+
+  // ---- Control channel (GPIO button) ----------------------------------------
+
+  _onCommand(cmd) {
+    if (cmd === 'toggle') this.toggleMode();
+    else if (cmd === 'call') this.enterCall();
+    else if (cmd === 'hangup') this.exitCall();
   }
 
   // ---- Slideshow resilience -------------------------------------------------
