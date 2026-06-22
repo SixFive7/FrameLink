@@ -2,6 +2,6 @@
   "identity": "framelink-01",
   "room": "family",
   "livekitUrl": "ws://10.20.30.250:7880",
-  "immichKioskUrl": "http://localhost:3000/?disable_ui=true&disable_navigation=true&hide_cursor=true&frameless=true&image_fit=cover&transition=cross-fade&duration=30",
+  "immichKioskUrl": "http://127.0.0.1:3000/?disable_ui=true&hide_cursor=true&disable_navigation=true&frameless=true&image_fit=cover&transition=fade&duration=30&background_blur=false&show_more_info=false&use_offline_mode=true",
   "token": ""
 }

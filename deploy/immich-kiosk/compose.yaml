@@ -1,0 +1,17 @@
+services:
+  immich-kiosk:
+    image: ghcr.io/damongolding/immich-kiosk:0.39.3
+    container_name: immich-kiosk
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      # --- REQUIRED: connect to your existing Immich server (KIOSK_-prefixed names) ---
+      KIOSK_IMMICH_URL: "https://immich.example.com"
+      KIOSK_IMMICH_API_KEY: "REPLACE_WITH_IMMICH_API_KEY"
+      # --- offline mode: download + cache assets so the frame survives Immich downtime ---
+      KIOSK_OFFLINE_MODE_ENABLED: "true"
+      KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS: "200"
+    volumes:
+      # The container runs as nonroot UID 65532; chown this dir to 65532:65532 before first start.
+      - ./offline-assets:/offline-assets
