@@ -1,4 +1,4 @@
-# Software Build Guide 12 — Multi-Device Deployment
+# Software Build Guide 13 — Multi-Device Deployment
 
 Scale from one working prototype to the full household rollout. Capture a golden SD-card image (or an Ansible playbook), flash and configure per-device identity, boot each unit, run a multi-device soak test, then deploy to each household.
 
@@ -56,12 +56,13 @@ Store the device identity in a config file (e.g., `/home/framelink/config.json`)
 | [03 Hardware configuration](3-hardware-configuration.md)           | DSI display + kernel parameters                 | 0.5 day          | 02                         |
 | [04 Audio configuration](4-audio-configuration.md)                 | XVF3800 pinning, amp enable, AEC tuning         | 0.5-1 day        | 03                         |
 | [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
-| [06 Camera bridge](6-camera-bridge.md)                             | v4l2loopback + libcamera pipeline               | 0.5 day          | 05                         |
+| [06 Camera](6-camera.md)                                           | Pi Camera via libcamera + PipeWire desktop portal | 0.5 day        | 05                         |
 | [07 LiveKit server](7-livekit-server.md)                           | LiveKit + token service + SSL                   | 1 day            | 06                         |
 | [08 WebRTC hardware validation](8-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 07                         |
-| [09 SPA](9-spa.md)                                                 | Build the kiosk shell + LiveKit client          | 3-5 days         | 08                         |
-| [10 GPIO button daemon](10-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 09                         |
-| [11 systemd & reliability](11-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 10                         |
-| [12 Multi-device deploy](12-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 11                         |
+| [09 Immich Kiosk](9-immich-kiosk.md)                               | Docker slideshow (offline-capable cache)        | 0.5 day          | 08                         |
+| [10 SPA](10-spa.md)                                                | Build the kiosk shell + LiveKit client          | 3-5 days         | 09                         |
+| [11 GPIO button daemon](11-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 10                         |
+| [12 systemd & reliability](12-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 11                         |
+| [13 Multi-device deploy](13-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 12                         |
 
 Total estimated: ~10-15 days of focused work, assuming the hardware validation gate (guide 07) passes.

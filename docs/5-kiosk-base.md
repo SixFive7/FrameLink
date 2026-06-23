@@ -217,11 +217,11 @@ Install the Wayland compositor (`labwc`) and Chromium, enable console autologin,
    - `--user-data-dir=/tmp/framelink-chromium` — puts the profile on tmpfs, so a power cut never leaves stale `SingletonLock` or dirty-exit state behind. No `sed`-the-Preferences-file hack needed.
    - `--kiosk` + `--noerrdialogs` + `--disable-infobars` + `--disable-session-crashed-bubble` + `--no-first-run` — quiet kiosk UI: fullscreen, no error dialogs, no "Restore pages?" prompts, no first-run wizard.
    - `--auto-accept-camera-and-microphone-capture` — pre-grants `getUserMedia` permission for the LiveKit call flow in later guides. **Do not add `--use-fake-ui-for-media-stream`** — it conflicts with this flag on this Chromium build and causes a silent startup crash.
-   - `--disable-features=UsePipeWireCamera` — Pi OS Trixie's Chromium defaults to the PipeWire camera backend, which enumerates PipeWire camera nodes and ignores `/dev/video*`. [Guide 6 (camera bridge)](6-camera-bridge.md) publishes the Pi Camera as a v4l2loopback device at `/dev/video8`; disabling this feature here lets Chromium's `getUserMedia` see that device when the kiosk SPA calls it.
+   - `--enable-features=UsePipeWireCamera` — turns on Chromium's PipeWire camera backend so it uses the native libcamera → PipeWire → desktop-portal camera path that [guide 6 (camera)](6-camera.md) sets up. The legacy V4L2 path is avoided because it hangs while probing the Pi's many internal camera-pipeline nodes.
    - `--autoplay-policy=no-user-gesture-required` — lets the SPA's audio/video autoplay without a user tap.
    - `--disable-background-timer-throttling` + `--disable-renderer-backgrounding` — keeps the kiosk tab responsive when its window is not in the foreground (relevant under labwc's tiling behaviour).
 
-   The placeholder URL `https://webrtc.github.io/samples/` is a quick end-to-end WebRTC smoke page; it will be replaced by `http://localhost:8888` (the kiosk SPA) in [guide 9](9-spa.md).
+   The placeholder URL `https://webrtc.github.io/samples/` is a quick end-to-end WebRTC smoke page; it will be replaced by `http://localhost:8888` (the kiosk SPA) in [guide 10](10-spa.md).
 
    ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -246,7 +246,7 @@ Install the Wayland compositor (`labwc`) and Chromium, enable console autologin,
      --disable-session-crashed-bubble \
      --no-first-run \
      --auto-accept-camera-and-microphone-capture \
-     --disable-features=UsePipeWireCamera \
+     --enable-features=UsePipeWireCamera \
      --autoplay-policy=no-user-gesture-required \
      --disable-background-timer-throttling \
      --disable-renderer-backgrounding \

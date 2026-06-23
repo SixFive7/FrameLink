@@ -18,7 +18,7 @@ ExecStart=/usr/bin/chromium \
   --disable-session-crashed-bubble \
   --no-first-run \
   --auto-accept-camera-and-microphone-capture \
-  --disable-features=UsePipeWireCamera \
+  --enable-features=UsePipeWireCamera \
   --autoplay-policy=no-user-gesture-required \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \

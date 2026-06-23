@@ -42,7 +42,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 - **Photo slideshow**: [Immich Kiosk](https://github.com/damongolding/immich-kiosk) — connects to an existing Immich server, runs inside an iframe in the SPA
 - **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU — auto-reconnect, built-in TURN, adaptive bitrate, single Docker container
 - **Kiosk shell**: Custom SPA serving as the parent page — WebRTC client in parent, Immich Kiosk in iframe, CSS toggle between modes
-- **Camera bridge**: v4l2loopback + GStreamer pipeline — bridges Pi Camera Module 3 (libcamera) to Chromium's getUserMedia()
+- **Camera**: libcamera + PipeWire desktop portal — exposes Pi Camera Module 3 to Chromium's getUserMedia() natively, no v4l2loopback shim
 - **GPIO handler**: Python daemon (gpiozero) — detects button press, sends toggle command to SPA via localhost WebSocket
 
 ## Architecture
@@ -58,7 +58,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
        +-- LiveKit client (always connected, muted when idle)
 
 [systemd services]
-  +-- v4l2loopback camera bridge
+  +-- libcamera + PipeWire (Pi Camera via desktop portal)
   +-- GPIO watcher (Python -> WebSocket -> SPA)
   +-- Chromium kiosk (auto-restart on crash)
   +-- Watchdog (memory monitor, scheduled restart)
@@ -90,7 +90,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 |  +-----------------------------+  |<--------|  (outbound only)            |
 |  |  nginx + Authelia           |  |         |                             |
 |  +-----------------------------+  |         |  GPIO daemon                |
-+-----------------------------------+         |  Camera bridge              |
++-----------------------------------+         |  libcamera + PipeWire       |
                                               +-----------------------------+
 ```
 
@@ -104,25 +104,26 @@ Key design decisions and the reasoning behind them:
 - [Video Calling Platform](research/video-calling.md) — why LiveKit over 20 other candidates, with Janus as fallback
 - [Display Server & Compositor](research/display-server.md) — why Wayland with labwc over X11 and cage
 - [Kiosk Switching Architecture](research/kiosk-architecture.md) — why SPA with iframe over tab switching
-- [Camera & Audio](research/camera-audio.md) — v4l2loopback bridge for Camera Module 3, ReSpeaker XVF3800 mic array + enclosed speaker for audio
+- [Camera & Audio](research/camera-audio.md) — libcamera + PipeWire for Camera Module 3, ReSpeaker XVF3800 mic array + enclosed speaker for audio
 - [2GB RAM Feasibility](research/ram-feasibility.md) — budget analysis, mitigations, and mandatory hardware validation plan
 
 ## Build Guide
 
-The build is split into one hardware guide and eleven software guides, each stepping through validated instructions only:
+The build is split into one hardware guide and twelve software guides, each stepping through validated instructions only:
 
 1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
 2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
 3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
 4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, AEC tuning
 5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
-6. [Camera bridge](docs/6-camera-bridge.md) — v4l2loopback + libcamera pipeline
+6. [Camera](docs/6-camera.md) — Pi Camera via libcamera + PipeWire desktop portal
 7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker, token service, SSL
 8. [WebRTC hardware validation](docs/8-webrtc-validation.md) — the 2 GB go/no-go gate
-9. [Kiosk SPA](docs/9-spa.md) — slideshow iframe, video grid, LiveKit client
-10. [GPIO button daemon](docs/10-gpio-button.md) — Python gpiozero → WebSocket toggle
-11. [systemd services & reliability](docs/11-systemd-and-reliability.md) — services, watchdog, SD protection
-12. [Multi-device deployment](docs/12-multi-device-deploy.md) — golden image, per-device identity, household rollout
+9. [Immich Kiosk](docs/9-immich-kiosk.md) — Docker photo slideshow (offline-capable)
+10. [Kiosk SPA](docs/10-spa.md) — slideshow iframe, video grid, LiveKit client
+11. [GPIO button daemon](docs/11-gpio-button.md) — Python gpiozero → WebSocket toggle
+12. [systemd services & reliability](docs/12-systemd-and-reliability.md) — services, watchdog, SD protection
+13. [Multi-device deployment](docs/13-multi-device-deploy.md) — golden image, per-device identity, household rollout
 
 ## To Do
 

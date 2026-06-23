@@ -1,6 +1,6 @@
 # Software Build Guide 08 — WebRTC Hardware Validation
 
-The Pi 5 with 2 GB RAM has no hardware video decoder — Chromium software-decodes every WebRTC stream. This guide publishes five simulated video streams into a LiveKit room from the workstation, subscribes from the Pi, and monitors RAM, CPU, and temperature over four hours. The result is a pass or fail: if the Pi stays stable, proceed to guide 9; if it crashes or runs out of memory, switch to the Pi 5 4 GB or reduce the participant count before writing any production code.
+The Pi 5 with 2 GB RAM has no hardware video decoder — Chromium software-decodes every WebRTC stream. This guide publishes five simulated video streams into a LiveKit room from the workstation, subscribes from the Pi, and monitors RAM, CPU, and temperature over four hours. The result is a pass or fail: if the Pi stays stable, proceed to guide 10; if it crashes or runs out of memory, switch to the Pi 5 4 GB or reduce the participant count before writing any production code.
 
 ---
 
@@ -376,7 +376,7 @@ Not yet captured — to be recorded during the first validation session.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The hardware validation is complete with a clear pass or fail. If all five criteria are met, the 2 GB Pi 5 is confirmed viable — proceed to [guide 9](9-spa.md) to build the kiosk SPA. If any criterion failed, revisit the hardware choice before writing production code.
+The hardware validation is complete with a clear pass or fail. If all five criteria are met, the 2 GB Pi 5 is confirmed viable — proceed to [guide 10](10-spa.md) to build the kiosk SPA. If any criterion failed, revisit the hardware choice before writing production code.
 
 ---
 
@@ -384,4 +384,4 @@ The hardware validation is complete with a clear pass or fail. If all five crite
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-Five simulated WebRTC video streams ran continuously for four hours on the 2 GB Pi 5 without exceeding 1.5 GB RAM, triggering an OOM kill, or crashing Chromium. The hardware is confirmed viable for a six-way video call. Proceed to [guide 9](9-spa.md) to build the kiosk SPA.
+Five simulated WebRTC video streams ran continuously for four hours on the 2 GB Pi 5 without exceeding 1.5 GB RAM, triggering an OOM kill, or crashing Chromium. The hardware is confirmed viable for a six-way video call. Proceed to [guide 10](10-spa.md) to build the kiosk SPA.
