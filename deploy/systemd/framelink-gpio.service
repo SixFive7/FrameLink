@@ -1,0 +1,12 @@
+[Unit]
+Description=FrameLink GPIO button daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/framelink/FrameLink/deploy/gpio/framelink-gpio.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
