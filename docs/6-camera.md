@@ -152,7 +152,7 @@ wpctl status | grep -i imx708
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-At least one line mentioning `imx708`, with the device line tagged `[libcamera]`. If `grep` returns nothing, WirePlumber has not picked up the libcamera plugin: `systemctl --user restart wireplumber` and re-check. If `rpicam-hello --list-cameras` (from [guide 3](3-hardware-configuration.md)) does not list the IMX708 either, the problem is upstream of PipeWire — recheck the camera ribbon and the `camera_auto_detect=1` line in `/boot/firmware/config.txt`.
+At least one line mentioning `imx708`, with the device line tagged `[libcamera]`. If `grep` returns nothing, WirePlumber has not picked up the libcamera plugin: `systemctl --user restart wireplumber` and re-check. If `rpicam-hello --list-cameras` does not list the IMX708 either, the problem is upstream of PipeWire — recheck the camera ribbon and the `camera_auto_detect=1` line in `/boot/firmware/config.txt`.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 

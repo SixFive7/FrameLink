@@ -114,10 +114,10 @@ The build is split into one hardware guide and twelve software guides, each step
 1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
 2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
 3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
-4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, AEC tuning
+4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, mixer persistence
 5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
 6. [Camera](docs/6-camera.md) — Pi Camera via libcamera + PipeWire desktop portal
-7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker, token service, SSL
+7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker Compose + token minting
 8. [WebRTC hardware validation](docs/8-webrtc-validation.md) — the 2 GB go/no-go gate
 9. [Immich Kiosk](docs/9-immich-kiosk.md) — Docker photo slideshow (offline-capable)
 10. [Kiosk SPA](docs/10-spa.md) — slideshow iframe, video grid, LiveKit client
