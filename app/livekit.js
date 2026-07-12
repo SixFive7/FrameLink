@@ -9,7 +9,9 @@ const LK = window.LivekitClient;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Validated production simulcast: three layers so a 5-up grid tile pulls 360p, not 720p.
-// fps is the dev default (30); the real-camera build raises capture + layers to 56 (see todo).
+// 30 fps is the production rate: the native libcamera -> PipeWire -> portal camera path
+// negotiates 1280x720@30 regardless of a higher frameRate constraint (measured on-device;
+// the 56 fps plan predates that path). Full 6-way call at 30 fps: ~100%/400 CPU, ~63 degC.
 function publishLayers(fps) {
   return [
     new LK.VideoPreset(320, 180, 180_000, fps),
