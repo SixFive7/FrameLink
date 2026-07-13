@@ -247,6 +247,10 @@ class FrameApp extends LitElement {
     this.slideshowReady = false;
     this._iframeKey++;
     this._armIframeRetry();
+    // The camera node's provide-mode stream wedges after a few acquire/release cycles
+    // (measured). The daemon restarts framelink-camera on this event, so the NEXT call
+    // always acquires a freshly started node.
+    if (this._control) this._control.send({ event: 'call-end' });
   }
 
   render() {

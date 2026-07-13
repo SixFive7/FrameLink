@@ -12,9 +12,15 @@
 #
 # To simulate a press without the hardware (useful for testing and in guide 11):
 #   systemctl --user kill -s SIGUSR1 framelink-gpio.service
+#
+# The channel is two-way: the app reports {"event":"call-end"} after each hangup and
+# this daemon then restarts framelink-camera.service. The camera node's provide-mode
+# stream wedges after a few acquire/release cycles (measured: third acquisition on the
+# same node instance fails), so every call gets a freshly started node.
 import asyncio
 import json
 import signal
+import subprocess
 
 from gpiozero import Button
 import websockets
@@ -26,10 +32,19 @@ clients = set()
 loop = None
 
 
+def _on_app_event(event):
+    if event == "call-end":
+        subprocess.Popen(["systemctl", "--user", "restart", "framelink-camera.service"])
+
+
 async def _handler(ws, path=None):    # path arg kept for older websockets releases
     clients.add(ws)
     try:
-        await ws.wait_closed()
+        async for raw in ws:
+            try:
+                _on_app_event(json.loads(raw).get("event"))
+            except (ValueError, AttributeError):
+                pass
     finally:
         clients.discard(ws)
 

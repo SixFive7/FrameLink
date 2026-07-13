@@ -27,5 +27,8 @@ export function connectControl(handlers) {
   }
 
   open();
-  return { close() { closed = true; try { if (ws) ws.close(); } catch (_) {} } };
+  return {
+    close() { closed = true; try { if (ws) ws.close(); } catch (_) {} },
+    send(obj) { try { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); } catch (_) {} },
+  };
 }
