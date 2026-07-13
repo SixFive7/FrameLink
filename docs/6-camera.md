@@ -205,6 +205,8 @@ The service's `ExecStart` runs a four-element GStreamer pipeline under `gst-laun
 
 Around that pipeline, the unit does the keeping-alive: `After=pipewire.service` orders it after PipeWire inside the user session, `Restart=always` with `RestartSec=3` resurrects the pipeline three seconds after any crash, and `WantedBy=default.target` starts it with the autologin session on every boot. The commands: `mkdir -p` ensures the user-unit directory exists, `tee` writes the unit, `daemon-reload` makes systemd read it, and `enable --now` starts the service immediately and on every future boot. The final command prints just the Video section of PipeWire's device list — the `sed` expression slices from the `Video` header to the next blank line — to confirm the node registered.
 
+One more thing about this service's lifetime, so it never surprises you later: once the button daemon from [guide 11](11-gpio-button.md) is installed, it restarts this service after **every** call. That is intentional. The `pipewiresink` element in PipeWire `1.4.x` (this OS's version) can be left permanently broken by an abrupt consumer disconnect — the service keeps reporting `active` while the camera is dead — so each call is given a freshly started node instead. Upstream fixed the bug in PipeWire `1.6.0`; the per-call restart can be retired when the OS ships that.
+
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
