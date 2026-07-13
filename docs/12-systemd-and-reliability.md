@@ -327,33 +327,47 @@ Tell the Pi to hold its processor at full speed all the time. The frame is power
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The kernel picks CPU clock speeds through a *governor*. The default, `ondemand`, keeps the clock low and ramps it up only after load arrives — and on this frame the load that matters arrives all at once, when the video encoder forms its first keyframes at call start. The `performance` governor holds the maximum clock at all times instead: the right trade for a mains-powered kiosk whose hardest realtime job — encoding live video — is latency-sensitive, because no battery is paying for the held clock and the first frames of every call are encoded at full speed. `cpufreq.default_governor=performance` is a kernel boot parameter that selects the governor from the first moment of every boot, and `/boot/firmware/cmdline.txt` — by definition a single line holding every kernel boot parameter — is where it goes:
+The kernel picks CPU clock speeds through a *governor*. The default, `ondemand`, keeps the clock low and ramps it up only after load arrives — and on this frame the load that matters arrives all at once, when the video encoder forms its first keyframes at call start. The `performance` governor holds the maximum clock at all times instead: the right trade for a mains-powered kiosk whose hardest realtime job — encoding live video — is latency-sensitive, because no battery is paying for the held clock and the first frames of every call are encoded at full speed.
 
-1. The first command appends ` cpufreq.default_governor=performance` to the end of that one line: `sed 's/$/ .../'` writes at end-of-line, so the file stays the single line the format requires instead of gaining a new one. The `grep -q ... ||` guard skips the append when the parameter is already present, making re-runs no-ops.
-2. The second command greps the parameter back out of the file as confirmation.
+The pin is done by a tiny **system** service (note `sudo` and `/etc/systemd/system/` — this one is not a `--user` unit) that writes `performance` into every cpufreq policy at each boot. A oneshot unit is the reliable way on this OS: the `cpufreq.default_governor=performance` kernel parameter does not stick on the Pi OS Trixie kernel (verified on hardware — the parameter lands in `/proc/cmdline` and the governor still comes up `ondemand`). The unit file matches `deploy/systemd/cpu-performance.service` in the repository:
 
-A boot parameter is read only at boot, so nothing about the running system changes yet — the reboot in the next step is what makes the governor live.
+1. The `tee` heredoc writes the unit; `WantedBy=multi-user.target` makes it run at every boot, and `Type=oneshot` means it writes the governor once and exits.
+2. `systemctl enable --now` arms it for future boots **and** runs it immediately.
+3. The closing `cat` reads the live governor back from the kernel.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-grep -q cpufreq.default_governor /boot/firmware/cmdline.txt || sudo sed -i 's/$/ cpufreq.default_governor=performance/' /boot/firmware/cmdline.txt
-grep -o 'cpufreq.default_governor=[a-z]*' /boot/firmware/cmdline.txt
+sudo tee /etc/systemd/system/cpu-performance.service << 'EOF'
+[Unit]
+Description=Pin CPU governor to performance
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo performance | tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor'
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now cpu-performance.service
+cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. The guarded append prints nothing; the confirming grep prints cpufreq.default_governor=performance.]
+[Pending fresh-flash capture. tee echoes the unit file; enable --now prints the "Created symlink ... cpu-performance.service" line; the closing cat prints performance.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The second command must echo `cpufreq.default_governor=performance` — proof the parameter now sits on the kernel line. If it prints nothing, the parameter is not in the file: re-run the first command and watch for an error from `sed`. The setting is written but not live — a boot parameter applies only at boot, so the governor changes at the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back), where `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` must print `performance` after reconnecting.
+The closing `cat` must print `performance` — the pin is live immediately, not just after a reboot. If it still prints `ondemand`, the service failed: `systemctl status cpu-performance.service` shows why. The reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back) then proves the pin re-applies itself from a cold start.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-Every future boot will now pin the CPU at full speed. The system you are connected to is still running the old governor — the reboot in the next step makes the pin live, and that step verifies it.
+The CPU now runs at full speed all the time, on this boot and every future one — the first seconds of every call are encoded on a chip that is already awake.
 
 <a id="8-reboot-and-confirm-the-hardened-frame-comes-back"></a>
 <img src="https://img.shields.io/badge/STEP_08-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Reboot and confirm the hardened frame comes back"/>

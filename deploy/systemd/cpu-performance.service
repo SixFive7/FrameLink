@@ -1,0 +1,14 @@
+# SYSTEM unit (installs to /etc/systemd/system/, not ~/.config/systemd/user/).
+# Pins the CPU governor to performance at every boot. The cpufreq.default_governor
+# kernel parameter does not stick on the Pi OS Trixie kernel (verified: parameter
+# present in /proc/cmdline, governor still ondemand), so the pin is done explicitly.
+[Unit]
+Description=Pin CPU governor to performance
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo performance | tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor'
+
+[Install]
+WantedBy=multi-user.target
