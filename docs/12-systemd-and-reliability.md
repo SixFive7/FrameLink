@@ -1,6 +1,6 @@
 # Software Build Guide 12 — systemd Services & Reliability Hardening
 
-Every service the frame runs was installed and verified by the earlier guides — the SPA server and Chromium kiosk from [guide 10](10-spa.md), the GPIO button daemon from [guide 11](11-gpio-button.md), the camera portal from [guide 6](6-camera.md), and the Immich Kiosk slideshow container from [guide 9](9-immich-kiosk.md) — and each is already set to restart after a crash and to come back after a reboot. This guide hardens that fleet for 24/7 unattended operation by adding what restart-on-crash cannot provide: one sweep that verifies the whole fleet is healthy, a watchdog that restarts Chromium when the browser's memory bloats, a scheduled fresh browser start every morning so a frame that hangs on a wall for weeks never goes stale, a set of changes that keeps everyday writes off the SD card so the card lasts years instead of months, and automatic security updates. A final reboot proves the hardened frame still brings itself up with no one touching it.
+Every service the frame runs was installed and verified by the earlier guides — the SPA server and Chromium kiosk from [guide 10](10-spa.md), the GPIO button daemon from [guide 11](11-gpio-button.md), the camera node and camera portal from [guide 6](6-camera.md), and the Immich Kiosk slideshow container from [guide 9](9-immich-kiosk.md) — and each is already set to restart after a crash and to come back after a reboot. This guide hardens that fleet for 24/7 unattended operation by adding what restart-on-crash cannot provide: one sweep that verifies the whole fleet is healthy, a watchdog that restarts Chromium when the browser's memory bloats, a scheduled fresh browser start every morning so a frame that hangs on a wall for weeks never goes stale, a set of changes that keeps everyday writes off the SD card so the card lasts years instead of months, automatic security updates, and a CPU pinned at full speed so the first seconds of a video call never wait for the chip to ramp up. A final reboot proves the hardened frame still brings itself up with no one touching it.
 
 ---
 
@@ -9,44 +9,45 @@ Every service the frame runs was installed and verified by the earlier guides �
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-The frame now depends on five separate programs, each installed in a different guide. Hardening only makes sense on top of a healthy system, so before changing anything we need one check that shows all of them running at once.
+The frame now depends on six separate programs installed across the earlier guides. Hardening only makes sense on top of a healthy system, so before changing anything we need one check that shows all of them running at once.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Ask systemd for the state of the four frame services in a single command, and ask Docker for the slideshow container, so one screenful shows the health of the whole fleet.
+Ask systemd for the state of the five frame services in a single command, and ask Docker for the slideshow container, so one screenful shows the health of the whole fleet.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The fleet is five pieces, each owned by the guide that installed it:
+The fleet is six pieces, each owned by the guide that installed it:
 
 1. `framelink-spa.service` — the `busybox httpd` server for the app on `127.0.0.1:8888`, from [guide 10 step 3](10-spa.md#3-serve-the-app-locally).
 2. `chromium-kiosk.service` — the browser, created in [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service) and given its final form in [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app).
 3. `framelink-gpio.service` — the button daemon listening on `127.0.0.1:8889`, from [guide 11 step 3](11-gpio-button.md#3-run-the-daemon-as-a-service).
-4. `xdg-desktop-portal.service` — the camera portal with its labwc drop-in, from [guide 6 step 2](6-camera.md#2-point-the-desktop-portal-at-the-labwc-session). Unlike the other three it is started on demand: D-Bus wakes it the first time Chromium asks for the camera, so it can legitimately be idle on a frame that has not run a call since boot.
-5. The `immich-kiosk` Docker container — the slideshow, from [guide 9 step 3](9-immich-kiosk.md#3-start-the-immich-kiosk-container), with a `restart: always` policy.
+4. `framelink-camera.service` — the dedicated PipeWire camera node from [guide 6](6-camera.md), which publishes the Pi Camera into PipeWire as a full-field-of-view 1920x1080 at 30 fps video source.
+5. `xdg-desktop-portal.service` — the camera portal with its labwc drop-in, from [guide 6 step 2](6-camera.md#2-point-the-desktop-portal-at-the-labwc-session). Unlike the other four it is started on demand: D-Bus wakes it the first time Chromium asks for the camera, so it can legitimately be idle on a frame that has not run a call since boot.
+6. The `immich-kiosk` Docker container — the slideshow, from [guide 9 step 3](9-immich-kiosk.md#3-start-the-immich-kiosk-container), with a `restart: always` policy.
 
-All four systemd services are `--user` units running inside the `framelink` session that the console autologin from [guide 5 step 3](5-kiosk-base.md#3-enable-console-autologin) brings up at every boot — which means the whole fleet is alive whenever the frame is powered. The startup ordering between them already exists and is **not** redefined here: `chromium-kiosk.service` declares `After=` and `Wants=` on `framelink-spa.service` and then blocks in two `ExecStartPre` guards — one waiting for the Wayland display socket, one polling `http://127.0.0.1:8888/` with `curl` until the app server actually answers — all defined in [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app). Every unit carries `Restart=always` (within 2, 5, and 3 seconds respectively) and the container restarts itself too, so plain crashes are already covered. What none of that catches is a browser that is still *running* but degraded, an SD card being slowly worn out, and an OS missing security fixes — that is what the rest of this guide adds. `is-active` prints one state word per service; `docker ps --filter name=immich-kiosk` narrows Docker's process list to the one container that matters.
+All five systemd services are `--user` units running inside the `framelink` session that the console autologin from [guide 5 step 3](5-kiosk-base.md#3-enable-console-autologin) brings up at every boot — which means the whole fleet is alive whenever the frame is powered. The startup ordering between them already exists and is **not** redefined here: `chromium-kiosk.service` declares `After=` and `Wants=` on `framelink-spa.service` and `framelink-camera.service` and then blocks in two `ExecStartPre` guards — one waiting for the Wayland display socket, one polling `http://127.0.0.1:8888/` with `curl` until the app server actually answers — all defined in [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app). Every unit carries `Restart=always` (within 2, 5, 3, and 3 seconds respectively) and the container restarts itself too, so plain crashes are already covered. What none of that catches is a browser that is still *running* but degraded, an SD card being slowly worn out, and an OS missing security fixes — that is what the rest of this guide adds. `is-active` prints one state word per service; `docker ps --filter name=immich-kiosk` narrows Docker's process list to the one container that matters.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-systemctl --user is-active framelink-spa chromium-kiosk framelink-gpio xdg-desktop-portal
+systemctl --user is-active framelink-spa chromium-kiosk framelink-gpio framelink-camera xdg-desktop-portal
 docker ps --filter name=immich-kiosk
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. is-active prints one state per line — active for framelink-spa, chromium-kiosk, and framelink-gpio, with xdg-desktop-portal reading active or inactive depending on whether a call has run since boot — and docker ps lists the immich-kiosk container with an Up status.]
+[Pending fresh-flash capture. is-active prints one state per line — active for framelink-spa, chromium-kiosk, framelink-gpio, and framelink-camera, with xdg-desktop-portal reading active or inactive depending on whether a call has run since boot — and docker ps lists the immich-kiosk container with an Up status.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The first three lines must read `active`. The fourth line is the portal: `active` if anything has used the camera since boot, `inactive` otherwise — `inactive` here is normal, because the portal wakes on demand. The word that always means trouble is `failed`; if any service shows it, inspect it with `systemctl --user status <name>` before continuing. The Docker listing must show `immich-kiosk` with a STATUS beginning `Up`. A `permission denied` from `docker ps` means this SSH session predates your docker group membership — log out, reconnect, and re-run (see [guide 9 step 1](9-immich-kiosk.md#1-install-docker-engine)).
+The first four lines must read `active`. The fifth line is the portal: `active` if anything has used the camera since boot, `inactive` otherwise — `inactive` here is normal, because the portal wakes on demand. The word that always means trouble is `failed`; if any service shows it, inspect it with `systemctl --user status <name>` before continuing. The Docker listing must show `immich-kiosk` with a STATUS beginning `Up`. A `permission denied` from `docker ps` means this SSH session predates your docker group membership — log out, reconnect, and re-run (see [guide 9 step 1](9-immich-kiosk.md#1-install-docker-engine)).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-You have confirmed the whole fleet — app server, browser, button daemon, camera portal, and slideshow container — is healthy in one sweep, and you know the one command pair that shows it at a glance. Nothing is hardened yet; that starts now.
+You have confirmed the whole fleet — app server, browser, button daemon, camera node, camera portal, and slideshow container — is healthy in one sweep, and you know the one command pair that shows it at a glance. Nothing is hardened yet; that starts now.
 
 <a id="2-create-the-chromium-memory-watchdog-script"></a>
 <img src="https://img.shields.io/badge/STEP_02-Create_the_Chromium_memory_watchdog_script-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the Chromium memory watchdog script"/>
@@ -268,7 +269,7 @@ swapon --show
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The first line should print a mount entry for `/tmp` with `tmpfs` in it — Trixie's default — meaning nothing needed changing; if it instead echoed the `tmpfs /tmp tmpfs ...` line, the entry was appended to `/etc/fstab` and takes effect at the reboot in [step 7](#7-reboot-and-confirm-the-hardened-frame-comes-back). Either is a pass. `tee` echoes the three-line journald drop-in exactly as written. The final `swapon --show` must list only `/dev/zram0` (RAM-backed swap) or nothing at all; a file path like `/var/swap` in that listing would mean SD-backed swap is active — re-run the `dphys-swapfile` line and check `swapon --show` again after the reboot in [step 7](#7-reboot-and-confirm-the-hardened-frame-comes-back).
+The first line should print a mount entry for `/tmp` with `tmpfs` in it — Trixie's default — meaning nothing needed changing; if it instead echoed the `tmpfs /tmp tmpfs ...` line, the entry was appended to `/etc/fstab` and takes effect at the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back). Either is a pass. `tee` echoes the three-line journald drop-in exactly as written. The final `swapon --show` must list only `/dev/zram0` (RAM-backed swap) or nothing at all; a file path like `/var/swap` in that listing would mean SD-backed swap is active — re-run the `dphys-swapfile` line and check `swapon --show` again after the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -313,8 +314,49 @@ The `apt` run must finish with no `E:` line. The `dpkg-reconfigure` dialog asks 
 
 The frame now keeps itself patched: security fixes install automatically in the background for as long as the frame is plugged in, with feature updates still left to a deliberate manual upgrade.
 
-<a id="7-reboot-and-confirm-the-hardened-frame-comes-back"></a>
-<img src="https://img.shields.io/badge/STEP_07-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Reboot and confirm the hardened frame comes back"/>
+<a id="7-pin-the-cpu-governor-to-performance"></a>
+<img src="https://img.shields.io/badge/STEP_07-Pin_the_CPU_governor_to_performance-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Pin the CPU governor to performance"/>
+
+![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
+
+Out of the box the Pi runs its processor at a low speed and only speeds it up once heavy work has already arrived. The heaviest work this frame ever does — turning live camera video into a stream — lands in the first seconds of a call, so exactly those seconds run on a chip that is still waking up.
+
+![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
+
+Tell the Pi to hold its processor at full speed all the time. The frame is powered from the wall, so there is no battery to protect — the only effect anyone sees is that a call starts sharp instead of catching up.
+
+![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
+
+The kernel picks CPU clock speeds through a *governor*. The default, `ondemand`, keeps the clock low and ramps it up only after load arrives — and on this frame the load that matters arrives all at once, when the video encoder forms its first keyframes at call start. The `performance` governor holds the maximum clock at all times instead: the right trade for a mains-powered kiosk whose hardest realtime job — encoding live video — is latency-sensitive, because no battery is paying for the held clock and the first frames of every call are encoded at full speed. `cpufreq.default_governor=performance` is a kernel boot parameter that selects the governor from the first moment of every boot, and `/boot/firmware/cmdline.txt` — by definition a single line holding every kernel boot parameter — is where it goes:
+
+1. The first command appends ` cpufreq.default_governor=performance` to the end of that one line: `sed 's/$/ .../'` writes at end-of-line, so the file stays the single line the format requires instead of gaining a new one. The `grep -q ... ||` guard skips the append when the parameter is already present, making re-runs no-ops.
+2. The second command greps the parameter back out of the file as confirmation.
+
+A boot parameter is read only at boot, so nothing about the running system changes yet — the reboot in the next step is what makes the governor live.
+
+![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
+
+```bash
+grep -q cpufreq.default_governor /boot/firmware/cmdline.txt || sudo sed -i 's/$/ cpufreq.default_governor=performance/' /boot/firmware/cmdline.txt
+grep -o 'cpufreq.default_governor=[a-z]*' /boot/firmware/cmdline.txt
+```
+
+![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
+
+```text
+[Pending fresh-flash capture. The guarded append prints nothing; the confirming grep prints cpufreq.default_governor=performance.]
+```
+
+![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
+
+The second command must echo `cpufreq.default_governor=performance` — proof the parameter now sits on the kernel line. If it prints nothing, the parameter is not in the file: re-run the first command and watch for an error from `sed`. The setting is written but not live — a boot parameter applies only at boot, so the governor changes at the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back), where `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` must print `performance` after reconnecting.
+
+![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
+
+Every future boot will now pin the CPU at full speed. The system you are connected to is still running the old governor — the reboot in the next step makes the pin live, and that step verifies it.
+
+<a id="8-reboot-and-confirm-the-hardened-frame-comes-back"></a>
+<img src="https://img.shields.io/badge/STEP_08-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Reboot and confirm the hardened frame comes back"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -326,13 +368,13 @@ Reboot the Pi, reconnect, and verify everything in one sweep: services up, both 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The reboot exercises the full cold-boot sequence from [guide 10 step 5](10-spa.md#5-verify-the-frame-works) — autologin, app server, ordered browser start — now with the hardening live on top. After reconnecting: `is-active` re-checks the three always-on frame services; `docker ps` re-checks the slideshow container; `list-timers` (unfiltered this time) lists every armed timer in the session, which must include `chromium-watchdog.timer` with a NEXT a few minutes out and `chromium-restart.timer` with a NEXT at the coming 3 AM — proof that both re-armed themselves from a cold start; `findmnt /tmp` prints the mount backing `/tmp`, which must be `tmpfs`; and `swapon --show` confirms swap is still RAM-backed zram. The authoritative check is again the screen itself: the frame must come back to the slideshow with nobody touching it.
+The reboot exercises the full cold-boot sequence from [guide 10 step 5](10-spa.md#5-verify-the-frame-works) — autologin, app server, ordered browser start — now with the hardening live on top. After reconnecting: `is-active` re-checks the four always-on frame services; `docker ps` re-checks the slideshow container; `list-timers` (unfiltered this time) lists every armed timer in the session, which must include `chromium-watchdog.timer` with a NEXT a few minutes out and `chromium-restart.timer` with a NEXT at the coming 3 AM — proof that both re-armed themselves from a cold start; `findmnt /tmp` prints the mount backing `/tmp`, which must be `tmpfs`; and `swapon --show` confirms swap is still RAM-backed zram. The authoritative check is again the screen itself: the frame must come back to the slideshow with nobody touching it.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
 sudo reboot
-systemctl --user is-active framelink-spa chromium-kiosk framelink-gpio
+systemctl --user is-active framelink-spa chromium-kiosk framelink-gpio framelink-camera
 docker ps --filter name=immich-kiosk
 systemctl --user list-timers --no-pager
 findmnt /tmp
@@ -342,12 +384,12 @@ swapon --show
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. sudo reboot drops the SSH session with the client's disconnect line; after reconnecting, is-active prints active three times, docker ps shows immich-kiosk Up, list-timers includes chromium-watchdog.timer and chromium-restart.timer with populated NEXT times, findmnt shows /tmp on tmpfs, and swapon --show shows the /dev/zram0 row.]
+[Pending fresh-flash capture. sudo reboot drops the SSH session with the client's disconnect line; after reconnecting, is-active prints active four times, docker ps shows immich-kiosk Up, list-timers includes chromium-watchdog.timer and chromium-restart.timer with populated NEXT times, findmnt shows /tmp on tmpfs, and swapon --show shows the /dev/zram0 row.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-Run the five check commands after reconnecting. Three `active` lines and an `Up` container mean the fleet survived the reboot. The `list-timers` table may include other timers the OS ships — the two that must be present are `chromium-watchdog.timer` and `chromium-restart.timer`, each with a real time in the NEXT column; a missing timer means its `enable` in [step 3](#3-run-the-watchdog-every-five-minutes) or [step 4](#4-restart-chromium-early-every-morning) did not happen. `findmnt` must show `tmpfs` in the FSTYPE column for `/tmp`, and `swapon --show` must list only `/dev/zram0` (or nothing). And the screen: the slideshow is back, untouched by human hands.
+Run the five check commands after reconnecting. Four `active` lines and an `Up` container mean the fleet survived the reboot. The `list-timers` table may include other timers the OS ships — the two that must be present are `chromium-watchdog.timer` and `chromium-restart.timer`, each with a real time in the NEXT column; a missing timer means its `enable` in [step 3](#3-run-the-watchdog-every-five-minutes) or [step 4](#4-restart-chromium-early-every-morning) did not happen. `findmnt` must show `tmpfs` in the FSTYPE column for `/tmp`, and `swapon --show` must list only `/dev/zram0` (or nothing). The governor pinned in [step 7](#7-pin-the-cpu-governor-to-performance) is live from this boot onward: `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` now prints `performance`. And the screen: the slideshow is back, untouched by human hands.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -359,4 +401,4 @@ The frame is now hardened for unattended 24/7 duty: it recovers from crashes, bl
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-After a reboot the frame comes back to the slideshow on its own, and the hardening is live on top of it: `systemctl --user list-timers` shows `chromium-watchdog.timer` firing every five minutes and `chromium-restart.timer` set for 3 AM, `findmnt /tmp` shows a RAM-backed tmpfs, `swapon --show` lists only zram, the journal is volatile, and `unattended-upgrades` is installed and enabled. Left alone for weeks, the frame now restarts a bloated or stale browser by itself, keeps everyday writes off the SD card, and receives security fixes — with no one ever logging in.
+After a reboot the frame comes back to the slideshow on its own, and the hardening is live on top of it: `systemctl --user list-timers` shows `chromium-watchdog.timer` firing every five minutes and `chromium-restart.timer` set for 3 AM, `findmnt /tmp` shows a RAM-backed tmpfs, `swapon --show` lists only zram, `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` prints `performance`, the journal is volatile, and `unattended-upgrades` is installed and enabled. Left alone for weeks, the frame now restarts a bloated or stale browser by itself, keeps everyday writes off the SD card, and receives security fixes — with no one ever logging in.

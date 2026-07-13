@@ -159,11 +159,13 @@ Replace the Chromium service with its final form: point it at the local app and 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-This is the **final** `chromium-kiosk.service`, defined exactly as in `deploy/systemd/chromium-kiosk.service`. Three things change from the guide 5 version, and all three matter for an unattended cold boot:
+This is the **final** `chromium-kiosk.service`, defined exactly as in `deploy/systemd/chromium-kiosk.service`. Point by point — what changes from the guide 5 version, what carries over, and why each piece matters for an unattended frame:
 
 1. The `ExecStart` URL is now `http://localhost:8888/` — the local server from [step 3](#3-serve-the-app-locally) — instead of the placeholder. All the other Chromium flags (`--kiosk`, `--ozone-platform=wayland`, the camera flags from [guide 6](6-camera.md), and so on) are unchanged.
-2. `After=...framelink-spa.service` and `Wants=framelink-spa.service` tie the browser to the local server: `Wants` pulls the server into the same start-up, and `After` makes systemd *start* the browser after the server — but "after the service started" is not the same as "after the server is answering requests", which is why the readiness wait below is still needed.
-3. Two `ExecStartPre` guards make Chromium **block until its world is ready**. The first, `while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done`, waits for the Wayland socket to exist so Chromium has a display to draw on. The second, `until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done`, polls the local server every 0.3 s and only returns once it answers — so Chromium never opens before the app is actually being served. Together these defeat the cold-boot race: whichever of display or server is slower, Chromium waits for it.
+2. `framelink-spa.service` in `After=` and `Wants=` ties the browser to the local server: `Wants` pulls the server into the same start-up, and `After` makes systemd *start* the browser after the server — but "after the service started" is not the same as "after the server is answering requests", which is why the readiness wait below is still needed.
+3. `framelink-camera.service` in `After=` and `Wants=` does the same for the dedicated PipeWire camera node from [guide 6](6-camera.md): the camera daemon now joins the browser's start-up set on every boot. Unlike the web server it gets no readiness gate — the app only acquires the camera when a call starts, not at page load, so start ordering alone is enough.
+4. The first `ExecStartPre`, `/bin/rm -rf /tmp/framelink-chromium`, carries over from guide 5: it wipes the throwaway tmpfs profile before every start, because Chromium's module cache inside it otherwise keeps serving stale app JavaScript after an app update — the updated files reach the disk but never the browser. Now that the kiosk serves the real app, this wipe is what makes every future update of `~/FrameLink` actually take effect on the next service restart. The portal camera permission is unaffected — it lives in `~/.local/share/flatpak/db`, not in the profile.
+5. The other two `ExecStartPre` guards make Chromium **block until its world is ready**. The first, `while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done`, waits for the Wayland socket to exist so Chromium has a display to draw on. The second, `until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done`, polls the local server every 0.3 s and only returns once it answers — so Chromium never opens before the app is actually being served. Together these defeat the cold-boot race: whichever of display or server is slower, Chromium waits for it.
 
 `daemon-reload` reads the rewritten unit; `restart` relaunches Chromium against the new URL with the new guards.
 
@@ -174,13 +176,14 @@ mkdir -p ~/.config/systemd/user
 tee ~/.config/systemd/user/chromium-kiosk.service << 'EOF'
 [Unit]
 Description=Chromium Kiosk Browser
-After=graphical-session.target framelink-spa.service
-Wants=framelink-spa.service
+After=graphical-session.target framelink-spa.service framelink-camera.service
+Wants=framelink-spa.service framelink-camera.service
 Requires=graphical-session.target
 
 [Service]
 Type=simple
 Environment="WAYLAND_DISPLAY=wayland-0"
+ExecStartPre=/bin/rm -rf /tmp/framelink-chromium
 ExecStartPre=/bin/bash -c 'while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done'
 ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done'
 ExecStart=/usr/bin/chromium \

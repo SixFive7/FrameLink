@@ -42,7 +42,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 - **Photo slideshow**: [Immich Kiosk](https://github.com/damongolding/immich-kiosk) — connects to an existing Immich server, runs inside an iframe in the SPA
 - **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU — auto-reconnect, built-in TURN, adaptive bitrate, single Docker container
 - **Kiosk shell**: Custom SPA serving as the parent page — WebRTC client in parent, Immich Kiosk in iframe, CSS toggle between modes
-- **Camera**: libcamera + PipeWire desktop portal — exposes Pi Camera Module 3 to Chromium's getUserMedia() natively, no v4l2loopback shim
+- **Camera**: dedicated PipeWire camera node (GStreamer libcamerasrc, ISP-scaled 1920x1080@30, full FoV) — consumed by Chromium via the desktop portal, published as H.264
 - **GPIO handler**: Python daemon (gpiozero) — detects button press, sends toggle command to SPA via localhost WebSocket
 
 ## Architecture
@@ -58,7 +58,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
        +-- LiveKit client (always connected, muted when idle)
 
 [systemd services]
-  +-- libcamera + PipeWire (Pi Camera via desktop portal)
+  +-- camera node (libcamera → PipeWire)
   +-- GPIO watcher (Python -> WebSocket -> SPA)
   +-- Chromium kiosk (auto-restart on crash)
   +-- Watchdog (memory monitor, scheduled restart)
@@ -90,7 +90,8 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 |  +-----------------------------+  |<--------|  (outbound only)            |
 |  |  nginx + Authelia           |  |         |                             |
 |  +-----------------------------+  |         |  GPIO daemon                |
-+-----------------------------------+         |  libcamera + PipeWire       |
++-----------------------------------+         |  camera node                |
+                                              |  (libcamera → PipeWire)     |
                                               +-----------------------------+
 ```
 
@@ -116,7 +117,7 @@ The build is split into one hardware guide and twelve software guides, each step
 3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
 4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, mixer persistence
 5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
-6. [Camera](docs/6-camera.md) — Pi Camera via libcamera + PipeWire desktop portal
+6. [Camera](docs/6-camera.md) — dedicated PipeWire camera node, H.264 1080p30, full field of view
 7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker Compose + token minting
 8. [WebRTC hardware validation](docs/8-webrtc-validation.md) — the 2 GB go/no-go gate
 9. [Immich Kiosk](docs/9-immich-kiosk.md) — Docker photo slideshow (offline-capable)

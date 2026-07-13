@@ -25,7 +25,7 @@ Everything the first unit knows — the display and audio configuration, the kio
 | [03 Hardware configuration](3-hardware-configuration.md)           | DSI display + kernel parameters                 | 0.5 day          | 02                         |
 | [04 Audio configuration](4-audio-configuration.md)                 | XVF3800 pinning, amp enable, mixer persistence  | 0.5-1 day        | 03                         |
 | [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
-| [06 Camera](6-camera.md)                                           | Pi Camera via libcamera + PipeWire desktop portal | 0.5 day        | 05                         |
+| [06 Camera](6-camera.md)                                           | Dedicated PipeWire camera node (H.264 1080p30 FoV) | 0.5 day       | 05                         |
 | [07 LiveKit server](7-livekit-server.md)                           | LiveKit in Docker + token minting               | 1 day            | 06                         |
 | [08 WebRTC hardware validation](8-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 07                         |
 | [09 Immich Kiosk](9-immich-kiosk.md)                               | Docker slideshow (offline-capable cache)        | 0.5 day          | 08                         |
@@ -36,24 +36,24 @@ Everything the first unit knows — the display and audio configuration, the kio
 
 Total estimated: ~10-15 days of focused work, assuming the hardware validation gate (guide 07) passes. That estimate is what the golden image saves on every unit after the first — a clone goes from blank SD card to verified frame in well under a day.
 
-The two commands are the master's health check, run on the first unit. The first asks systemd for the live state of the three FrameLink user services — the app server and kiosk browser from [guide 10](10-spa.md) and the button daemon from [guide 11](11-gpio-button.md). The second lists the running Docker containers, which must include the `immich-kiosk` slideshow from [guide 9](9-immich-kiosk.md).
+The two commands are the master's health check, run on the first unit. The first asks systemd for the live state of the four FrameLink user services — the app server and kiosk browser from [guide 10](10-spa.md), the button daemon from [guide 11](11-gpio-button.md), and the camera node from [guide 6](6-camera.md). The second lists the running Docker containers, which must include the `immich-kiosk` slideshow from [guide 9](9-immich-kiosk.md).
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service
+systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service framelink-camera.service
 docker ps --format '{{.Names}}: {{.Status}}'
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending capture. is-active prints "active" on three lines (one per service) and docker ps lists the immich-kiosk container with an "Up" status.]
+[Pending capture. is-active prints "active" on four lines (one per service) and docker ps lists the immich-kiosk container with an "Up" status.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-Three lines reading `active`, and an `immich-kiosk: Up ...` line. Any `inactive` or `failed` means the master is not ready to be cloned — go back to the guide that owns that piece ([guide 10](10-spa.md) for the app server and browser, [guide 11](11-gpio-button.md) for the button daemon, [guide 9](9-immich-kiosk.md) for the slideshow container) and fix it before capturing anything.
+Four lines reading `active`, and an `immich-kiosk: Up ...` line. Any `inactive` or `failed` means the master is not ready to be cloned — go back to the guide that owns that piece ([guide 10](10-spa.md) for the app server and browser, [guide 11](11-gpio-button.md) for the button daemon, [guide 6](6-camera.md) for the camera node, [guide 9](9-immich-kiosk.md) for the slideshow container) and fix it before capturing anything.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -279,7 +279,7 @@ Steps 03 through 07 are the whole per-unit loop: flash, boot alone, rename, re-i
 
 ```bash
 sudo reboot
-systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service
+systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service framelink-camera.service
 curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8888/
 docker ps --format '{{.Names}}: {{.Status}}'
 ```
@@ -287,7 +287,7 @@ docker ps --format '{{.Names}}: {{.Status}}'
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending capture. The reboot drops the SSH session; after reconnecting to the unit's new hostname, is-active prints "active" three times, curl prints "HTTP 200", and docker ps lists immich-kiosk as Up, while the screen shows the slideshow.]
+[Pending capture. The reboot drops the SSH session; after reconnecting to the unit's new hostname, is-active prints "active" four times, curl prints "HTTP 200", and docker ps lists immich-kiosk as Up, while the screen shows the slideshow.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
@@ -322,14 +322,14 @@ Then the soak: leave the whole fleet powered and running overnight. The exact so
 ```bash
 systemctl --user kill -s SIGUSR1 framelink-gpio.service
 uptime
-systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service
+systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service framelink-camera.service
 free -h
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending capture. The toggle signal prints nothing while every screen switches to the call grid; the morning-after commands print each unit's uptime spanning the night, "active" three times, and a memory summary with headroom remaining.]
+[Pending capture. The toggle signal prints nothing while every screen switches to the call grid; the morning-after commands print each unit's uptime spanning the night, "active" four times, and a memory summary with headroom remaining.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
@@ -398,7 +398,7 @@ The last check is the real one: a call between households. Press the physical bu
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service
+systemctl --user is-active framelink-spa.service chromium-kiosk.service framelink-gpio.service framelink-camera.service
 curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8888/
 docker ps --format '{{.Names}}: {{.Status}}'
 ```
@@ -406,7 +406,7 @@ docker ps --format '{{.Names}}: {{.Status}}'
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending capture. Run through the Raspberry Pi Connect remote shell, is-active prints "active" three times, curl prints "HTTP 200", and docker ps lists immich-kiosk as Up, while the frame in the household shows the slideshow.]
+[Pending capture. Run through the Raspberry Pi Connect remote shell, is-active prints "active" four times, curl prints "HTTP 200", and docker ps lists immich-kiosk as Up, while the frame in the household shows the slideshow.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)

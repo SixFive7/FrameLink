@@ -1,46 +1,51 @@
 # Software Build Guide 06 — Camera (libcamera → PipeWire → desktop portal)
 
-Make the Pi Camera Module 3 available to Chromium's `getUserMedia()` using Raspberry Pi OS's modern camera path: libcamera → PipeWire → the desktop portal. PipeWire and WirePlumber are already running on the base image (they are Pi OS Trixie's audio stack), so this guide adds only the libcamera PipeWire plugin and the desktop portal that Chromium requests a camera through, points that portal at the labwc session so it offers a Camera interface, and pre-authorizes camera access so the unattended kiosk never blocks on a permission dialog. The Chromium flag that selects this camera path (`--enable-features=UsePipeWireCamera`) was set when the kiosk service was created in [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service); this guide makes the camera that flag points at actually exist. There is no `v4l2loopback` module, no GStreamer bridge, and no `/dev/video8` — the Pi Camera reaches Chromium directly through libcamera.
+Make the Pi Camera Module 3 available to Chromium's `getUserMedia()` using Raspberry Pi OS's modern camera path: libcamera → PipeWire → the desktop portal. PipeWire and WirePlumber are already running on the base image (they are Pi OS Trixie's audio stack), so this guide adds the desktop portal that Chromium requests a camera through, points it at the labwc session, pre-authorizes camera access so the unattended kiosk never blocks on a permission dialog, and then builds the camera itself: a small always-on service captures the Pi Camera at its full field of view and publishes it into PipeWire as a single camera named `FrameLinkCam`, while WirePlumber's own camera-finding is switched off so that node is the only camera Chromium can ever see. The Chromium flag that selects this camera path (`--enable-features=UsePipeWireCamera`) was set when the kiosk service was created in [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service); this guide makes the camera that flag points at actually exist. This is the feed the app from [guide 10](10-spa.md) publishes into every call as H.264 1080p30.
 
 ---
 
-<a id="1-install-the-camera-portal-packages"></a>
-<img src="https://img.shields.io/badge/STEP_01-Install_the_camera_portal_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install the camera portal packages"/>
+<a id="1-install-the-camera-packages"></a>
+<img src="https://img.shields.io/badge/STEP_01-Install_the_camera_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install the camera packages"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-A fresh Raspberry Pi OS Lite image runs PipeWire for audio, but nothing teaches PipeWire about the Pi Camera, and nothing gives Chromium the "desktop portal" it asks a camera through. Without these pieces, `getUserMedia()` finds no camera and hangs.
+A fresh Raspberry Pi OS Lite image runs PipeWire for audio, but nothing feeds the Pi Camera into it, and nothing gives Chromium the "desktop portal" it asks a camera through. Without these pieces, `getUserMedia()` finds no camera and hangs.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Install the three packages the modern camera path needs, in a single `apt install` call.
+Install the two desktop-portal packages and the four GStreamer packages the dedicated camera service is built from, in a single `apt install` call.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-Three packages, each doing one job:
-1. `libspa-0.2-libcamera` — the PipeWire SPA plugin that enumerates libcamera cameras (the Pi Camera) and exposes them as PipeWire camera nodes. Without it, PipeWire knows about the microphone but not the camera.
-2. `xdg-desktop-portal` — the "desktop portal" daemon. Chromium's PipeWire camera backend does not open a camera device directly; it asks the portal's `org.freedesktop.portal.Camera` interface for access and receives a PipeWire handle in return. This is the frontend half of the portal.
-3. `xdg-desktop-portal-gtk` — a portal *backend*. The portal frontend only exposes the Camera interface when a backend is present that implements the `Access` permission service; the GTK backend is the standard, lightweight one that provides it. (PipeWire `1.4.x` and WirePlumber `0.5.x` are already installed and running from the base image, so they are not listed here.)
+Six packages, each doing one job:
+1. `xdg-desktop-portal` — the "desktop portal" daemon. Chromium's PipeWire camera backend does not open a camera device directly; it asks the portal's `org.freedesktop.portal.Camera` interface for access and receives a PipeWire handle in return. This is the frontend half of the portal.
+2. `xdg-desktop-portal-gtk` — a portal *backend*. The portal frontend only registers the Camera interface when a backend is present that implements the `Access` permission service; the GTK backend is the standard, lightweight one that provides it.
+3. `gstreamer1.0-tools` — provides `gst-launch-1.0`, the runner the camera service in step 5 uses to assemble and run its capture pipeline.
+4. `gstreamer1.0-plugins-base` — GStreamer's base element and library set (video format handling, caps negotiation) that the capture and publish elements below depend on.
+5. `gstreamer1.0-libcamera` — provides `libcamerasrc`, the element that captures frames from the Pi Camera through libcamera.
+6. `gstreamer1.0-pipewire` — provides `pipewiresink`, the element that publishes those frames into PipeWire.
+
+Just as important is what is *not* installed: `libspa-0.2-libcamera`, the stock PipeWire camera plugin that an earlier revision of this build used here. Measured on this hardware, the camera node that plugin creates is hard-limited to roughly 30 fps, advertises no framerates at all to applications, rejects every resolution outside its own fixed menu, and Chromium fails to acquire it at anything above 1280x720 — a dead end for a 1080p call. Steps 4 and 5 replace it with a dedicated camera node built from the four GStreamer packages above. (PipeWire `1.4.x` and WirePlumber `0.5.x` are already installed and running from the base image, so they are not listed here.)
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-sudo apt install -y xdg-desktop-portal xdg-desktop-portal-gtk libspa-0.2-libcamera
+sudo apt install -y xdg-desktop-portal xdg-desktop-portal-gtk gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-libcamera gstreamer1.0-pipewire
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. The authoritative first-run output will be inserted from a freshly flashed card. On a configured test unit this pulled xdg-desktop-portal, xdg-desktop-portal-gtk, libspa-0.2-libcamera plus a small number of dependencies (bubblewrap, libjson-glib); the exact dependency set and "Setting up ..." lines depend on what the base image already carries and must be captured clean.]
+[Pending fresh-flash capture. apt prints its dependency resolution and progress log, ending with a Setting up ... line for each of the two portal packages, the four GStreamer packages, and their pulled-in dependencies.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-In the authoritative capture: a `Setting up xdg-desktop-portal ...`, `Setting up xdg-desktop-portal-gtk ...`, and `Setting up libspa-0.2-libcamera ...` line, each completing without error. Any line containing `E:` or `dpkg: error` is fatal — the later steps depend on all three packages being present.
+A `Setting up ...` line for each of the six named packages, each completing without error. Any line containing `E:` or `dpkg: error` is fatal — every later step depends on all six packages being present.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-PipeWire now has the plugin it needs to see the Pi Camera, and the desktop portal that Chromium asks a camera through is installed. Nothing is wired together yet — the portal still has to be pointed at this device's session.
+The portal Chromium asks a camera through is installed, and every building block of the camera service — the pipeline runner, the capture element, and the PipeWire publisher — is on the system. Nothing is wired together yet: the portal still has to be pointed at this device's session, and the camera node itself does not exist until step 5.
 
 <a id="2-point-the-desktop-portal-at-the-labwc-session"></a>
 <img src="https://img.shields.io/badge/STEP_02-Point_the_desktop_portal_at_the_labwc_session-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Point the desktop portal at the labwc session"/>
@@ -121,45 +126,124 @@ The `SetPermission` call is silent on success. The `Lookup` line must contain `"
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-Camera access is permanently granted for the kiosk. When the frame enters a call, the portal will hand Chromium the camera with no dialog and no human in the loop. The remaining steps only confirm the pieces are in place.
+Camera access is permanently granted for the kiosk. When the frame enters a call, the portal will hand Chromium the camera with no dialog and no human in the loop. The camera itself does not exist yet — building it is the next two steps.
 
-<a id="4-confirm-the-pi-camera-is-a-pipewire-camera"></a>
-<img src="https://img.shields.io/badge/STEP_04-Confirm_the_Pi_Camera_is_a_PipeWire_camera-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Confirm the Pi Camera is a PipeWire camera"/>
+<a id="4-route-the-camera-through-a-dedicated-pipewire-node"></a>
+<img src="https://img.shields.io/badge/STEP_04-Route_the_camera_through_a_dedicated_PipeWire_node-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Route the camera through a dedicated PipeWire node"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-We installed the plugin that should make PipeWire see the Pi Camera, but we have not yet checked that it actually did. If PipeWire cannot see the camera, nothing downstream will either.
+WirePlumber discovers cameras on its own, and on this Pi that works against us: the camera subsystem's raw low-level video devices surface as cameras that freeze Chromium the moment it probes them, and the limited stock camera plugin from step 1 would come straight back if a future install ever pulled it in. Chromium must only ever see one camera — the dedicated node the next step creates.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Ask PipeWire to list its devices and confirm the IMX708 camera appears.
+Write a small WirePlumber configuration file that switches off both of its built-in camera finders, then restart WirePlumber so it takes effect. Audio is not touched.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-`wpctl status` prints WirePlumber's view of every audio and video device PipeWire currently manages. After the libcamera plugin from step 1 is loaded (WirePlumber picks it up on the next session restart or login), the Camera Module 3's sensor appears in the **Video** section: as a device labelled `imx708 [libcamera]`, and as a usable capture **Source** named `imx708`. The `[libcamera]` tag is the proof that this is the native libcamera path and not a raw V4L2 node. `grep -i imx708` narrows the long listing to just those lines.
+WirePlumber reads configuration fragments from `~/.config/wireplumber/wireplumber.conf.d/` on top of its stock configuration, and the `99-` prefix sorts this fragment last so it wins. The fragment disables the two monitors of the default `main` profile that create camera nodes:
+1. `monitor.libcamera` — the monitor that loads the stock `libspa-0.2-libcamera` plugin and exposes its camera node. That node is the measured dead end described in step 1 (hard ~30 fps cap, no advertised framerates, fixed size menu, unacquirable above 720p). Step 1 already leaves the plugin uninstalled; disabling the monitor guarantees the stock node stays gone even if a future package pulls the plugin back in as a dependency.
+2. `monitor.v4l2` — the monitor that creates nodes for raw `/dev/video*` devices. On a Pi those are the CFE and ISP pipeline stages of the camera subsystem, not usable cameras — but surfaced into PipeWire they enumerate as cameras, and Chromium hangs while probing them. They must never appear.
+
+The ALSA monitor — the one that provides the frame's audio devices — is not mentioned in the file, so sound is unaffected. The comment header names the service this file pairs with (`deploy/systemd/framelink-camera.service` — the repository's master copy of the camera service, from the repo you will clone in [guide 10](10-spa.md)); the next step writes that same service by hand. `tee` overwrites the file in place, and `systemctl --user restart wireplumber` makes WirePlumber reload its configuration and drop the two monitors immediately.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-wpctl status | grep -i imx708
+mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+tee ~/.config/wireplumber/wireplumber.conf.d/99-framelink-camera.conf << 'EOF'
+# FrameLink camera routing.
+# Disable WirePlumber's stock camera monitors so the only camera Chromium can see is the
+# framelink-camera PipeWire node (deploy/systemd/framelink-camera.service):
+#  - monitor.libcamera: the stock libspa-libcamera node is hard-limited to ~30 fps, rejects
+#    non-menu sizes, and Chromium fails to acquire it above 720p (measured).
+#  - monitor.v4l2: without it the raw CFE/ISP V4L2 nodes would surface as bogus cameras.
+# Audio is untouched (that is the ALSA monitor).
+# Install to: ~/.config/wireplumber/wireplumber.conf.d/99-framelink-camera.conf
+wireplumber.profiles = {
+  main = {
+    monitor.libcamera = disabled
+    monitor.v4l2 = disabled
+  }
+}
+EOF
+systemctl --user restart wireplumber
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. On a configured unit this shows two lines: an  imx708  device entry tagged  [libcamera]  under Video > Devices, and an  imx708  entry under Video > Sources.]
+[Pending fresh-flash capture. tee echoes the fourteen lines of the configuration file back to the terminal; the wireplumber restart prints nothing on success.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-At least one line mentioning `imx708`, with the device line tagged `[libcamera]`. If `grep` returns nothing, WirePlumber has not picked up the libcamera plugin: `systemctl --user restart wireplumber` and re-check. If `rpicam-hello --list-cameras` does not list the IMX708 either, the problem is upstream of PipeWire — recheck the camera ribbon and the `camera_auto_detect=1` line in `/boot/firmware/config.txt`.
+`tee` echoes the file body — the eight comment lines and the `wireplumber.profiles` block — exactly as written above, and the restart is silent on success. After this step, `wpctl status` shows nothing under the Video section's `Sources:` at all: the stock camera paths are off and the dedicated node does not exist yet. That empty state is correct here and is filled by the next step.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-PipeWire sees the Pi Camera as a first-class camera source. The portal can now hand this source to any application that asks for a camera.
+WirePlumber no longer surfaces any camera on its own — right now the frame deliberately has no camera at all. The next step creates the single camera Chromium will see from now on.
 
-<a id="5-confirm-the-camera-portal-is-on-the-session-bus"></a>
-<img src="https://img.shields.io/badge/STEP_05-Confirm_the_Camera_portal_is_on_the_session_bus-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Confirm the Camera portal is on the session bus"/>
+<a id="5-run-the-camera-node-service"></a>
+<img src="https://img.shields.io/badge/STEP_05-Run_the_camera_node_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Run the camera node service"/>
+
+![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
+
+After the previous step the system has no camera at all. Something has to read the Pi Camera — at the right size, speed, and field of view — and offer it to PipeWire as a camera, automatically, from every boot.
+
+![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
+
+Create a small always-on service that captures the Pi Camera at 1920x1080, 30 frames per second — the setting that keeps the sensor's full field of view — and publishes it into PipeWire as a camera named `FrameLinkCam`. Then check that PipeWire lists it.
+
+![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
+
+The service's `ExecStart` runs a four-element GStreamer pipeline under `gst-launch-1.0`:
+1. `libcamerasrc` captures from the Pi Camera through libcamera — the same stack `rpicam-hello` uses.
+2. `video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1` is a demand the camera subsystem satisfies in hardware. libcamera selects the sensor mode from the requested size: asking for 1080 lines forces the IMX708's full-field-of-view 2304x1296 mode, which the Pi's ISP then scales to 1920x1080 on the fly. Any request of 900 lines or fewer would instead select a cropped sensor mode that behaves like a ~1.5x zoom, and scaling in software instead of on the ISP was measured at a ~51 fps single-thread ceiling on this CPU — this one line is why the camera shows the whole room at a steady 30 fps with no CPU cost.
+3. `queue max-size-buffers=4 leaky=downstream` is a small elastic buffer: if the consuming side stalls for a moment, it drops the oldest queued frames instead of back-pressuring the camera, so the feed stays live and the pipeline never wedges.
+4. `pipewiresink mode=provide` publishes the stream as a new standalone PipeWire node rather than connecting to an existing one; `sync=false` forwards frames as the sensor delivers them instead of pacing them against a playback clock; and the `stream-properties` stamp the node with `media.class=Video/Source` and `media.role=Camera` — what makes PipeWire and the portal treat it as a camera — plus the `framelink-cam` / `FrameLinkCam` name Chromium will display.
+
+Around that pipeline, the unit does the keeping-alive: `After=pipewire.service` orders it after PipeWire inside the user session, `Restart=always` with `RestartSec=3` resurrects the pipeline three seconds after any crash, and `WantedBy=default.target` starts it with the autologin session on every boot. The commands: `mkdir -p` ensures the user-unit directory exists, `tee` writes the unit, `daemon-reload` makes systemd read it, and `enable --now` starts the service immediately and on every future boot. The final command prints just the Video section of PipeWire's device list — the `sed` expression slices from the `Video` header to the next blank line — to confirm the node registered.
+
+![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
+
+```bash
+mkdir -p ~/.config/systemd/user
+tee ~/.config/systemd/user/framelink-camera.service << 'EOF'
+[Unit]
+Description=FrameLink camera node (Pi Camera -> PipeWire, full-FoV 1080p30)
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gst-launch-1.0 libcamerasrc ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue max-size-buffers=4 leaky=downstream ! pipewiresink sync=false mode=provide stream-properties=props,media.class=Video/Source,media.role=Camera,node.name=framelink-cam,node.description=FrameLinkCam
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now framelink-camera.service
+wpctl status | sed -n '/^Video/,/^$/p'
+```
+
+![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
+
+```text
+[Pending fresh-flash capture. tee echoes the unit file body, enable --now prints a Created symlink line, and the wpctl slice shows the Video section with FrameLinkCam as the only entry under Sources.]
+```
+
+![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
+
+In the Video section: exactly one entry under `Sources:` — `FrameLinkCam` — and nothing camera-like anywhere else (no `imx708` device, no V4L2 entries). If `FrameLinkCam` is missing, read the service's log with `journalctl --user -u framelink-camera.service -n 20`: a pipeline that cannot find a camera means a problem upstream of PipeWire — recheck the camera ribbon and the `camera_auto_detect=1` line in `/boot/firmware/config.txt`. If an `imx708` device or extra sources appear alongside it, the configuration from [step 4](#4-route-the-camera-through-a-dedicated-pipewire-node) did not load — confirm the file path and restart WirePlumber again.
+
+![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
+
+The frame now has exactly one camera: `FrameLinkCam`, full field of view, 1080p at 30 fps, published into PipeWire from boot and revived automatically if it ever dies. What remains is confirming Chromium's route to it — the portal — is really live.
+
+<a id="6-confirm-the-camera-portal-is-on-the-session-bus"></a>
+<img src="https://img.shields.io/badge/STEP_06-Confirm_the_Camera_portal_is_on_the_session_bus-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Confirm the Camera portal is on the session bus"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -193,8 +277,8 @@ Exactly one line containing `org.freedesktop.portal.Camera` and the word `interf
 
 The Camera interface Chromium asks through is live on the session bus. The portal, the permission, and the camera source are all in place; only Chromium's own configuration remains to confirm.
 
-<a id="6-confirm-chromium-uses-the-pipewire-camera-path"></a>
-<img src="https://img.shields.io/badge/STEP_06-Confirm_Chromium_uses_the_PipeWire_camera_path-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Confirm Chromium uses the PipeWire camera path"/>
+<a id="7-confirm-chromium-uses-the-pipewire-camera-path"></a>
+<img src="https://img.shields.io/badge/STEP_07-Confirm_Chromium_uses_the_PipeWire_camera_path-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Confirm Chromium uses the PipeWire camera path"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -206,7 +290,7 @@ Read the running Chromium process's command line and confirm the flag that selec
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-[Guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service) launches Chromium with `--enable-features=UsePipeWireCamera`. That flag puts Chromium on the PipeWire camera path: instead of scanning `/dev/video*` directly (the legacy V4L2 path, which hangs while probing the Pi's many internal camera-pipeline nodes), Chromium requests a camera through the portal interface confirmed in step 5. `pgrep -a chromium` prints the full command line of each Chromium process; piping to `grep -o` isolates the flag. The command line is the authoritative truth — if the flag is not here, it is not in effect, whatever a config file says.
+[Guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service) launches Chromium with `--enable-features=UsePipeWireCamera`. That flag puts Chromium on the PipeWire camera path: instead of scanning `/dev/video*` directly (the legacy V4L2 path, which hangs while probing the Pi's many internal camera-pipeline nodes), Chromium requests a camera through the portal interface confirmed in step 6. `pgrep -a chromium` prints the full command line of each Chromium process; piping to `grep -o` isolates the flag. The command line is the authoritative truth — if the flag is not here, it is not in effect, whatever a config file says.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -226,7 +310,7 @@ At least one line reading `enable-features=UsePipeWireCamera`. If `grep` returns
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-Chromium is on the PipeWire camera path, the portal offers the Camera interface, access is pre-authorized, and PipeWire sees the Pi Camera. The full chain from sensor to browser is in place. When the SPA built in [guide 10](10-spa.md) enters a call and calls `navigator.mediaDevices.getUserMedia()`, Chromium receives the IMX708 through the portal and publishes it with no dialog and no delay.
+Chromium is on the PipeWire camera path, the portal offers the Camera interface, access is pre-authorized, and `FrameLinkCam` is the one camera PipeWire offers. The full chain from sensor to browser is in place. When the SPA built in [guide 10](10-spa.md) enters a call and calls `navigator.mediaDevices.getUserMedia()`, Chromium receives the full-field-of-view `FrameLinkCam` feed through the portal — no dialog, no delay — and the app publishes it into the call as H.264 1080p30.
 
 ---
 
@@ -234,4 +318,4 @@ Chromium is on the PipeWire camera path, the portal offers the Camera interface,
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-`wpctl status` lists the IMX708 as a `[libcamera]` camera source, `busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop` shows `org.freedesktop.portal.Camera`, the portal permission store records the camera as `yes` for the empty application id, and the running Chromium carries `--enable-features=UsePipeWireCamera`. The camera path persists across reboots with no manual step. When the SPA from [guide 10](10-spa.md) calls `getUserMedia()`, the Pi Camera is delivered to Chromium through the portal and published into the call.
+`wpctl status` lists `FrameLinkCam` as the only entry under the Video section's Sources, `busctl --user introspect org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop` shows `org.freedesktop.portal.Camera`, the portal permission store records the camera as `yes` for the empty application id, and the running Chromium carries `--enable-features=UsePipeWireCamera`. The camera service, the WirePlumber routing, and the portal all persist across reboots with no manual step. When the SPA from [guide 10](10-spa.md) calls `getUserMedia()`, the frame's one camera — the full field of view of the Pi Camera — is delivered to Chromium through the portal and published into the call as H.264 1080p30.

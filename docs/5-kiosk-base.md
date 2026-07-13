@@ -211,6 +211,7 @@ Wrap Chromium in a systemd `--user` unit that waits for the Wayland socket to ex
 The unit structure:
 - `Type=simple` with `ExecStart` running Chromium in the foreground.
 - `Environment="WAYLAND_DISPLAY=wayland-0"` — labwc creates the Wayland socket at `wayland-0` in `/run/user/$(id -u)/`; Chromium's `--ozone-platform=wayland` looks for this env var.
+- `ExecStartPre=/bin/rm -rf /tmp/framelink-chromium` — wipes the browser profile before every service start. The profile is deliberately throwaway (it lives on tmpfs — see `--user-data-dir` below), but within one boot it survives service restarts, and Chromium's module cache inside it then keeps serving stale JavaScript after the kiosk's web app ([guide 10](10-spa.md)) is updated on disk — new code reaches the disk but never the browser. Starting every launch from an empty profile guarantees fresh code. No permission state is lost: the camera permission Chromium later gets via the desktop portal ([guide 6 (camera)](6-camera.md)) lives in `~/.local/share/flatpak/db`, not in the profile.
 - `ExecStartPre=/bin/bash -c 'while [ ! -S ... ]; do sleep 0.1; done'` — state-driven wait loop that spins until the Wayland socket file exists, so Chromium never starts before labwc is ready. Much more reliable than a fixed `sleep`.
 - `Restart=always` + `RestartSec=5` — Chromium crash → systemd restarts it five seconds later. The kiosk recovers without operator intervention.
 - `WantedBy=default.target` — user-service default target, enabled by `systemctl --user enable`.
@@ -239,6 +240,7 @@ Requires=graphical-session.target
 [Service]
 Type=simple
 Environment="WAYLAND_DISPLAY=wayland-0"
+ExecStartPre=/bin/rm -rf /tmp/framelink-chromium
 ExecStartPre=/bin/bash -c 'while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done'
 ExecStart=/usr/bin/chromium \
   --ozone-platform=wayland \
