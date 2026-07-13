@@ -1,0 +1,12 @@
+[Unit]
+Description=FrameLink camera node (Pi Camera -> PipeWire, full-FoV 1080p30)
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gst-launch-1.0 libcamerasrc ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue max-size-buffers=4 leaky=downstream ! pipewiresink sync=false mode=provide stream-properties=props,media.class=Video/Source,media.role=Camera,node.name=framelink-cam,node.description=FrameLinkCam
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

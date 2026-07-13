@@ -8,15 +8,18 @@
 const LK = window.LivekitClient;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Validated production simulcast: three layers so a 5-up grid tile pulls 360p, not 720p.
-// 30 fps is the production rate: the native libcamera -> PipeWire -> portal camera path
-// negotiates 1280x720@30 regardless of a higher frameRate constraint (measured on-device;
-// the 56 fps plan predates that path). Full 6-way call at 30 fps: ~100%/400 CPU, ~63 degC.
+// Validated production simulcast (measured in the July camera sweep): H.264 top layer at
+// 1920x1080@30 — the highest mode this hardware sustains. OpenH264 is single-thread-bound
+// (~60 MP/s ceiling) but holds 1080p30 solid at ~117%/400 CPU, where VP8 needed 165% for a
+// wobbly 27 fps. Capturing at 1080 lines also forces the full-FoV 2304x1296 sensor mode
+// (requests of <=900 lines select a cropped ~1.5x-zoom mode). The 180p/360p layers keep
+// 5-up grid tiles cheap for receivers. 4 Mbps compensates H.264 constrained-baseline
+// efficiency versus VP8 at equal quality.
 function publishLayers(fps) {
   return [
     new LK.VideoPreset(320, 180, 180_000, fps),
     new LK.VideoPreset(640, 360, 500_000, fps),
-    new LK.VideoPreset(1280, 720, 1_700_000, fps),
+    new LK.VideoPreset(1920, 1080, 4_000_000, fps),
   ];
 }
 
@@ -38,9 +41,13 @@ export class CallClient extends EventTarget {
       disconnectOnPageLeave: false,
       stopLocalTrackOnUnpublish: true,
       publishDefaults: {
-        videoCodec: 'vp8',
+        videoCodec: 'h264',
         simulcast: true,
         videoSimulcastLayers: publishLayers(this.fps),
+        // livekit-client builds the TOP simulcast encoding from videoEncoding, not from the
+        // presets above — without this it clamps the top layer to its stock preset table.
+        videoEncoding: publishLayers(this.fps)[2].encoding,
+        degradationPreference: 'maintain-framerate',
         dtx: true,
         red: true,
       },
@@ -100,9 +107,12 @@ export class CallClient extends EventTarget {
   async enableCall() {
     if (!this.room || this.inCall) return;
     this.inCall = true;
-    const cap = { resolution: { width: 1280, height: 720, frameRate: this.fps }, frameRate: this.fps };
+    const cap = { resolution: { width: 1920, height: 1080, frameRate: this.fps }, frameRate: this.fps };
     try {
       const pub = await this.room.localParticipant.setCameraEnabled(true, cap);
+      // Bias encoder overload decisions toward smoothness: faces in motion degrade better
+      // by softening than by stuttering (pairs with degradationPreference above).
+      if (pub && pub.track && pub.track.mediaStreamTrack) pub.track.mediaStreamTrack.contentHint = 'motion';
       this._emit('selfTrack', { track: pub && pub.track ? pub.track : null });
     } catch (e) {
       this._emit('selfTrack', { track: null });   // no camera — still join and show others

@@ -217,6 +217,9 @@ class FrameApp extends LitElement {
   };
 
   _slideshowSrc() {
+    // Unload the slideshow while in a call: the hidden iframe otherwise keeps running
+    // transitions, costing CPU and ~50-100 MB RAM exactly when the call needs both.
+    if (this.mode === 'call') return 'about:blank';
     const url = this.config.immichKioskUrl;
     if (!url) return 'about:blank';
     return `${url}${url.includes('?') ? '&' : '?'}_k=${this._iframeKey}`;
@@ -231,14 +234,19 @@ class FrameApp extends LitElement {
   async enterCall() {
     if (this.mode === 'call') return;
     this.mode = 'call';
+    clearTimeout(this._iframeTimer);
     if (this.call) await this.call.enableCall();
   }
 
   async exitCall() {
+    if (this.mode !== 'call') return;
     if (this.call) await this.call.disableCall();
     this.largeId = null;
     this.selfTrack = null;
     this.mode = 'slideshow';
+    this.slideshowReady = false;
+    this._iframeKey++;
+    this._armIframeRetry();
   }
 
   render() {
