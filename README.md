@@ -29,9 +29,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 | Power supply | [Official 27W USB Type-C Power Supply (White, EU)](https://www.waveshare.com/raspberry-pi-5-official-27w-psu.htm?sku=25910) | Raspberry Pi 5 Official 27W PSU White EU | Raspberry Pi Foundation | 25910 |
 | Cooling | [Aluminum Heatsink with Thermal Pads and Spring-Loaded Push Pins](https://www.waveshare.com/pi5-active-cooler-c.htm) | Pi5-Active-Cooler-C | Waveshare | 26415 |
 | Mic array | [ReSpeaker XVF3800 USB 4-Mic Array](https://thepihut.com/products/respeaker-xmos-xvf3800-ai-powered-4-mic-array-for-clear-voice-even-in-noise) | ReSpeaker XVF3800 | Seeed Studio | 101991441 |
-| Speaker (option A) | [Adafruit Mono Enclosed Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/3351/6612456) | 3351 | Adafruit | 3351 |
-| Speaker (option B) | [PUI Audio Enclosed Oval Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/pui-audio-inc/AS07104PO-LW152-R/4835136) | AS07104PO-LW152-R | PUI Audio | AS07104PO-LW152-R |
-| Speaker cable | [Adafruit JST PH 2-Pin Cable 100mm](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/261/5353586) | 261 | Adafruit | 261 |
+| Speaker | [Adafruit Mono Enclosed Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/3351/6612456) — chosen over the PUI AS07104PO in an A/B loudness test (+12 dB speech-band, measured); pre-attached JST PH cable, no splice needed | 3351 | Adafruit | 3351 |
 | Call button | GPIO momentary push button (TBD) | — | — | — |
 | Network cable | RJ45 Cat5e/Cat6 Ethernet cable — preferred over WiFi for reliability | — | — | — |
 

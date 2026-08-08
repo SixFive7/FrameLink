@@ -1,6 +1,6 @@
 # Software Build Guide 04 — Audio Configuration
 
-Configure the ReSpeaker XVF3800 USB mic array and its attached speaker so that audio capture and playback work reliably end-to-end: pin the USB device to a stable ALSA card index so adding or removing other USB devices can never break audio routing, install Seeed's host-side tool that talks to the array's on-board DSP, enable the speaker amplifier, raise the playback mixer to the level this speaker needs and persist it across reboots, and prove both directions with a spoken-word playback test and a round-trip microphone recording.
+Configure the ReSpeaker XVF3800 USB mic array and its attached speaker so that audio capture and playback work reliably end-to-end: pin the USB device to a stable ALSA card index (and switch off the HDMI sound cards that can otherwise steal that index on a slow boot), install Seeed's host-side tool that talks to the array's on-board DSP, pin the array's firmware to a known version, enable the speaker amplifier and set **both** playback volumes — including a second, easily-missed one that ships at −20 dB and costs most of the speaker's loudness — persist it all across reboots, and prove both directions with a spoken-word playback test and a round-trip microphone recording.
 
 ---
 
@@ -19,10 +19,13 @@ Tell the USB sound driver, once and permanently, that the device with the ReSpea
 
 On a fresh install `snd-usb-audio` hands out card indices in enumeration order. Everything downstream — `aplay -D hw:0,0`, `alsactl store`, the XVF3800 control tool's HID lookup — assumes the array is card 0, so we pin it explicitly via the `snd-usb-audio` module's `index=` / `vid=` / `pid=` options. The options line is appended to `/etc/modprobe.d/alsa-base.conf`, a file Raspberry Pi OS does not create by default; the `grep -qxF` guard keeps the append idempotent, and `2>/dev/null` swallows grep's "No such file" complaint on the first run when the file has yet to exist. The reboot is required because `snd-usb-audio` only honours the options when the module loads, and it loads very early in boot. The vid/pid pair `2886:001a` matches the retail Seeed ReSpeaker XVF3800 as shipped today; a future hardware revision under a different PID would need this line updated.
 
+The pin alone is not enough, and the failure it leaves open is nasty: on a cold boot where USB enumerates slowly, one of the Pi's built-in HDMI sound cards can claim index 0 *first* — and then `snd-usb-audio`, forced to exactly index 0 by our pin, fails outright (`cannot find the slot for index 0 ... error -16` in the kernel log) and the frame wakes up with **no working audio at all**. Measured on real hardware: intermittent, cold-boots only. The frame never uses HDMI audio (its display is DSI), so the second command removes the competitor entirely — appending `,noaudio` to the stock `dtoverlay=vc4-kms-v3d` line in `/boot/firmware/config.txt` disables the HDMI sound cards at the device-tree level, leaving index 0 with exactly one claimant on every boot. The `grep -q ... ||` guard makes the edit idempotent.
+
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
 grep -qxF 'options snd-usb-audio index=0 vid=0x2886 pid=0x001a' /etc/modprobe.d/alsa-base.conf 2>/dev/null || echo 'options snd-usb-audio index=0 vid=0x2886 pid=0x001a' | sudo tee -a /etc/modprobe.d/alsa-base.conf
+grep -q 'vc4-kms-v3d,noaudio' /boot/firmware/config.txt || sudo sed -i 's/^dtoverlay=vc4-kms-v3d$/dtoverlay=vc4-kms-v3d,noaudio/' /boot/firmware/config.txt
 sudo reboot
 ```
 
@@ -35,7 +38,7 @@ Connection to framelink-douwe.local closed by remote host.
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The first line is the options line echoed back as `tee` writes it into `/etc/modprobe.d/alsa-base.conf`; the second is your SSH session ending as the Pi reboots. If an error appears instead of the options line, the append did not land — re-run the first command before rebooting. Wait for the Pi to come back up, then reconnect over SSH before the next step.
+The first line is the options line echoed back as `tee` writes it into `/etc/modprobe.d/alsa-base.conf`; the `config.txt` edit prints nothing; the last line is your SSH session ending as the Pi reboots. If an error appears instead of the options line, the append did not land — re-run the first command before rebooting. Wait for the Pi to come back up, then reconnect over SSH before the next step.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -112,58 +115,94 @@ The `...` marks trimmed apt download-and-unpack lines. The last two lines are th
 
 The Pi can now talk to the ReSpeaker's on-board sound processor, and the device answered with its firmware version. The speaker is still silent — switching on its amplifier and setting the volume is next.
 
-<a id="3-enable-the-speaker-amplifier-and-test-playback"></a>
-<img src="https://img.shields.io/badge/STEP_03-Enable_the_speaker_amplifier_and_test_playback-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Enable the speaker amplifier and test playback"/>
+<a id="3-pin-the-array-firmware-to-v2-0-10"></a>
+<img src="https://img.shields.io/badge/STEP_03-Pin_the_array_firmware_to_v2.0.10-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Pin the array firmware to v2.0.10"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-Nothing has come out of the speaker yet: its amplifier is controlled by a switch inside the ReSpeaker that has not been checked, and the playback volume has not been set to the top of its range, which this small speaker needs to be clearly audible.
+The ReSpeaker arrives with whatever firmware its production batch was flashed with, and the versions behave differently — different volume handling, different LED behaviour. A fleet of frames built months apart would drift apart in ways that are miserable to debug.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Read the ReSpeaker's pin states, explicitly switch the amplifier pin on, raise the playback volume to its maximum, and play a short spoken test sound through the speaker.
+Install the standard USB flashing tool, ask the array which firmware it runs, and flash it to v2.0.10 — the version this build is validated against — only if it is not already there.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The XVF3800 exposes five addressable GPO pins; the one that controls the speaker amplifier is `X0D31`, and it is active-low (low = amp enabled). Per Seeed's [host_control/README.md](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/blob/master/host_control/README.md#gpio-control), `GPO_READ_VALUES` returns five values in the fixed order `X0D11, X0D30, X0D31, X0D33, X0D39`, and `GPO_WRITE_VALUE` addresses the same five pins by their XMOS port number. Firmware v2.0.6 (the retail shipping version) already boots with `X0D31` low, so the amp is effectively enabled out of the box — the `GPO_WRITE_VALUE 31 0` below is a belt-and-braces idempotent no-op against any future firmware that might ship with a different default. A class-D amp with no signal produces an audible hiss; this is the amp's noise floor, it starts at boot, and it is normal.
+The XVF3800 supports standard USB Device Firmware Upgrade. The firmware images ship inside the same repository step 2 already cloned (`~/xvf3800/xmos_firmwares/usb/`), so nothing extra is downloaded. Line by line:
+1. `dfu-util` is the stock Debian DFU flasher.
+2. The first `VERSION` call prints the currently running firmware.
+3. The guarded flash line runs `dfu-util` only when the version is not already `2 0 10`: `-a 1` targets the array's "DFU Upgrade" partition, `-e` detaches it into DFU mode, `-D` supplies the image, and `-R` resets it back into normal operation afterwards. The flash takes about thirty seconds, prints a progress bar, and the array then re-enumerates on USB.
+4. The `sleep` gives the re-enumeration time to settle, and the final `VERSION` proves the array now runs v2.0.10.
 
-The test plays one of the stock `alsa-utils` voice samples (`Front_Left.wav` — the words "Front Left" spoken). Because the Adafruit 3351 mono speaker is a low-sensitivity driver and the on-board amp only delivers a few watts, ALSA's `PCM` playback volume has to sit at the top of its range (`60/60` = 0 dB) for the sample to be clearly audible — `amixer -c 0 sset PCM 60` sets exactly that, and it is the loudness ceiling of the current hardware combination. The mono speaker only reproduces the left channel; the right channel on the TRS jack is either unused (TS plug) or summed into the single driver.
+The version pin matters concretely on the playback side: shipping firmware (v2.0.6-era) and v2.0.10 expose and default the DAC volume path differently, and the next step's volume settings are validated against v2.0.10. If a flash is ever interrupted, the array has a built-in recovery: hold the Mute button while re-plugging power to enter Safe Mode, then flash again against the factory partition.
+
+![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
+
+```bash
+sudo apt-get install -y dfu-util
+(cd ~/xvf3800/host_control/rpi_64bit && sudo ./xvf_host VERSION)
+(cd ~/xvf3800/host_control/rpi_64bit && sudo ./xvf_host VERSION | grep -q 'VERSION 2 0 10') || sudo dfu-util -R -e -a 1 -D ~/xvf3800/xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin
+sleep 5
+(cd ~/xvf3800/host_control/rpi_64bit && sudo ./xvf_host VERSION)
+```
+
+![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
+
+```text
+[Pending fresh-flash capture. apt installs dfu-util; the first VERSION prints the shipped firmware (e.g. VERSION 2 0 6); dfu-util prints a download progress bar ending in "Done!" and a reset notice; the final VERSION prints VERSION 2 0 10.]
+```
+
+![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
+
+The last line must read `VERSION 2 0 10`. If the array already ran v2.0.10, the `dfu-util` line is skipped silently and the two `VERSION` calls print the same thing — that is the idempotent re-run case. A `dfu-util` error about not finding the DFU device usually means the array is mid-re-enumeration — wait a few seconds and re-run the block from the guarded line.
+
+![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
+
+Every frame in the fleet now runs the exact firmware this build was validated against. The array is still silent — switching on its amplifier and setting the volumes correctly is next.
+
+<a id="4-enable-the-speaker-amplifier-and-set-the-volumes"></a>
+<img src="https://img.shields.io/badge/STEP_04-Enable_the_speaker_amplifier_and_set_the_volumes-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Enable the speaker amplifier and set the volumes"/>
+
+![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
+
+Nothing has come out of the speaker yet: its amplifier is controlled by a switch inside the ReSpeaker that has not been checked, and the sound card hides **two** separate volume controls — one of which ships at a fraction of full level and silently costs the speaker most of its loudness if it is missed.
+
+![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
+
+Read the ReSpeaker's pin states, explicitly switch the amplifier pin on, set both playback volumes to their validated levels, and play a short spoken test sound through the speaker.
+
+![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
+
+The XVF3800 exposes five addressable GPO pins; the one that controls the speaker amplifier is `X0D31`, and it is active-low (low = amp enabled). Per Seeed's [host_control/README.md](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/blob/master/host_control/README.md#gpio-control), `GPO_READ_VALUES` returns five values in the fixed order `X0D11, X0D30, X0D31, X0D33, X0D39`, and `GPO_WRITE_VALUE` addresses the same five pins by their XMOS port number. Firmware v2.0.10 (pinned in [step 3](#3-pin-the-array-firmware-to-v2-0-10)) boots with `X0D31` low, so the amp is effectively enabled out of the box — the `GPO_WRITE_VALUE 31 0` below is a belt-and-braces idempotent no-op against any future firmware that might ship with a different default. A class-D amp with no signal produces an audible hiss; this is the amp's noise floor, it starts at boot, and it is normal.
+
+The volume part is where a fresh build goes wrong without noticing. The card exposes **two** playback mixer controls: the obvious stereo `PCM,0`, and a second mono stage `PCM,1` that ships at `40/60` = **−20 dB** — one hundredth of full electrical power. Setting only the obvious control (as an earlier revision of this guide did) leaves the frame sounding like it needs a bigger amplifier when in fact it is being throttled in software: raising `PCM,1` was measured on this hardware as roughly **+18 dB** at the speaker, the difference between "audible in a quiet room" and genuine desk-phone loudness. The validated production levels are both controls at `60` (0 dB) — measured at ~94 dB close-miked with the Adafruit 3351, and verified clean on 45 seconds of continuous studio-quality narration (judge quality with real speech material: a low-bitrate test blip can crackle at levels where actual speech plays perfectly). Do not push software gain above 0 dB anywhere in the chain (e.g. a PipeWire sink volume over 100%) — beyond digital full scale there is no loudness left, only clipping. The mono speaker only reproduces the left channel; the right channel on the TRS jack is either unused (TS plug) or summed into the single driver.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
 (cd ~/xvf3800/host_control/rpi_64bit && sudo ./xvf_host GPO_READ_VALUES)
 (cd ~/xvf3800/host_control/rpi_64bit && sudo ./xvf_host GPO_WRITE_VALUE 31 0)
-amixer -c 0 sset PCM 60
+amixer -c 0 sset PCM,0 60
+amixer -c 0 sset PCM,1 60
 aplay -D plughw:0,0 /usr/share/sounds/alsa/Front_Left.wav
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-Device (USB)::device_init() -- Found device VID: 10374 PID: 26 interface: 3
-GPO_READ_VALUES 0 0 0 1 0
-Device (USB)::device_init() -- Found device VID: 10374 PID: 26 interface: 3
-Simple mixer control 'PCM',0
-  Capabilities: pvolume pswitch
-  Playback channels: Front Left - Front Right
-  Limits: Playback 0 - 60
-  Mono:
-  Front Left: Playback 60 [100%] [0.00dB] [on]
-  Front Right: Playback 60 [100%] [0.00dB] [on]
-Playing WAVE '/usr/share/sounds/alsa/Front_Left.wav' : Signed 16 bit Little Endian, Rate 48000 Hz, Mono
+[Pending fresh-flash capture. The two GPO calls print the device banner, a GPO_READ_VALUES line of five digits, and a banner for the write; the two amixer calls each print the control's state block — PCM,0 ending at Playback 60 [100%] [0.00dB] on both channels, PCM,1 ending at Mono: Playback 60 [100%] [0.00dB] — and aplay prints its Playing WAVE line while the words "Front Left" sound from the speaker.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `GPO_READ_VALUES 0 0 0 1 0` readback means `X0D11=0, X0D30=0, X0D31=0, X0D33=1, X0D39=0` — the third value is `X0D31`, already low, confirming the amp is enabled. `X0D33=1` is the LED-ring power rail (active-high, so `1` means the ring is powered — you should see the LED ring cycling its default rainbow → direction-of-arrival pattern). The `GPO_WRITE_VALUE 31 0` command produces only the `device_init()` banner because it is a write with no return payload. During the `aplay` you should hear the words "Front Left" spoken clearly through the speaker, over the amp's steady hiss. If you hear no voice at all — only hiss — check the 3.5 mm plug is fully seated and re-run `GPO_READ_VALUES` to verify the third value is still `0`. If the voice is present but very faint even at `PCM 60`, the speaker-plus-amp combination is at its ceiling for this hardware; [the project TODO](../TODO.md) records an external amplifier as the remedy if a noisier deployment environment ever needs it.
+In the `GPO_READ_VALUES` readback (five digits, e.g. `0 0 0 1 0`) the third value is `X0D31` — it must be `0`, confirming the amp is enabled. `X0D33=1` is the LED-ring power rail (active-high — you should see the LED ring lit). Both `amixer` outputs must show `[0.00dB]` — if `PCM,1` still reads `[-20.00dB]`, the second `sset` did not land, and the speaker will be dramatically too quiet. During the `aplay` you should hear "Front Left" spoken **loudly and clearly** over the amp's steady hiss — at these levels the frame is in desk-phone territory, not whisper territory. The stock sample is low-bitrate and can sound slightly rough at full level; that is the sample, not the hardware. If you hear no voice at all, check the speaker's JST plug is fully seated and re-run `GPO_READ_VALUES` to verify the third value is still `0`.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The whole playback path works — card 0, the ReSpeaker's processor, the amplifier, and the speaker — at the volume the frame will actually use. That volume lives only in the sound card's running memory so far; making it survive a reboot is next.
+The whole playback path works — card 0, the ReSpeaker's processor, the amplifier, both volume stages, and the speaker — at the loudness the frame will actually use. Those volumes live only in the sound card's running memory so far; making them survive a reboot is next.
 
-<a id="4-persist-the-alsa-mixer-state-across-reboots"></a>
-<img src="https://img.shields.io/badge/STEP_04-Persist_the_ALSA_mixer_state_across_reboots-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Persist the ALSA mixer state across reboots"/>
+<a id="5-persist-the-alsa-mixer-state-across-reboots"></a>
+<img src="https://img.shields.io/badge/STEP_05-Persist_the_ALSA_mixer_state_across_reboots-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Persist the ALSA mixer state across reboots"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -192,14 +231,14 @@ Connection to framelink-douwe.local closed by remote host.
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-`alsactl store` prints nothing on success, so the disconnect line from the reboot is the only output of the whole block. If anything else prints before it — an error naming `/var/lib/alsa/asound.state` — the store failed; when the Pi is back, set the volume again with the `amixer -c 0 sset PCM 60` command from [step 3](#3-enable-the-speaker-amplifier-and-test-playback) and re-run `sudo alsactl store`. Wait for the Pi to come back up, then reconnect over SSH for the next step.
+`alsactl store` prints nothing on success, so the disconnect line from the reboot is the only output of the whole block. If anything else prints before it — an error naming `/var/lib/alsa/asound.state` — the store failed; when the Pi is back, set the volumes again with the two `amixer` commands from [step 4](#4-enable-the-speaker-amplifier-and-set-the-volumes) and re-run `sudo alsactl store`. Wait for the Pi to come back up, then reconnect over SSH for the next step.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
 The mixer levels are saved on disk and the Pi is rebooting. Whether the saved state actually comes back on boot has not been proven yet — that is exactly what the next step checks.
 
-<a id="5-confirm-the-mixer-state-survived-the-reboot"></a>
-<img src="https://img.shields.io/badge/STEP_05-Confirm_the_mixer_state_survived_the_reboot-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Confirm the mixer state survived the reboot"/>
+<a id="6-confirm-the-mixer-state-survived-the-reboot"></a>
+<img src="https://img.shields.io/badge/STEP_06-Confirm_the_mixer_state_survived_the_reboot-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Confirm the mixer state survived the reboot"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -212,40 +251,34 @@ Now that you are reconnected, read the volume back and check that the automatic 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
 Line by line:
-1. `amixer -c 0 sget PCM` reads the current `PCM` mixer control from card 0; `grep 'Front Left'` narrows the output to the one line showing the restored playback level.
-2. `systemctl status alsa-restore.service` reports what the restore unit did during this boot; `--no-pager` prints straight to the terminal instead of opening an interactive pager, and `head -8` keeps just the summary block.
+1. `amixer -c 0 sget PCM,0` reads the stereo playback control from card 0; `grep 'Front Left'` narrows the output to the one line showing the restored level.
+2. `amixer -c 0 sget PCM,1` reads the second, mono playback stage the same way — this is the control whose loss would silently cost 15 dB, so its restore is verified explicitly.
+3. `systemctl status alsa-restore.service` reports what the restore unit did during this boot; `--no-pager` prints straight to the terminal instead of opening an interactive pager, and `head -8` keeps just the summary block.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-amixer -c 0 sget PCM | grep 'Front Left'
+amixer -c 0 sget PCM,0 | grep 'Front Left'
+amixer -c 0 sget PCM,1 | grep 'Mono:'
 systemctl status alsa-restore.service --no-pager | head -8
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-  Front Left: Playback 60 [100%] [0.00dB] [on]
-● alsa-restore.service - Save/Restore Sound Card State
-     Loaded: loaded (/usr/lib/systemd/system/alsa-restore.service; static)
-     Active: active (exited) since Sun 2026-04-12 20:10:51 CEST; 11s ago
- Invocation: b4083997199f4b8ebe8b3abd46088708
-       Docs: man:alsactl(1)
-   Main PID: 722 (code=exited, status=0/SUCCESS)
-        CPU: 14ms
-Apr 12 20:10:51 framelink-douwe systemd[1]: Starting alsa-restore.service - Save/Restore Sound Card State...
+[Pending fresh-flash capture. The first amixer line prints Front Left: Playback 60 [100%] [0.00dB] [on]; the second prints Mono: Playback 60 [100%] [0.00dB] [on]; the service block shows alsa-restore.service as active (exited) with status=0/SUCCESS and boot-time timestamps.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `Playback 60 [100%] [0.00dB]` line is PCM coming back up at the stored level. In the service block, `Active: active (exited)` together with `status=0/SUCCESS` shows the unit ran once at boot and exited cleanly; the timestamps, `Invocation`, and `Main PID` values will differ on your unit. The service also emits a couple of benign `failed to import hw:1 use case configuration` lines for the HDMI cards, which ship without UCM profiles — they fall outside the `head -8` slice and are safe to ignore. A `Playback` value lower than `60` means the restore did not apply — set the level again per [step 3](#3-enable-the-speaker-amplifier-and-test-playback), then repeat [step 4](#4-persist-the-alsa-mixer-state-across-reboots).
+Both `Playback 60 [100%] [0.00dB]` lines are the two volume stages coming back up at the stored levels — `PCM,1` is the one to watch, since losing it costs ~18 dB. In the service block, `Active: active (exited)` together with `status=0/SUCCESS` shows the unit ran once at boot and exited cleanly; the timestamps, `Invocation`, and `Main PID` values will differ on your unit. A value lower than `60` on either control means the restore did not apply — set the levels again per [step 4](#4-enable-the-speaker-amplifier-and-set-the-volumes), then repeat [step 5](#5-persist-the-alsa-mixer-state-across-reboots).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
 The volume now survives reboots with no manual step — the frame will always wake up at full playback level. The speaker side is complete; only the microphones remain untested.
 
-<a id="6-validate-mic-capture-with-a-round-trip-recording"></a>
-<img src="https://img.shields.io/badge/STEP_06-Validate_mic_capture_with_a_round--trip_recording-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Validate mic capture with a round-trip recording"/>
+<a id="7-validate-mic-capture-with-a-round-trip-recording"></a>
+<img src="https://img.shields.io/badge/STEP_07-Validate_mic_capture_with_a_round--trip_recording-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Validate mic capture with a round-trip recording"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -284,7 +317,7 @@ Playing WAVE '/tmp/mic_test.wav' : Signed 16 bit Little Endian, Rate 48000 Hz, S
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `ls -l` line must show exactly `576044` bytes (the date and time will differ on your unit). During the `aplay` you should hear your own voice reproduced clearly through the speaker — the mono speaker plays the left channel, so what you hear is the AEC-processed beamformed output, which is the channel a video call would actually use. If the file is exactly 576,044 bytes but plays back as silence, the capture endpoint opened but no samples were captured — check that the ReSpeaker's hardware mute button has not been pressed: it toggles `X0D30`, so re-run the `GPO_READ_VALUES` command from [step 3](#3-enable-the-speaker-amplifier-and-test-playback) and confirm the second value is `0`, not `1`. If `arecord` itself errors with `Device or resource busy`, something else already opened card 0's capture endpoint — the typical culprit is a stale `arecord` from a previous aborted run, found via `sudo fuser -v /dev/snd/*` and killed.
+The `ls -l` line must show exactly `576044` bytes (the date and time will differ on your unit). During the `aplay` you should hear your own voice reproduced clearly through the speaker — the mono speaker plays the left channel, so what you hear is the AEC-processed beamformed output, which is the channel a video call would actually use. If the file is exactly 576,044 bytes but plays back as silence, the capture endpoint opened but no samples were captured — check that the ReSpeaker's hardware mute button has not been pressed: it toggles `X0D30`, so re-run the `GPO_READ_VALUES` command from [step 4](#4-enable-the-speaker-amplifier-and-set-the-volumes) and confirm the second value is `0`, not `1`. If `arecord` itself errors with `Device or resource busy`, something else already opened card 0's capture endpoint — the typical culprit is a stale `arecord` from a previous aborted run, found via `sudo fuser -v /dev/snd/*` and killed.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -296,4 +329,4 @@ Both audio directions are proven: the array's microphones captured your voice th
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-`aplay -l` and `arecord -l` both show the XVF3800 as card 0 on every boot, the `PCM` mixer comes back at `60/60` after a reboot with no manual step, a short playback through the speaker is audibly clear, and a three-second mic recording plays back intelligibly through the speaker.
+`aplay -l` and `arecord -l` both show the XVF3800 as card 0 on every boot (with no HDMI sound cards present to contest it), the array reports firmware `VERSION 2 0 10`, both playback controls — `PCM,0` and `PCM,1` — come back at `60` (0 dB) after a reboot with no manual step, a short playback through the speaker is loud and clear, and a three-second mic recording plays back intelligibly through the speaker.
