@@ -126,11 +126,11 @@ The build is split into one hardware guide and twelve software guides, each step
 
 ## To Do
 
-- [ ] **A/B test speakers** — compare Adafruit 3351 vs PUI AS07104PO-LW152-R for voice clarity, volume, and AEC performance with the XVF3800. Pick one.
-- [ ] **Design 3D-printed case** — wall-mounted enclosure holding display, Pi, XVF3800 + camera assembly (top), and speaker (bottom). Three acoustically separated chambers for AEC. See [case design notes](research/camera-audio.md#aec-acoustic-echo-cancellation-design).
-- [ ] **Tune XVF3800 AEC** — adjust `AUDIO_MGR_SYS_DELAY`, amp enable (`GPO_WRITE_VALUE 31 0`), and ALSA mixer levels during Phase 1 hardware validation.
+- [x] **A/B test speakers** — done: the Adafruit 3351 wins by 12 dB speech-band over the PUI AS07104PO (94.5 vs 82.2 dB, measured); it is the product speaker (see the BOM row).
+- [ ] **Design 3D-printed case** — wall-mounted enclosure holding display, Pi, XVF3800 + camera assembly (top), and speaker (bottom). Three acoustically separated chambers for AEC. See [case design notes](research/camera-audio.md#aec-acoustic-echo-cancellation-design). Ventilation is a performance requirement: a worst-case 6-way call plateaus at 80.7 °C on the bare heatsink, only ~4 °C under the throttle point.
+- [ ] **Tune XVF3800 AEC** — set `AUDIO_MGR_SYS_DELAY` once the enclosure fixes the speaker-to-mic geometry (amp enable and mixer levels are covered by [guide 4](docs/4-audio-configuration.md)).
 - [ ] **Source remaining parts** — USB-C to USB-A cables (×2), GPIO buttons (×2), microSD cards (×2), foam tape for speaker isolation.
-- [ ] **If neither enclosed speaker is loud/clear enough** — consider Tectonic TEBM28C10-4/B BMR driver with 3D-printed sealed chamber (~80-110ml). See [speaker research](research/camera-audio.md#speaker-selection).
+- [x] **If neither enclosed speaker is loud/clear enough** — not needed: with both mixer controls at 0 dB the 3351 reaches desk-phone loudness (~94 dB close-miked), verified clean on continuous narration at maximum volume.
 
 ## Key Risk
 
