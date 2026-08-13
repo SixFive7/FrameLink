@@ -12,14 +12,27 @@ const DEFAULT_CONFIG = {
   token: '',            // local long-lived LiveKit token
 };
 
-// If the slideshow iframe hasn't reported a load within this window, reload it.
-// Covers the local-server / Immich-Kiosk startup race on a cold boot.
+// If the slideshow iframe hasn't reported a load within this window after a
+// successful probe, retreat to probing. Covers a server that accepts connections
+// but serves a broken page.
 const IFRAME_LOAD_TIMEOUT_MS = 8000;
+
+// Slideshow health probe: the iframe only ever navigates to the slideshow URL
+// after a probe confirms the server answers. Handing Chromium a dead URL is not
+// harmless — its subframe error pages auto-reload, and every navigation retains
+// renderer state. Measured on hardware: ~50 MB/min of renderer growth against a
+// refused port, ending in an OOM kill of the renderer or a full system stall.
+const PROBE_TIMEOUT_MS = 4000;      // how long one probe waits for the server
+const PROBE_BACKOFF_MIN_MS = 3000;  // first retry delay while the server is down
+const PROBE_BACKOFF_MAX_MS = 30000; // retry delay cap
+const HEALTHY_RECHECK_MS = 60000;   // re-probe cadence while the slideshow runs
+const PROBE_MISSES_TO_UNLOAD = 2;   // consecutive failures before unloading a live iframe
 
 class FrameApp extends LitElement {
   static properties = {
     mode: { state: true },            // 'slideshow' | 'call'
     slideshowReady: { state: true },
+    _slideshowUp: { state: true },    // probe verdict: the slideshow server answers
     config: { state: true },
     needsToken: { state: true },
     participants: { state: true },    // [{identity, name, track, muted, quality}]
@@ -71,6 +84,10 @@ class FrameApp extends LitElement {
     this._iframeKey = 0;
     this._status = 'Starting…';
     this._iframeTimer = null;
+    this._slideshowUp = false;
+    this._probeTimer = null;
+    this._probeMisses = 0;
+    this._probeBackoff = PROBE_BACKOFF_MIN_MS;
     this._byId = new Map();
     this.call = null;
     this._control = null;
@@ -79,7 +96,7 @@ class FrameApp extends LitElement {
   async connectedCallback() {
     super.connectedCallback();
     await this._loadConfig();
-    this._armIframeRetry();
+    this._startSlideshowWatch();
     window.addEventListener('keydown', this._onKey);
     // GPIO button daemon (Phase C). The dev keyboard 'c' remains a fallback.
     this._control = connectControl({ onCommand: (cmd) => this._onCommand(cmd) });
@@ -91,6 +108,7 @@ class FrameApp extends LitElement {
     super.disconnectedCallback();
     window.removeEventListener('keydown', this._onKey);
     clearTimeout(this._iframeTimer);
+    clearTimeout(this._probeTimer);
     if (this._control) this._control.close();
   }
 
@@ -196,21 +214,72 @@ class FrameApp extends LitElement {
   }
 
   // ---- Slideshow resilience -------------------------------------------------
+  // The iframe never navigates to a URL that hasn't just answered a probe. While
+  // the slideshow server is down the iframe sits on about:blank behind the splash
+  // and a cheap no-cors fetch retries with capped backoff — Chromium is never
+  // given a dead URL to churn on (see the constants block for why that matters).
 
-  _armIframeRetry() {
-    clearTimeout(this._iframeTimer);
-    if (this.slideshowReady || !this.config.immichKioskUrl) return;
-    this._iframeTimer = setTimeout(() => {
-      if (!this.slideshowReady) {
-        this._status = 'Connecting to slideshow…';
+  async _probeSlideshow() {
+    try {
+      await fetch(this.config.immichKioskUrl, {
+        mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      });
+      return true;   // opaque response = the server answered; that's all we need
+    } catch (_) {
+      return false;  // refused, unreachable, or timed out
+    }
+  }
+
+  _startSlideshowWatch() {
+    clearTimeout(this._probeTimer);
+    this._probeBackoff = PROBE_BACKOFF_MIN_MS;
+    this._probeMisses = 0;
+    this._slideshowTick();
+  }
+
+  async _slideshowTick() {
+    clearTimeout(this._probeTimer);
+    if (!this.config.immichKioskUrl) return;
+    if (this.mode !== 'slideshow') return;          // paused in call mode; exitCall re-arms
+    const up = await this._probeSlideshow();
+    if (this.mode !== 'slideshow') return;          // mode may have flipped mid-probe
+    let next;
+    if (up) {
+      this._probeMisses = 0;
+      this._probeBackoff = PROBE_BACKOFF_MIN_MS;
+      if (!this._slideshowUp) {
+        this._slideshowUp = true;                   // render() now hands the iframe the real URL
         this._iframeKey++;
-        this._armIframeRetry();
+        this._armIframeLoadGuard();
+      }
+      next = HEALTHY_RECHECK_MS;
+    } else {
+      this._probeMisses++;
+      if (this._slideshowUp && this._probeMisses >= PROBE_MISSES_TO_UNLOAD) {
+        this._slideshowUp = false;                  // unload a dead slideshow: blank + splash
+        this.slideshowReady = false;
+      }
+      if (!this._slideshowUp) this._status = 'Waiting for the photo library…';
+      next = this._probeBackoff;
+      this._probeBackoff = Math.min(this._probeBackoff * 2, PROBE_BACKOFF_MAX_MS);
+    }
+    this._probeTimer = setTimeout(() => this._slideshowTick(), next);
+  }
+
+  _armIframeLoadGuard() {
+    clearTimeout(this._iframeTimer);
+    this._iframeTimer = setTimeout(() => {
+      if (!this.slideshowReady && this.mode === 'slideshow') {
+        // The server answered the probe but the page never finished loading —
+        // retreat to about:blank and let the probe loop try again.
+        this._slideshowUp = false;
+        this._startSlideshowWatch();
       }
     }, IFRAME_LOAD_TIMEOUT_MS);
   }
 
   _onIframeLoad = () => {
-    if (this.config.immichKioskUrl) {
+    if (this.config.immichKioskUrl && this._slideshowUp) {
       this.slideshowReady = true;
       clearTimeout(this._iframeTimer);
     }
@@ -221,7 +290,7 @@ class FrameApp extends LitElement {
     // transitions, costing CPU and ~50-100 MB RAM exactly when the call needs both.
     if (this.mode === 'call') return 'about:blank';
     const url = this.config.immichKioskUrl;
-    if (!url) return 'about:blank';
+    if (!url || !this._slideshowUp) return 'about:blank';
     return `${url}${url.includes('?') ? '&' : '?'}_k=${this._iframeKey}`;
   }
 
@@ -235,6 +304,7 @@ class FrameApp extends LitElement {
     if (this.mode === 'call') return;
     this.mode = 'call';
     clearTimeout(this._iframeTimer);
+    clearTimeout(this._probeTimer);
     if (this.call) await this.call.enableCall();
   }
 
@@ -245,8 +315,8 @@ class FrameApp extends LitElement {
     this.selfTrack = null;
     this.mode = 'slideshow';
     this.slideshowReady = false;
-    this._iframeKey++;
-    this._armIframeRetry();
+    this._slideshowUp = false;
+    this._startSlideshowWatch();
     // The camera node's provide-mode stream wedges after a few acquire/release cycles
     // (measured). The daemon restarts framelink-camera on this event, so the NEXT call
     // always acquires a freshly started node.

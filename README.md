@@ -41,7 +41,7 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 - **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU — auto-reconnect, built-in TURN, adaptive bitrate, single Docker container
 - **Kiosk shell**: Custom SPA serving as the parent page — WebRTC client in parent, Immich Kiosk in iframe, CSS toggle between modes
 - **Camera**: dedicated PipeWire camera node (GStreamer libcamerasrc, ISP-scaled 1920x1080@30, full FoV) — consumed by Chromium via the desktop portal, published as H.264
-- **GPIO handler**: Python daemon (gpiozero) — detects button press, sends toggle command to SPA via localhost WebSocket
+- **GPIO handler**: Python daemon (gpiozero) — detects button press, sends toggle command to SPA via localhost WebSocket; doubles as the kiosk-page watchdog (restarts the browser if the SPA's socket stays dead)
 
 ## Architecture
 

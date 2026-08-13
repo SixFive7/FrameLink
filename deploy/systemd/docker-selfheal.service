@@ -1,0 +1,11 @@
+[Unit]
+Description=FrameLink: repair Docker after power-loss corruption and ensure the slideshow container runs
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/docker-selfheal.sh
+
+[Install]
+WantedBy=multi-user.target

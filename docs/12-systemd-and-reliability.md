@@ -1,6 +1,6 @@
 # Software Build Guide 12 — systemd Services & Reliability Hardening
 
-Every service the frame runs was installed and verified by the earlier guides — the SPA server and Chromium kiosk from [guide 10](10-spa.md), the GPIO button daemon from [guide 11](11-gpio-button.md), the camera node and camera portal from [guide 6](6-camera.md), and the Immich Kiosk slideshow container from [guide 9](9-immich-kiosk.md) — and each is already set to restart after a crash and to come back after a reboot. This guide hardens that fleet for 24/7 unattended operation by adding what restart-on-crash cannot provide: one sweep that verifies the whole fleet is healthy, a watchdog that restarts Chromium when the browser's memory bloats, a scheduled fresh browser start every morning so a frame that hangs on a wall for weeks never goes stale, a set of changes that keeps everyday writes off the SD card so the card lasts years instead of months, automatic security updates, and a CPU pinned at full speed so the first seconds of a video call never wait for the chip to ramp up. A final reboot proves the hardened frame still brings itself up with no one touching it.
+Every service the frame runs was installed and verified by the earlier guides — the SPA server and Chromium kiosk from [guide 10](10-spa.md), the GPIO button daemon from [guide 11](11-gpio-button.md), the camera node and camera portal from [guide 6](6-camera.md), and the Immich Kiosk slideshow container from [guide 9](9-immich-kiosk.md) — and each is already set to restart after a crash and to come back after a reboot. This guide hardens that fleet for 24/7 unattended operation by adding what restart-on-crash cannot provide: one sweep that verifies the whole fleet is healthy, a watchdog that restarts Chromium when the browser's memory bloats, a scheduled fresh browser start every morning so a frame that hangs on a wall for weeks never goes stale, a set of changes that keeps everyday writes off the SD card so the card lasts years instead of months while keeping enough log history on it to diagnose a bad boot after the fact, automatic security updates, a CPU pinned at full speed so the first seconds of a video call never wait for the chip to ramp up, and a boot-time repair that heals the one way a power cut can break Docker and take the slideshow with it. A final reboot proves the hardened frame still brings itself up with no one touching it.
 
 ---
 
@@ -64,10 +64,10 @@ Write a small script that reads how much memory the browser is using and restart
 
 The script does one narrow job, in four moves:
 
-1. `pgrep -f "chromium.*kiosk" | head -1` finds the running Chromium by matching its command line (which contains `chromium` followed by the `--kiosk` flag) and keeps the first — lowest-numbered — process ID, the main browser process whose memory matters.
-2. If no such process exists at all, it restarts the kiosk service. `Restart=always` on the unit normally handles a dead browser by itself, so this branch is a belt-and-braces catch for the corner case where the service is nominally up but its browser process is gone.
-3. `awk '/VmRSS/{print $2}' /proc/$CHROMIUM_PID/status` reads the process's resident memory — the RAM it actually occupies right now, in kB, straight from the kernel's bookkeeping.
-4. If that exceeds `1536000` kB (1.5 GB), it restarts the browser.
+1. `pgrep -f "chromium.*kiosk" | head -1` checks a Chromium matching the kiosk command line exists at all.
+2. If no such process exists, it restarts the kiosk service. `Restart=always` on the unit normally handles a dead browser by itself, so this branch is a belt-and-braces catch for the corner case where the service is nominally up but its browser process is gone.
+3. `ps -o rss= -C chromium | awk '{s+=$1} END {print s+0}'` sums the resident memory of **every** Chromium process — main, GPU, network, and all renderers. Measuring the whole tree is the load-bearing choice: Chromium keeps each web page in a separate *renderer* process, and a leaking page bloats that renderer while the main process barely moves. This exact blindness was measured on hardware — a renderer grew past 1.4 GB and died to the kernel's OOM killer while the main process sat at an innocent-looking 130 MB. A watchdog that reads only the main process never fires; one that sums the tree catches every process the browser owns.
+4. If the sum exceeds `1250000` kB (1.25 GB), it restarts the browser. The threshold leaves clear air above the heaviest legitimate load ever measured (a worst-case six-way call runs the tree at roughly 800 MB) and fires well before the 2 GB machine starts stalling — with the measured worst leak (~50 MB/min), the five-minute timer from the next step catches it inside two checks.
 
 The restart target is `chromium-kiosk.service` — a **user** unit (from [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service), finalized in [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app)) — which is why the script calls `systemctl --user restart`, not plain `systemctl`. A watchdog-triggered restart is clean: the unit's own start-up guards make the relaunched browser wait for the display and the local app server, so the frame blinks and is back on the slideshow within seconds. The `cat > ... << 'EOF'` block writes the script (safely overwriting any previous copy on a re-run), `chmod +x` makes it executable, and the last line runs it once by hand as a trial.
 
@@ -81,8 +81,8 @@ if [ -z "$CHROMIUM_PID" ]; then
     systemctl --user restart chromium-kiosk.service
     exit 0
 fi
-RSS_KB=$(awk '/VmRSS/{print $2}' /proc/$CHROMIUM_PID/status 2>/dev/null || echo 0)
-if [ "$RSS_KB" -gt 1536000 ]; then
+TREE_RSS_KB=$(ps -o rss= -C chromium | awk '{s+=$1} END {print s+0}')
+if [ "$TREE_RSS_KB" -gt 1250000 ]; then
     systemctl --user restart chromium-kiosk.service
 fi
 EOF
@@ -164,7 +164,7 @@ systemctl --user list-timers chromium-watchdog.timer --no-pager
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The frame now checks its own browser every five minutes and restarts it if it has bloated past 1.5 GB — a failure mode that used to mean a slowly degrading frame until someone pulled the plug now heals itself within minutes.
+The frame now checks its own browser every five minutes and restarts it if the whole browser tree has bloated past 1.25 GB — a failure mode that used to mean a slowly degrading frame until someone pulled the plug now heals itself within minutes.
 
 <a id="4-restart-chromium-early-every-morning"></a>
 <img src="https://img.shields.io/badge/STEP_04-Restart_Chromium_early_every_morning-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Restart Chromium early every morning"/>
@@ -243,20 +243,21 @@ Keep the busiest everyday writes in RAM instead of on the card: temporary files,
 Three write streams, one command each:
 
 1. **Temporary files.** A `tmpfs` is a filesystem that lives entirely in RAM and vanishes at power-off. Debian 13 (Trixie) mounts `/tmp` as a tmpfs by default on fresh images, so the first command checks with `findmnt` whether `/tmp` is already RAM-backed — and only if it is not does the guarded append add a `tmpfs` line to `/etc/fstab`, which takes effect at the next reboot. This matters more than it sounds: Chromium's working profile is `/tmp/framelink-chromium` (set in the kiosk unit from [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app)), making the browser the single busiest writer on the frame — with `/tmp` in RAM, all of that scratch traffic never touches the card.
-2. **The system log.** The journal drop-in sets `Storage=volatile`, which keeps systemd's journal in RAM under `/run` instead of on the card, capped at 30 MB by `RuntimeMaxUse=30M`. The cost is that logs from before the latest boot are gone; `journalctl` still shows everything since boot, which is what the troubleshooting steps in these guides actually use. Restarting `systemd-journald` applies the change immediately.
+2. **The system log.** The journal drop-in sets `Storage=persistent` with a hard `SystemMaxUse=64M` cap — the one write stream this step deliberately **keeps on the card**, small and bounded. The tempting alternative, a RAM-only volatile journal, has a cost this project has already paid once: every log line vanishes at power-off, so a boot that misbehaves and then gets power-cycled leaves no evidence at all. During hardware validation a fleet-killing failure chain (a leak that ended in watchdog resets) went undiagnosable for days for exactly this reason, and became solvable the moment the journal persisted. 64 MB holds one to two weeks of this frame's logs, journald rotates within the cap automatically, and the write volume it adds is a rounding error next to what moving `/tmp` and swap off the card just saved. Restarting `systemd-journald` applies the change; the journal moves to `/var/log/journal` at the flush that follows.
 3. **Swap.** Trixie provides the Pi's swap as zram — compressed RAM, verified back in [guide 5](5-kiosk-base.md) — so no swap file sits on the card. The `dphys-swapfile` line is a guard against the *old* SD-backed swap mechanism from earlier Raspberry Pi OS releases: if anything ever installed it, this disables and stops it, and when it is absent (the normal case) the command is silenced and made harmless by the `2>/dev/null || true`. The closing `swapon --show` is the proof: it lists every active swap device, and none of them may be a file on the card.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
 findmnt -n -t tmpfs /tmp || grep -qxF 'tmpfs /tmp tmpfs defaults,noatime,size=100M 0 0' /etc/fstab || echo 'tmpfs /tmp tmpfs defaults,noatime,size=100M 0 0' | sudo tee -a /etc/fstab
-sudo mkdir -p /etc/systemd/journald.conf.d
-sudo tee /etc/systemd/journald.conf.d/volatile.conf << 'EOF'
+sudo mkdir -p /etc/systemd/journald.conf.d /var/log/journal
+sudo tee /etc/systemd/journald.conf.d/persistent.conf << 'EOF'
 [Journal]
-Storage=volatile
-RuntimeMaxUse=30M
+Storage=persistent
+SystemMaxUse=64M
 EOF
 sudo systemctl restart systemd-journald
+sudo journalctl --flush
 sudo systemctl disable --now dphys-swapfile 2>/dev/null || true
 swapon --show
 ```
@@ -264,16 +265,16 @@ swapon --show
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. On a Trixie image the first line prints the existing tmpfs mount entry for /tmp; tee echoes the three journald lines; the journald restart and swap-guard lines print nothing; swapon --show prints the single /dev/zram0 swap row.]
+[Pending fresh-flash capture. On a Trixie image the first line prints the existing tmpfs mount entry for /tmp; tee echoes the three journald lines; the journald restart, journal flush, and swap-guard lines print nothing; swapon --show prints the single /dev/zram0 swap row.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The first line should print a mount entry for `/tmp` with `tmpfs` in it — Trixie's default — meaning nothing needed changing; if it instead echoed the `tmpfs /tmp tmpfs ...` line, the entry was appended to `/etc/fstab` and takes effect at the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back). Either is a pass. `tee` echoes the three-line journald drop-in exactly as written. The final `swapon --show` must list only `/dev/zram0` (RAM-backed swap) or nothing at all; a file path like `/var/swap` in that listing would mean SD-backed swap is active — re-run the `dphys-swapfile` line and check `swapon --show` again after the reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back).
+The first line should print a mount entry for `/tmp` with `tmpfs` in it — Trixie's default — meaning nothing needed changing; if it instead echoed the `tmpfs /tmp tmpfs ...` line, the entry was appended to `/etc/fstab` and takes effect at the reboot in [step 9](#9-reboot-and-confirm-the-hardened-frame-comes-back). Either is a pass. `tee` echoes the three-line journald drop-in exactly as written, and `journalctl --flush` silently moves the journal onto the card — `ls /var/log/journal` would now show a machine-id directory. The final `swapon --show` must list only `/dev/zram0` (RAM-backed swap) or nothing at all; a file path like `/var/swap` in that listing would mean SD-backed swap is active — re-run the `dphys-swapfile` line and check `swapon --show` again after the reboot in [step 9](#9-reboot-and-confirm-the-hardened-frame-comes-back).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The frame's constant background writes — browser scratch files, system logs, swapped memory — now land in RAM instead of on the SD card. The card is left holding only the OS, the app, and the photo cache, which is the difference between a card that lasts months and one that lasts years.
+The frame's heaviest background writes — browser scratch files and swapped memory — now land in RAM instead of on the SD card, while the system log stays on the card, capped at 64 MB, so a frame that misbehaved yesterday can still tell you why today. That combination is the difference between a card that lasts months and one that lasts years — on a frame that never loses its memory of what went wrong.
 
 <a id="6-turn-on-unattended-security-updates"></a>
 <img src="https://img.shields.io/badge/STEP_06-Turn_on_unattended_security_updates-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Turn on unattended security updates"/>
@@ -363,18 +364,68 @@ cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The closing `cat` must print `performance` — the pin is live immediately, not just after a reboot. If it still prints `ondemand`, the service failed: `systemctl status cpu-performance.service` shows why. The reboot in [step 8](#8-reboot-and-confirm-the-hardened-frame-comes-back) then proves the pin re-applies itself from a cold start.
+The closing `cat` must print `performance` — the pin is live immediately, not just after a reboot. If it still prints `ondemand`, the service failed: `systemctl status cpu-performance.service` shows why. The reboot in [step 9](#9-reboot-and-confirm-the-hardened-frame-comes-back) then proves the pin re-applies itself from a cold start.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
 The CPU now runs at full speed all the time, on this boot and every future one — the first seconds of every call are encoded on a chip that is already awake.
 
-<a id="8-reboot-and-confirm-the-hardened-frame-comes-back"></a>
-<img src="https://img.shields.io/badge/STEP_08-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Reboot and confirm the hardened frame comes back"/>
+<a id="8-let-docker-repair-itself-after-power-loss"></a>
+<img src="https://img.shields.io/badge/STEP_08-Let_Docker_repair_itself_after_power_loss-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Let Docker repair itself after power loss"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-This guide changed what happens at boot — timers that must arm themselves, a RAM-backed `/tmp`, volatile logging — and the only honest test of boot-time changes is a boot.
+A frame in a family home will have its plug pulled — power cuts, cleaning, a curious grandchild. One specific way that can break Docker leaves the slideshow dead on every boot afterwards, and nothing on the frame would ever fix it by itself.
+
+![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
+
+Teach Docker to keep containers running through its own restarts, and install a small boot-time repair service that recognises the one known corruption, heals it, and makes sure the slideshow container is running.
+
+![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
+
+The failure this step closes was found the hard way, on hardware, by power-cycling a frame more than a hundred times. An abrupt power cut can catch Docker mid-write and leave its network store (`/var/lib/docker/network/files/local-kv.db`) holding a duplicate entry for the default `docker0` bridge. From then on `dockerd` refuses to start at every boot — `journalctl -u docker` shows `networks have same bridge name` — systemd gives up after three rapid attempts, and the Immich Kiosk container from [guide 9](9-immich-kiosk.md) never runs again. The damage does not stop at a missing slideshow: the app's iframe then points at a dead port, and that state drives the browser-renderer memory leak the watchdog in [step 2](#2-create-the-chromium-memory-watchdog-script) exists to contain (measured at ~50 MB/min on this exact hardware, ending in an out-of-memory kill or a hardware-watchdog reset). One corrupt file, a cascade that takes down the whole frame — worth a dedicated repair.
+
+The commands install three pieces from the repository cloned in [guide 10 step 1](10-spa.md#1-clone-the-framelink-app-onto-the-pi):
+
+1. `deploy/docker/daemon.json` turns on Docker's `live-restore`, which keeps running containers alive across restarts of the Docker daemon itself — so daemon-level hiccups (including the repair below) never blank the slideshow.
+2. `deploy/docker/docker-selfheal.sh` runs once per boot, twenty seconds after Docker has had its own chance to start. If `docker.service` sits in `failed` state **and** the journal shows the known corruption signature, it retires the corrupt network store to a timestamped `.corrupt` file beside itself (kept for diagnosis — Docker simply recreates its networks), clears the failure, and starts Docker again. Any *other* Docker failure is deliberately left alone for a human to inspect. As a final belt-and-braces move it issues `docker start immich-kiosk`, a no-op whenever the container's own `restart: always` policy already did the job.
+3. `deploy/systemd/docker-selfheal.service` is the system-level oneshot that runs the script at every boot, ordered `After=docker.service` so it always judges Docker's real, settled state.
+
+The `grep`-guarded write of `daemon.json` only creates the file when `live-restore` is not already configured, the two `install` commands copy script and unit into place with the right permissions and are safely re-runnable, and `systemctl restart docker` applies `live-restore` immediately — with the slideshow container surviving that restart as the setting's first live demonstration. The closing `docker info` line prints the setting back as proof.
+
+![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
+
+```bash
+grep -q '"live-restore"' /etc/docker/daemon.json 2>/dev/null || sudo install -m 0644 ~/FrameLink/deploy/docker/daemon.json /etc/docker/daemon.json
+sudo install -m 0755 ~/FrameLink/deploy/docker/docker-selfheal.sh /usr/local/sbin/docker-selfheal.sh
+sudo install -m 0644 ~/FrameLink/deploy/systemd/docker-selfheal.service /etc/systemd/system/docker-selfheal.service
+sudo systemctl daemon-reload
+sudo systemctl enable docker-selfheal.service
+sudo systemctl restart docker
+docker ps --filter name=immich-kiosk
+docker info --format 'live-restore: {{.LiveRestoreEnabled}}'
+```
+
+![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
+
+```text
+[Pending fresh-flash capture. The install and daemon-reload lines are silent, enable prints a "Created symlink ... docker-selfheal.service" line, the docker restart is silent, docker ps still lists immich-kiosk with an Up status whose age predates the restart — live-restore keeping it alive — and the last line prints live-restore: true.]
+```
+
+![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
+
+Two things prove the step: the final line must print `live-restore: true`, and the `docker ps` between the restart and that line must still show `immich-kiosk` as `Up` with an uptime *older* than the restart you just performed — the container sailed through the daemon restart untouched. An `Up 2 seconds` there means live-restore did not apply (a typo in `daemon.json` is the usual cause: `sudo dockerd --validate` checks it). The repair service itself stays silent until the day it is needed; after any future boot, `journalctl -b -u docker-selfheal` shows either a quiet no-op or the full repair story.
+
+![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
+
+The one known way a power cut could permanently kill the slideshow now heals itself at the next boot, Docker restarts no longer interrupt the photos, and any future repair leaves both a journal trail and the corrupt file preserved for diagnosis. The frame survives the treatment a real living room will give it.
+
+<a id="9-reboot-and-confirm-the-hardened-frame-comes-back"></a>
+<img src="https://img.shields.io/badge/STEP_09-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Reboot and confirm the hardened frame comes back"/>
+
+![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
+
+This guide changed what happens at boot — timers that must arm themselves, a RAM-backed `/tmp`, persistent capped logging, a Docker repair pass — and the only honest test of boot-time changes is a boot.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -382,7 +433,7 @@ Reboot the Pi, reconnect, and verify everything in one sweep: services up, both 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The reboot exercises the full cold-boot sequence from [guide 10 step 5](10-spa.md#5-verify-the-frame-works) — autologin, app server, ordered browser start — now with the hardening live on top. After reconnecting: `is-active` re-checks the four always-on frame services; `docker ps` re-checks the slideshow container; `list-timers` (unfiltered this time) lists every armed timer in the session, which must include `chromium-watchdog.timer` with a NEXT a few minutes out and `chromium-restart.timer` with a NEXT at the coming 3 AM — proof that both re-armed themselves from a cold start; `findmnt /tmp` prints the mount backing `/tmp`, which must be `tmpfs`; and `swapon --show` confirms swap is still RAM-backed zram. The authoritative check is again the screen itself: the frame must come back to the slideshow with nobody touching it.
+The reboot exercises the full cold-boot sequence from [guide 10 step 5](10-spa.md#5-verify-the-frame-works) — autologin, app server, ordered browser start — now with the hardening live on top. After reconnecting: `is-active` re-checks the four always-on frame services; `docker ps` re-checks the slideshow container; `list-timers` (unfiltered this time) lists every armed timer in the session, which must include `chromium-watchdog.timer` with a NEXT a few minutes out and `chromium-restart.timer` with a NEXT at the coming 3 AM — proof that both re-armed themselves from a cold start; `findmnt /tmp` prints the mount backing `/tmp`, which must be `tmpfs`; `swapon --show` confirms swap is still RAM-backed zram; and `journalctl -b -u docker-selfheal` shows the repair pass from [step 8](#8-let-docker-repair-itself-after-power-loss) ran and found nothing to fix. The authoritative check is again the screen itself: the frame must come back to the slideshow with nobody touching it.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -393,17 +444,18 @@ docker ps --filter name=immich-kiosk
 systemctl --user list-timers --no-pager
 findmnt /tmp
 swapon --show
+journalctl -b -u docker-selfheal --no-pager
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[Pending fresh-flash capture. sudo reboot drops the SSH session with the client's disconnect line; after reconnecting, is-active prints active four times, docker ps shows immich-kiosk Up, list-timers includes chromium-watchdog.timer and chromium-restart.timer with populated NEXT times, findmnt shows /tmp on tmpfs, and swapon --show shows the /dev/zram0 row.]
+[Pending fresh-flash capture. sudo reboot drops the SSH session with the client's disconnect line; after reconnecting, is-active prints active four times, docker ps shows immich-kiosk Up, list-timers includes chromium-watchdog.timer and chromium-restart.timer with populated NEXT times, findmnt shows /tmp on tmpfs, swapon --show shows the /dev/zram0 row, and the docker-selfheal journal shows the service ran with its closing "docker-selfheal: done" line and no repair lines.]
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-Run the five check commands after reconnecting. Four `active` lines and an `Up` container mean the fleet survived the reboot. The `list-timers` table may include other timers the OS ships — the two that must be present are `chromium-watchdog.timer` and `chromium-restart.timer`, each with a real time in the NEXT column; a missing timer means its `enable` in [step 3](#3-run-the-watchdog-every-five-minutes) or [step 4](#4-restart-chromium-early-every-morning) did not happen. `findmnt` must show `tmpfs` in the FSTYPE column for `/tmp`, and `swapon --show` must list only `/dev/zram0` (or nothing). The governor pinned in [step 7](#7-pin-the-cpu-governor-to-performance) is live from this boot onward: `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` now prints `performance`. And the screen: the slideshow is back, untouched by human hands.
+Run the six check commands after reconnecting. Four `active` lines and an `Up` container mean the fleet survived the reboot. The `list-timers` table may include other timers the OS ships — the two that must be present are `chromium-watchdog.timer` and `chromium-restart.timer`, each with a real time in the NEXT column; a missing timer means its `enable` in [step 3](#3-run-the-watchdog-every-five-minutes) or [step 4](#4-restart-chromium-early-every-morning) did not happen. `findmnt` must show `tmpfs` in the FSTYPE column for `/tmp`, and `swapon --show` must list only `/dev/zram0` (or nothing). The `docker-selfheal` journal must end in `docker-selfheal: done` with no repair lines between — the healthy-boot no-op. The governor pinned in [step 7](#7-pin-the-cpu-governor-to-performance) is live from this boot onward: `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` now prints `performance`. And the screen: the slideshow is back, untouched by human hands.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -415,4 +467,4 @@ The frame is now hardened for unattended 24/7 duty: it recovers from crashes, bl
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-After a reboot the frame comes back to the slideshow on its own, and the hardening is live on top of it: `systemctl --user list-timers` shows `chromium-watchdog.timer` firing every five minutes and `chromium-restart.timer` set for 3 AM, `findmnt /tmp` shows a RAM-backed tmpfs, `swapon --show` lists only zram, `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` prints `performance`, the journal is volatile, and `unattended-upgrades` is installed and enabled. Left alone for weeks, the frame now restarts a bloated or stale browser by itself, keeps everyday writes off the SD card, and receives security fixes — with no one ever logging in.
+After a reboot the frame comes back to the slideshow on its own, and the hardening is live on top of it: `systemctl --user list-timers` shows `chromium-watchdog.timer` firing every five minutes and `chromium-restart.timer` set for 3 AM, `findmnt /tmp` shows a RAM-backed tmpfs, `swapon --show` lists only zram, `cat /sys/devices/system/cpu/cpufreq/policy0/scaling_governor` prints `performance`, the journal persists on the card capped at 64 MB, `docker info` reports live-restore enabled with the `docker-selfheal` repair pass armed at every boot, and `unattended-upgrades` is installed and enabled. Left alone for weeks, the frame now restarts a bloated or stale browser by itself, heals the one known power-cut wound Docker can take, keeps everyday writes off the SD card while keeping enough log history to explain any bad day, and receives security fixes — with no one ever logging in.
