@@ -71,8 +71,19 @@ export class CallClient extends EventTarget {
         this._emit('status', { state: 'connected' });
         return;
       } catch (e) {
-        this._emit('status', { state: 'connecting', error: e && e.message });
-        await sleep(Math.min(1000 * 2 ** attempt, 15000));
+        // A failed connect leaves engine/listener state behind; disconnect() runs the
+        // client's cleanup path and releases it. Without this, an unreachable server or
+        // a rejected token turns the retry loop into a measured ~15 MB/min renderer
+        // leak that kills a 2 GB frame in under two hours (the July-23 token expiry
+        // ran this exact loop for three weeks).
+        try { await this.room.disconnect(); } catch (_) { /* best-effort cleanup */ }
+        const msg = ((e && e.message) || '').toLowerCase();
+        // A rejected token is not transient — hammering the server cannot fix it.
+        // Retry slowly so a later token/config fix is still picked up unattended.
+        const authFailure = msg.includes('unauthorized') || msg.includes('invalid') ||
+                            msg.includes('expired') || msg.includes('401') || msg.includes('403');
+        this._emit('status', { state: 'connecting', error: e && e.message, authFailure });
+        await sleep(authFailure ? 600000 : Math.min(1000 * 2 ** attempt, 60000));
       }
     }
   }

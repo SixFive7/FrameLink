@@ -223,12 +223,14 @@ Still on the workstation, in the same Git Bash window as step 5, create a long-l
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-An access token is a signed pass (a JWT) that the server verifies against the API secret — the frame presents the token and never sees the secret. `lk token create` reads the server address and credentials from the environment variables exported in [step 5](#5-connect-the-workstation-cli-to-the-server). `--join --room family --identity framelink-douwe` grants exactly one right: joining the room `family` as the participant `framelink-douwe`, with the default permissions to publish its camera and microphone and subscribe to the other callers. These two values must match what you will put in the frame's `room` and `identity` fields in [guide 10 step 2](10-spa.md#2-create-the-app-configuration) — every device in the household shares the one room name, and each frame gets its own unique identity. `--valid-for 8760h` makes the token valid for 365 days (the CLI takes durations in hours); when it eventually expires the frame stops connecting to calls, and the fix is to re-run this one command and paste the fresh token into the frame's configuration. For every additional frame you deploy in [guide 13](13-multi-device-deploy.md), repeat this command with that unit's own identity.
+An access token is a signed pass (a JWT) that the server verifies against the API secret — the frame presents the token and never sees the secret. `lk token create` reads the server address and credentials from the environment variables exported in [step 5](#5-connect-the-workstation-cli-to-the-server). `--join --room family --identity framelink-douwe` grants exactly one right: joining the room `family` as the participant `framelink-douwe`, with the default permissions to publish its camera and microphone and subscribe to the other callers. These two values must match what you will put in the frame's `room` and `identity` fields in [guide 10 step 2](10-spa.md#2-create-the-app-configuration) — every device in the household shares the one room name, and each frame gets its own unique identity. For every additional frame you deploy in [guide 13](13-multi-device-deploy.md), repeat this command with that unit's own identity.
+
+`--valid-for 87600h` makes the token valid for ten years, and that number is a deliberate, hardware-taught decision, not a shrug. A frame on a relative's wall must never need credential maintenance on a schedule: during validation, a token that silently aged out took the frame from "working" to "degrading on every boot" with nothing on screen to say why — the app retried the dead credential forever, and (before the app learned better) that retry loop itself destabilised the frame. The app now backs off gently and logs clearly when a token is rejected, but the real protection is a token that outlives the hardware. The trade-off is honest: a stolen token stays valid for ten years too. It is confined to joining this one room on a server that is only reachable inside your home network, and if it ever leaks, rotating the API secret in `~/livekit/livekit.yaml` (and re-minting every frame's token) revokes it instantly.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
-lk token create --join --room family --identity framelink-douwe --valid-for 8760h
+lk token create --join --room family --identity framelink-douwe --valid-for 87600h
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
@@ -243,7 +245,7 @@ One long unbroken string starting with `eyJ` — that is the token. **Copy it no
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-This frame now has a year-long pass into the family video room, saved in your notes alongside the server URL. Nothing is on the Pi yet — guide 10 is where the URL and token are configured into the frame itself.
+This frame now has a decade-long pass into the family video room, saved in your notes alongside the server URL. Nothing is on the Pi yet — guide 10 is where the URL and token are configured into the frame itself.
 
 ---
 
