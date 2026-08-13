@@ -66,8 +66,8 @@ The script does one narrow job, in four moves:
 
 1. `pgrep -f "chromium.*kiosk" | head -1` checks a Chromium matching the kiosk command line exists at all.
 2. If no such process exists, it restarts the kiosk service. `Restart=always` on the unit normally handles a dead browser by itself, so this branch is a belt-and-braces catch for the corner case where the service is nominally up but its browser process is gone.
-3. `ps -o rss= -C chromium | awk '{s+=$1} END {print s+0}'` sums the resident memory of **every** Chromium process — main, GPU, network, and all renderers. Measuring the whole tree is the load-bearing choice: Chromium keeps each web page in a separate *renderer* process, and a leaking page bloats that renderer while the main process barely moves. This exact blindness was measured on hardware — a renderer grew past 1.4 GB and died to the kernel's OOM killer while the main process sat at an innocent-looking 130 MB. A watchdog that reads only the main process never fires; one that sums the tree catches every process the browser owns.
-4. If the sum exceeds `1250000` kB (1.25 GB), it restarts the browser. The threshold leaves clear air above the heaviest legitimate load ever measured (a worst-case six-way call runs the tree at roughly 800 MB) and fires well before the 2 GB machine starts stalling — with the measured worst leak (~50 MB/min), the five-minute timer from the next step catches it inside two checks.
+3. `ps -o rss= -C chromium | awk '{s+=$1} END {print s+0}'` sums the resident memory of **every** Chromium process — main, GPU, network, and all renderers — and `awk '/MemAvailable/...' /proc/meminfo` reads how much memory the whole system still has to give. Measuring the whole tree is the load-bearing choice: Chromium keeps each web page in a separate *renderer* process, and a leaking page bloats that renderer while the main process barely moves. This exact blindness was measured on hardware — a renderer grew past 1.4 GB and died to the kernel's OOM killer while the main process sat at an innocent-looking 130 MB. A watchdog that reads only the main process never fires; one that sums the tree catches every process the browser owns.
+4. It restarts the browser when the tree exceeds `1843200` kB (1.8 GB) **or** `MemAvailable` drops under `358400` kB (350 MB). Both numbers come from measuring this exact hardware. The tree threshold has to sit surprisingly high because big is not the same as sick: after hours of slideshow, the iframe's image cache legitimately carries the healthy tree to ~1.7 GB (that cache is released the instant the iframe unloads), while a full six-way call runs a lean ~1.3 GB — so anything under 1.8 GB would restart perfectly healthy frames. The available-memory floor is the sharper instrument: in the incident that shaped this guide, system-wide stalls began once free memory fell into the low hundreds of megabytes, whatever was consuming it — and since the browser is always this machine's biggest tenant, restarting it is the right response to pressure from any source.
 
 The restart target is `chromium-kiosk.service` — a **user** unit (from [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service), finalized in [guide 10 step 4](10-spa.md#4-point-the-kiosk-browser-at-the-app)) — which is why the script calls `systemctl --user restart`, not plain `systemctl`. A watchdog-triggered restart is clean: the unit's own start-up guards make the relaunched browser wait for the display and the local app server, so the frame blinks and is back on the slideshow within seconds. The `cat > ... << 'EOF'` block writes the script (safely overwriting any previous copy on a re-run), `chmod +x` makes it executable, and the last line runs it once by hand as a trial.
 
@@ -82,7 +82,8 @@ if [ -z "$CHROMIUM_PID" ]; then
     exit 0
 fi
 TREE_RSS_KB=$(ps -o rss= -C chromium | awk '{s+=$1} END {print s+0}')
-if [ "$TREE_RSS_KB" -gt 1250000 ]; then
+AVAIL_KB=$(awk '/MemAvailable/{print $2}' /proc/meminfo)
+if [ "$TREE_RSS_KB" -gt 1843200 ] || [ "$AVAIL_KB" -lt 358400 ]; then
     systemctl --user restart chromium-kiosk.service
 fi
 EOF
@@ -164,7 +165,7 @@ systemctl --user list-timers chromium-watchdog.timer --no-pager
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The frame now checks its own browser every five minutes and restarts it if the whole browser tree has bloated past 1.25 GB — a failure mode that used to mean a slowly degrading frame until someone pulled the plug now heals itself within minutes.
+The frame now checks itself every five minutes and restarts the browser when memory turns unhealthy — a browser tree past 1.8 GB, or the whole system squeezed under 350 MB free. A failure mode that used to mean a slowly degrading frame until someone pulled the plug now heals itself within minutes.
 
 <a id="4-restart-chromium-early-every-morning"></a>
 <img src="https://img.shields.io/badge/STEP_04-Restart_Chromium_early_every_morning-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Restart Chromium early every morning"/>
