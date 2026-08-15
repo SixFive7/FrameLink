@@ -177,22 +177,24 @@ def build(
 
     project_dir = REPO_ROOT / project
     if not project_dir.is_dir():
-        # The agent project is being written concurrently. This is an expected state, not
-        # a harness fault, so it gets a diagnosis and a distinct exit code rather than a
-        # container round trip that would fail three minutes later with the same news.
+        # A missing project gets a diagnosis and a distinct exit code rather than a container
+        # round trip that would fail three minutes later with the same news. This used to read
+        # "the agent project is written by another workstream" - true when the harness landed
+        # and false ever since, which is the wrong sentence to hand somebody whose checkout is
+        # genuinely incomplete.
         listing = sorted(p.name for p in (REPO_ROOT / "src").glob("*")) if (REPO_ROOT / "src").is_dir() else []
         progress.mark(
             "build-path",
             "blocked",
-            detail=f"{project} does not exist yet; src/ holds {listing or 'nothing'}",
+            detail=f"{project} does not exist; src/ holds {listing or 'nothing'}",
         )
         raise HarnessError(
             f"Project {project} does not exist in this checkout.",
             exit_code=3,
             remedy=(
                 f"src/ currently holds: {', '.join(listing) or '(nothing)'}\n"
-                "The agent project is written by another workstream. Build again once it lands, "
-                "or point elsewhere with --project."
+                "src/FrameLink.Agent is tracked, so an absent one means an incomplete checkout "
+                "rather than unwritten code. Point elsewhere with --project if that is deliberate."
             ),
         )
 

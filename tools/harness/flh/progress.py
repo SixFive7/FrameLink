@@ -10,7 +10,8 @@ session with no memory of anything reads first to learn exactly where the build 
 Design rules the shape follows
 ------------------------------
 1. **Machine-readable first, human-readable anyway.** Plain JSON, two-space indent, one
-   fact per key, stable key order so a git diff shows what actually changed.
+   fact per key, and a canonical key order rewritten on every save, so a git diff shows what
+   actually changed rather than where a key happened to be appended.
 2. **States are earned, never asserted.** A capability becomes ``proven`` only when the
    command that proves it actually ran and succeeded; the harness writes that transition,
    nobody edits it in by hand. ``provenBy`` names the command and ``provenUtc`` the moment.
@@ -23,17 +24,60 @@ Design rules the shape follows
    resume mechanism worse than useless.
 5. **Blockers are first-class.** Anything the harness cannot do, and what it would need in
    order to do it, is listed rather than implied by an absence.
+
+What rule 2 could not carry, and what was done about it
+-------------------------------------------------------
+Rule 2 was written when M0 was the whole world, and M0 is the one milestone every part of
+which some ``fl.py`` subcommand can perform. M1, M2 and M2.5 are not like that. A frame
+appearing in the adoption queue, an operator pressing **Adopt**, nine resources converging
+and staying converged across a real reboot, a console stage legible on a physical panel -
+no command in this harness can perform any of those, so under rule 2 alone they can never
+be recorded at all, and the file's answer to "where does the build stand" stays frozen at
+the last thing the harness itself happened to do. That is exactly how this file came to
+report M0 as the frontier while three later milestones were already built.
+
+So there are now **two** ways a state gets here, and they are labelled rather than blended:
+
+* ``proven`` - earned by a harness command. Only :func:`prove` writes it, from the code path
+  that ran the command. Unchanged, and still the only word that means "this harness did it".
+* ``witnessed`` - observed on real hardware by a person, and recorded **in this module** with
+  its provenance: what was seen, when, on which host, where the durable evidence lives, and
+  what the observation does *not* cover. It lives in code and not in the JSON because the JSON
+  is a generated artifact - :func:`save` rewrites the derived sections on every write, so a
+  hand-edit there survives until the next ``fl.py`` invocation and no longer. In ``_MILESTONES``
+  it is a reviewable diff with the evidence attached, which is the thing a bare assertion in a
+  data file can never be.
+
+A third kind is derived rather than recorded at all: the M3 ledger below counts what the
+repository itself says, on every save, from the two files that are authoritative for those
+numbers. A count that is measured cannot go stale, and going stale is the failure this whole
+module exists to prevent.
+
+Why the schema identifier did not move
+--------------------------------------
+This revision changes the shape substantially - a milestone ladder instead of one milestone,
+a resource ledger, an orientation block - and still leaves ``SCHEMA`` alone. That is
+deliberate. ``load`` treats an unrecognised schema as a file to step around, and a longer-
+running subcommand holds *its* copy of this module in memory for the whole run: the shape was
+revised while a ``fl.py build`` was thirty minutes into an emulated container build. Bumping
+the identifier would have made that already-running process treat the new file as foreign at
+its ``finally``, which is the one moment the resume mechanism must not be the thing that
+loses the record. The keys added here are additive, an older writer preserves every one of
+them, and the two fields it does overwrite (``readMeFirst``, and the legacy singular
+``milestone`` it re-creates) are repaired by :func:`_refresh` on the next save. ``load`` now
+migrates rather than blanks, so the next bump is free.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import PROGRESS_FILE
+from .config import HA_ENTITY, HA_URL, MULE_HOST, MULE_USER, PROGRESS_FILE, REPO_ROOT
 
 SCHEMA = "framelink.harness.progress/1"
 
@@ -41,15 +85,40 @@ SCHEMA = "framelink.harness.progress/1"
 #: file stays readable and diffable.
 LOG_LIMIT = 200
 
-_READ_ME_FIRST = (
-    "You are looking at the FrameLink autonomy harness progress file. It is written "
-    "continuously by tools/harness/fl.py and is the authoritative answer to 'where does "
-    "the build stand'. Read 'milestone', then 'capabilities' (state is earned by a "
-    "command actually succeeding, never hand-edited), then 'blockers' and 'nextActions'. "
-    "If 'inFlight' is not null, a previous session died in the middle of that command and "
-    "the state it was changing is unverified. Run 'python tools/harness/fl.py status' for "
-    "a live re-probe of the environment."
-)
+#: The dev Fleet Manager the mule is pointed at. Not in ``config.py`` because no harness
+#: subcommand talks to it - it is here because a resuming session cannot find it anywhere
+#: else, and the mule's journal is otherwise the only record that this address is the one.
+CONTROL_URL = "http://10.20.30.200:5199"
+
+_READ_ME_FIRST = [
+    "This is the FrameLink v2 progress file. It is written continuously by "
+    "tools/harness/fl.py and is the authoritative answer to 'where does the build stand' "
+    "for a session that remembers nothing. Read it top to bottom: nextActions and blockers "
+    "are what to do, milestones is where the build is, capabilities is what this harness "
+    "has been proven able to do, resources is the M3 ledger, orientation names the other "
+    "durable artifacts, environment names the hosts and the credentials.",
+    "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, "
+    "dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites "
+    "blockers and nextActions from what it finds, so a stale obstacle cannot survive the "
+    "one command a resuming session is told to run.",
+    "Two words mean different things and are never blended. 'proven' is earned: some fl.py "
+    "subcommand ran, succeeded, and wrote that transition itself - see provenBy and "
+    "provenUtc. 'witnessed' is observed on real hardware by a person and recorded in "
+    "tools/harness/flh/progress.py with its evidence, because no command in this harness "
+    "can perform an adoption or read a physical panel. Nothing here is ever true because "
+    "somebody typed it into the JSON: save() rewrites every derived section, so a hand-edit "
+    "lasts until the next fl.py invocation and no longer.",
+    "To record a new hardware observation, add it to _MILESTONES or "
+    "_HARDWARE_VERIFIED_RESOURCES in tools/harness/flh/progress.py with what was seen, when, "
+    "on which host and where the evidence lives. That is a reviewable commit, which is the "
+    "point. Do not write it into this file.",
+    "If inFlight is not null a previous session died in the middle of that command and "
+    "whatever it was changing is unverified - which matters most for `deploy` and `power`, "
+    "the two subcommands that change something outside this repository.",
+    "Credentials are supplied inline per session and never stored, logged or defaulted "
+    "(CLAUDE.md section 1.2). The environment block names which variable unlocks what; it "
+    "holds no values and must never be made to.",
+]
 
 #: The six pieces M0 is made of, plus the acceptance condition that binds them.
 #: version2.md section 5.1: "A code change reaches the mule and is verified with no human help:
@@ -93,10 +162,392 @@ _CAPABILITIES: list[tuple[str, str, str]] = [
     ),
 ]
 
+#: version2.md section 5.1's ladder, verbatim in ``doneWhen`` and in order. ``stateFrom``
+#: says how each row's state is arrived at and is the whole honesty mechanism:
+#:
+#:   capabilities  derived from the seven M0 capabilities below. Earned, never written here.
+#:   resources     derived from the repository on every save. Measured, never written here.
+#:   witness       observed on hardware and recorded here with its evidence, because no
+#:                 command in this harness could ever perform it.
+#:   none          nothing has happened yet.
+#:
+#: A ``witness`` row carries ``evidence`` with five fields, and the fifth is the one that
+#: makes it worth trusting: ``notWitnessed`` states what the observation did *not* cover, so
+#: the record cannot quietly grow into a bigger claim than the thing somebody actually saw.
+_MILESTONES: list[dict[str, Any]] = [
+    {
+        "id": "M0",
+        "title": "Autonomy harness",
+        "doneWhen": (
+            "A code change reaches the mule and is verified with no human help: build path, "
+            "deploy script, power-cycle control, screenshot + journal collection, resumable "
+            "progress file, test runner."
+        ),
+        "specRef": "version2.md section 5.1",
+        "stateFrom": "capabilities",
+    },
+    {
+        "id": "M1",
+        "title": "Walking skeleton",
+        "doneWhen": (
+            "Agent connects -> appears pending -> adopted in the GUI -> reconciles one trivial "
+            "resource -> self-updates from the Fleet Manager. Every integration risk retired at "
+            "once."
+        ),
+        "specRef": "version2.md section 5.1",
+        "stateFrom": "witness",
+        "state": "done",
+        "evidence": {
+            "how": "observed-on-hardware",
+            "what": (
+                "The agent on the mule connected to the dev Fleet Manager, appeared in the "
+                "adoption queue as a pending device, was adopted from the GUI under the name "
+                "'Mule' (device T1RJ-6JCQ-9HN8-3920, hardware serial 19aa037e525b27b6), went "
+                "online, and streamed live reconcile telemetry that the GUI rendered."
+            ),
+            "whenUtc": "2026-08-15",
+            "where": (
+                f"mule {MULE_USER}@{MULE_HOST}, Fleet Manager running on the workstation at "
+                f"{CONTROL_URL}"
+            ),
+            "recordedIn": (
+                "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI); the "
+                "device identity is visible in every journal capture under tools/harness/runs/ "
+                "(gitignored, local only); the adoption row itself lives in the Fleet Manager's "
+                "SQLite database outside this repository"
+            ),
+            "notWitnessed": (
+                "The self-update leg was not separately re-observed in that session. The update "
+                "path is wired and running - the mule's journal shows repeated update checks "
+                "against /agent/release/linux-arm64 - but they are failing right now because the "
+                "dev Fleet Manager is not up, so a successful binary swap has not been watched."
+            ),
+        },
+    },
+    {
+        "id": "M2",
+        "title": "Reconciler engine",
+        "doneWhen": (
+            "DAG, status vocabulary, retry/backoff, reboot-verified apply, escalation ladder, "
+            "live telemetry, console and browser narration."
+        ),
+        "specRef": "version2.md section 5.1",
+        "stateFrom": "witness",
+        "state": "done",
+        "evidence": {
+            "how": "observed-on-hardware",
+            "what": (
+                "Nine resources converged on the mule and each was verified after a real reboot, "
+                "not after a service restart. The console stage rendered on the physical DSI "
+                "panel and read correctly. The nine are listed under resources.hardwareVerified."
+            ),
+            "whenUtc": "2026-08-15",
+            "where": f"mule {MULE_USER}@{MULE_HOST}, physical panel on card0-DSI-2",
+            "recordedIn": (
+                "git log (011cf3a reconciler engine, 28a5264 agent seams and honest console, "
+                "9eedf91 telemetry payloads, 6d77144 console stage); the panel was photographed "
+                "by `fl.py collect` - see artifacts.lastCollection"
+            ),
+            "notWitnessed": (
+                "Only those nine. Everything the catalog has gained since is code with tests and "
+                "has never run on hardware - see resources.hardwareVerified versus "
+                "resources.implemented."
+            ),
+        },
+    },
+    {
+        "id": "M2.5",
+        "title": "Image generation",
+        "doneWhen": (
+            "A card flashed from a Fleet-Manager-generated image boots, starts the agent "
+            "unattended, and appears in the adoption queue (section 3.9)."
+        ),
+        "specRef": "version2.md section 5.1 and section 3.9",
+        "stateFrom": "witness",
+        "state": "in-progress",
+        "evidence": {
+            "how": "measured-against-the-real-base-image",
+            "what": (
+                "The generator is built (src/FrameLink.Control/Imaging) and its whole premise was "
+                "measured against the real pinned 2026-06-18-raspios-trixie-arm64-lite.img in a "
+                "plain debian:trixie-slim container with no --privileged, no --cap-add and no "
+                "device mapping: debugfs writes the binary and sets mode and owner, debugfs "
+                "symlink does what `systemctl enable` does, mcopy writes the boot-partition file, "
+                "and `e2fsck -fn` calls the result clean. `mount -o loop` fails in that same "
+                "container, which is what proves loopback was never involved."
+            ),
+            "whenUtc": "2026-08-15",
+            "where": "workstation, debian:trixie-slim container",
+            "recordedIn": (
+                "git log commit ba5a873 carries the full measurement and the debugfs-exits-0-on-"
+                "failure finding; decision 52 supersedes 32 in version2.md Appendix A; the tests "
+                "are tests/FrameLink.Tests/ControlImageGenerationTests.cs"
+            ),
+            "notWitnessed": (
+                "The milestone's own acceptance test - flash a card, watch a row appear - has not "
+                "happened and cannot yet: version2.md section 5.3 item 3 records that no SD card "
+                "reader is attached. Nothing generated has been written to a card, booted, or seen "
+                "in the adoption queue. This milestone is NOT done."
+            ),
+        },
+    },
+    {
+        "id": "M3",
+        "title": "Resource migration",
+        "doneWhen": (
+            "Guide by guide, lowest-risk first, firmware DFU last. Each group passes the triple "
+            "bar: state-diff vs the frozen v1 reference, checkpoint assertions, validation battery "
+            "on the mule."
+        ),
+        "specRef": "version2.md section 5.1",
+        "stateFrom": "resources",
+    },
+    {
+        "id": "Mn+1",
+        "title": "Bundled LiveKit",
+        "doneWhen": (
+            "Fleet Manager supervises LiveKit and mints tokens at adoption; guide 7 obsolete."
+        ),
+        "specRef": "version2.md section 5.1 and section 3.7",
+        "stateFrom": "none",
+    },
+    {
+        "id": "Mn+2",
+        "title": "Production Fleet Manager",
+        "doneWhen": (
+            "Deployed as a PortainerCompose stack behind Traefik at framelink.huisman.io, with "
+            "alerting."
+        ),
+        "specRef": "version2.md section 5.1 and section 3.8",
+        "stateFrom": "none",
+    },
+    {
+        "id": "Mn+3",
+        "title": "Parity",
+        "doneWhen": (
+            "Stock image -> adopt -> fully green frame, mechanically equal to the frozen v1 "
+            "reference. Deep, triple-checked verification. Only then do guides retire to the "
+            "minimum set (section 8)."
+        ),
+        "specRef": "version2.md section 5.1 and section 8",
+        "stateFrom": "none",
+    },
+]
+
+#: The only resources that have ever converged on real hardware, each verified after a real
+#: reboot rather than after a service restart. Witnessed 2026-08-15 on the mule; this is the
+#: M2 acceptance set and it has not grown since. Everything the catalog has gained after these
+#: is code with tests, which is a different and much weaker claim - keeping the two apart is
+#: the single most load-bearing distinction in this file, because "implemented" reads like
+#: "working" to a session that has forgotten which is which.
+_HARDWARE_VERIFIED_RESOURCES: list[str] = [
+    "boot.config.dtoverlay-waveshare-panel",
+    "boot.cmdline.fbcon-rotate",
+    "journal.storage-persistent",
+    "agent.adoption",
+    "agent.device-name",
+    "identity.hostname",
+    "unit.cpu-performance.content",
+    "unit.cpu-performance.enabled",
+    "cpu.governor.performance",
+]
+
+#: The durable artifacts a session starting from nothing needs, and what each one is *for*.
+#: The progress file is deliberately not the specification; it is the pointer to it.
+_ORIENTATION: dict[str, str] = {
+    "specification": (
+        "version2.md - the build specification. Section 5.1 is the milestone ladder mirrored "
+        "below, section 5.5 is why this file exists, Appendix A preserves every decision with "
+        "its reasoning."
+    ),
+    "resourceSpec": (
+        "reference/resource-catalog.md - the enumeration of all 79 device settings extracted "
+        "from build guides 3-12, one block per resource with its Observe, Act and Verify. This "
+        "is what M3 is migrating, and it is the spec each new resource is written against."
+    ),
+    "parityTarget": (
+        "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, "
+        "config contents and hashes, mixer values, firmware versions. This is what Mn+3 "
+        "measures 'at parity' against, and the catalog's cross-check."
+    ),
+    "reasoningRecord": (
+        "git log - every commit message carries why, not what. `git log --oneline` is the "
+        "cheapest orientation available and the only place some findings exist at all (the "
+        "debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is "
+        "bebf34c)."
+    ),
+    "repoRules": (
+        "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, "
+        "section 1.8 requires explicit per-class authorisation before any mutation of the mule."
+    ),
+    "harness": (
+        "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does "
+        "and what it refuses to do; flh/config.py holds every host, path and default in one "
+        "place."
+    ),
+    "openItems": (
+        "TODO.md is v1's outstanding work and is gitignored; version2.md Appendix B holds v2's "
+        "open items."
+    ),
+}
+
 
 def utcnow() -> str:
     """Timestamp in the one format the whole file uses: RFC 3339, UTC, second precision."""
     return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _read_number(path: str, pattern: str) -> tuple[int | None, str]:
+    """Pull one integer out of a repository file. Returns the value and how it was obtained.
+
+    Never guesses. A file that cannot be read, or that no longer contains the pattern, yields
+    ``None`` and a sentence saying so - which is a useful fact in itself, because it means the
+    thing that used to be authoritative for that number has moved.
+    """
+    target = REPO_ROOT / path
+    try:
+        text = target.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return None, f"{path} could not be read ({exc.__class__.__name__})"
+    match = re.search(pattern, text)
+    if not match:
+        return None, f"{path} no longer contains the pattern this count is read from"
+    return int(match.group(1)), path
+
+
+def _resource_ledger() -> dict[str, Any]:
+    """The M3 ledger, measured from the repository rather than recorded.
+
+    Two numbers, each read from the file that is authoritative for it:
+
+    * the catalog total, from the Counts table in ``reference/resource-catalog.md``;
+    * how many are implemented, from the assertion in ``AgentResourceGraphTests.cs`` that
+      pins ``graph.Count`` - which is not a proxy for the count, it is the count, enforced by
+      a test that goes red the moment the catalog and the graph disagree.
+
+    Measuring rather than recording is the point. A frozen number would be wrong within a day
+    of a workstream landing resources, and wrong in the direction that matters least visibly:
+    it would keep claiming less progress than exists, and nobody re-checks a number that only
+    ever understates.
+    """
+    total, total_source = _read_number(
+        "reference/resource-catalog.md",
+        r"\|\s*\*\*Total\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|",
+    )
+    implemented, implemented_source = _read_number(
+        "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
+        r"Assert\.Equal\(\s*(\d+)\s*,\s*graph\.Count\s*\)",
+    )
+    verified = list(_HARDWARE_VERIFIED_RESOURCES)
+    ledger: dict[str, Any] = {
+        "catalogTotal": total,
+        "catalogTotalReadFrom": total_source,
+        "implemented": implemented,
+        "implementedReadFrom": implemented_source,
+        "remaining": (total - implemented) if (total is not None and implemented is not None) else None,
+        "hardwareVerifiedCount": len(verified),
+        "hardwareVerified": verified,
+        "meaning": {
+            "implemented": (
+                "The resource exists in the agent's catalog with tests. It has never necessarily "
+                "run on a frame."
+            ),
+            "hardwareVerified": (
+                "The resource converged on the mule and was verified after a real reboot. Only "
+                "the M2 nine have ever done this."
+            ),
+        },
+        "gap": (
+            "The first full provision of the whole catalog on hardware has not happened. That is "
+            "the largest single unknown in the build: every resource beyond the nine is code that "
+            "has never met a real device."
+        ),
+    }
+    return ledger
+
+
+def _environment() -> dict[str, Any]:
+    """Hosts, credentials by name, and the measurements other timeouts are set against.
+
+    Credential **values** never appear here, in any form, ever (CLAUDE.md section 1.2). What
+    appears is the variable name, what it unlocks and where to get one, which is what a
+    session that has just started actually lacks.
+    """
+    return {
+        "mule": {
+            "address": f"{MULE_USER}@{MULE_HOST}",
+            "what": (
+                "The development mule: the existing frame, repurposed. Raspberry Pi 5, Raspberry "
+                "Pi OS Lite (Trixie), 800x1280 DSI panel on card0-DSI-2, on a controllable smart "
+                "plug."
+            ),
+            "agentUnit": "fl-agent.service, running as root, binary at /usr/local/bin/fl-agent",
+            "override": "FL_HOST / FL_USER",
+        },
+        "fleetManager": {
+            "address": CONTROL_URL,
+            "what": (
+                "The dev Fleet Manager, run on the workstation from src/FrameLink.Control. The "
+                "mule's agent is pointed here and retries forever while it is down, which is why "
+                "a journal capture taken with the server stopped is a wall of connection "
+                "warnings rather than a fault."
+            ),
+            "startedBy": (
+                "dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199, with "
+                "FRAMELINK_OPERATOR_PASSWORD set and FRAMELINK_DATA_DIR pointing at the operator "
+                "data directory outside this repository."
+            ),
+            "agentPointedBy": "--control-url on `fl-agent install`, or the FL_CONTROL_URL variable",
+        },
+        "homeAssistant": {
+            "address": HA_URL,
+            "entity": HA_ENTITY,
+            "what": (
+                "Switches the mule's power for `fl.py power`. Port 8123 was verified against the "
+                "live instance; 8086 on the same host is a different service that answers 404 for "
+                "every path, which once read exactly like 'that entity does not exist'."
+            ),
+            "override": "FL_HA_URL / FL_HA_ENTITY",
+        },
+        "credentials": [
+            {
+                "variable": "FL_PW",
+                "unlocks": "fl.py deploy, fl.py collect - and it is also the answer to sudo on the mule",
+                "howToObtain": "Ask the user. Supplied inline per session; there is deliberately no key-based fallback.",
+            },
+            {
+                "variable": "FL_HA_TOKEN",
+                "unlocks": "fl.py power",
+                "howToObtain": f"A long-lived access token from the Home Assistant profile page at {HA_URL}",
+            },
+            {
+                "variable": "FRAMELINK_OPERATOR_PASSWORD",
+                "unlocks": "the Fleet Manager GUI - the single operator credential of version2.md section 3.2",
+                "howToObtain": (
+                    "Ask the user. An instance started without it still runs and serves a setup "
+                    "page naming the variable, and answers connecting frames 'not-configured'."
+                ),
+            },
+        ],
+        "credentialRule": (
+            "CLAUDE.md section 1.2, absolute: supplied in-session by environment variable only. "
+            "Never a file, a log, a shell history, a config, a keychain or a default. Never "
+            "echoed, never summarised back, never written into this file."
+        ),
+        "measurements": {
+            "rebootToSshReadySeconds": 22.3,
+            "rebootMeasurement": (
+                "Measured twice on the mule 2026-08-15 with loss of tcp/22 confirmed in between. "
+                "Every wait ceiling in the harness is a margin over this number, not an estimate "
+                "of it - power.on(wait_s=120) is roughly five boots."
+            ),
+            "eepromPowerOffOnHalt": (
+                "POWER_OFF_ON_HALT=1 is set in this Pi's EEPROM, so `halt` genuinely cuts power. A "
+                "silent frame on a live relay has three explanations, not two: booting, hung, or "
+                "halted and drawing nothing."
+            ),
+        },
+    }
 
 
 def _blank() -> dict[str, Any]:
@@ -104,19 +555,12 @@ def _blank() -> dict[str, Any]:
         "schema": SCHEMA,
         "generatedBy": "tools/harness/fl.py",
         "updatedUtc": utcnow(),
-        "readMeFirst": _READ_ME_FIRST,
-        "milestone": {
-            "id": "M0",
-            "title": "Autonomy harness",
-            "doneWhen": (
-                "A code change reaches the mule and is verified with no human help: build "
-                "path, deploy script, power-cycle control, screenshot + journal collection, "
-                "resumable progress file, test runner."
-            ),
-            "specRef": "version2.md section 5.1",
-            "state": "in-progress",
-        },
+        "readMeFirst": list(_READ_ME_FIRST),
+        "currentMilestone": None,
         "inFlight": None,
+        "nextActions": [],
+        "blockers": [],
+        "milestones": [],
         "capabilities": {
             cap_id: {
                 "title": title,
@@ -128,6 +572,9 @@ def _blank() -> dict[str, Any]:
             }
             for cap_id, title, command in _CAPABILITIES
         },
+        "resources": {},
+        "orientation": dict(_ORIENTATION),
+        "environment": _environment(),
         "artifacts": {
             "agentBinary": None,
             "deployed": None,
@@ -140,17 +587,45 @@ def _blank() -> dict[str, Any]:
             "collections": 0,
             "relayOperations": 0,
         },
-        "blockers": [],
-        "nextActions": [],
         "log": [],
     }
+
+
+#: Canonical key order, rewritten on every save. Ordered by what a session with no memory
+#: needs first, not by what the harness happens to update most: what to do, then what is in
+#: the way, then where the build stands, and the event log - the longest section by far - last.
+_KEY_ORDER = [
+    "schema",
+    "generatedBy",
+    "updatedUtc",
+    "readMeFirst",
+    "currentMilestone",
+    "inFlight",
+    "nextActions",
+    "blockers",
+    "milestones",
+    "capabilities",
+    "resources",
+    "orientation",
+    "environment",
+    "artifacts",
+    "counters",
+    "log",
+]
+
+#: Keys carried across a schema change. Everything else in a foreign file is derived and will
+#: be rebuilt on the first save, so carrying it would only preserve a stale copy of it.
+_MIGRATED_KEYS = ["inFlight", "capabilities", "artifacts", "counters", "blockers", "log"]
 
 
 def load() -> dict[str, Any]:
     """Read the progress file, creating a blank one if it does not exist yet.
 
-    A file whose schema does not match is not silently migrated - it is kept under
-    ``previousSchema`` so nothing is lost, and a blank current-schema file takes over.
+    A file written under a different schema is **migrated**, not stepped around: the earned
+    state - capabilities, artifacts, counters, blockers, the log - is carried across and
+    everything derived is rebuilt on the next save. The previous behaviour moved the whole
+    file under ``previousSchema`` and started blank, which meant the one moment the format
+    changed was also the moment the record of what had been proven stopped being read.
     """
     if not PROGRESS_FILE.exists():
         return _blank()
@@ -170,8 +645,11 @@ def load() -> dict[str, Any]:
 
     if data.get("schema") != SCHEMA:
         fresh = _blank()
-        fresh["previousSchema"] = data
-        return fresh
+        for key in _MIGRATED_KEYS:
+            if key in data:
+                fresh[key] = data[key]
+        fresh["migratedFrom"] = {"schema": data.get("schema"), "utc": utcnow()}
+        data = fresh
 
     # Tolerate a file written by an older run that predates a capability being added.
     for cap_id, title, command in _CAPABILITIES:
@@ -198,10 +676,9 @@ def save(data: dict[str, Any]) -> None:
     """
     data["updatedUtc"] = utcnow()
     data["log"] = data.get("log", [])[-LOG_LIMIT:]
-    # Derived on every write, never authored. A milestone state that could be set by hand
-    # would eventually disagree with the capabilities beneath it, and the disagreement
-    # would be invisible.
-    _refresh_milestone(data)
+    # Derived on every write, never authored. Anything that could be set by hand would
+    # eventually disagree with the state beneath it, and the disagreement would be invisible.
+    _refresh(data)
 
     PROGRESS_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = PROGRESS_FILE.with_suffix(".json.tmp")
@@ -209,9 +686,24 @@ def save(data: dict[str, Any]) -> None:
     # tree on every OS, and this file is tracked. Without it Python would translate to
     # CRLF on Windows and every harness run would show as a whole-file diff.
     tmp.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n"
+        json.dumps(_ordered(data), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
     )
     os.replace(tmp, PROGRESS_FILE)
+
+
+def _ordered(data: dict[str, Any]) -> dict[str, Any]:
+    """Rebuild the mapping in canonical key order, keeping anything unrecognised at the end.
+
+    Python preserves insertion order, so without this a key added by a later revision lands
+    wherever it was first written - which for an existing file is the very bottom, under a
+    two-hundred-entry log. Rewriting the order on every save is what keeps the diff of this
+    file about its content.
+    """
+    ordered = {key: data[key] for key in _KEY_ORDER if key in data}
+    ordered.update({key: value for key, value in data.items() if key not in ordered})
+    return ordered
 
 
 def prove(cap_id: str, *, by: str, detail: str) -> None:
@@ -222,7 +714,11 @@ def prove(cap_id: str, *, by: str, detail: str) -> None:
     cap["provenBy"] = by
     cap["provenUtc"] = utcnow()
     cap["detail"] = detail
-    _refresh_milestone(data)
+    # The command just ran, so whatever previously made it unrunnable no longer does. Without
+    # this the note outlives its cause: `fl.py status` goes on printing "not runnable in this
+    # session" under a capability that was re-proven minutes ago, and a resuming session has no
+    # way to tell that obstacle from a current one.
+    cap.pop("currentlyUnrunnable", None)
     save(data)
 
 
@@ -248,7 +744,6 @@ def mark(cap_id: str, state: str, *, detail: str) -> None:
         if state == "failed":
             cap["provenBy"] = None
             cap["provenUtc"] = None
-    _refresh_milestone(data)
     save(data)
 
 
@@ -342,28 +837,104 @@ def activity(command: str, **context: Any):
         save(data)
 
 
-def _refresh_milestone(data: dict[str, Any]) -> None:
-    """Derive milestone state from capability states. Never set by hand.
+def _milestone_state_from_capabilities(data: dict[str, Any]) -> str:
+    """M0's state, derived from the seven capabilities and from nothing else."""
+    states = [cap.get("state") for cap in data.get("capabilities", {}).values()]
+    if states and all(state == "proven" for state in states):
+        return "done"
+    if any(state == "failed" for state in states):
+        return "failing"
+    if any(state == "proven" for state in states):
+        return "in-progress"
+    return "not-started"
 
-    The milestone's other fields - id, title, doneWhen, specRef - are constants belonging
-    to the code, not accumulated state, so they are rewritten from the template on every
-    save. Otherwise a file created weeks ago keeps quoting a spec line that has since been
-    reworded, and the record slowly stops describing the thing it records.
-    """
-    template = _blank()["milestone"]
-    milestone = data.setdefault("milestone", {})
-    for key, value in template.items():
-        if key != "state":
-            milestone[key] = value
-    data["readMeFirst"] = _READ_ME_FIRST
 
-    caps = data.get("capabilities", {})
-    states = {cap_id: cap.get("state") for cap_id, cap in caps.items()}
-    if all(state == "proven" for state in states.values()):
-        data["milestone"]["state"] = "done"
-    elif any(state == "failed" for state in states.values()):
-        data["milestone"]["state"] = "failing"
-    elif any(state == "proven" for state in states.values()):
-        data["milestone"]["state"] = "in-progress"
+def _milestone_state_from_resources(ledger: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """M3's state, derived from the measured ledger. Returns the state and its evidence."""
+    total = ledger.get("catalogTotal")
+    implemented = ledger.get("implemented")
+    verified = ledger.get("hardwareVerifiedCount", 0)
+
+    if implemented is None or total is None:
+        return "unknown", {
+            "how": "derived-from-the-repository",
+            "what": (
+                "The counts this state is derived from could not be read - see "
+                "resources.catalogTotalReadFrom and resources.implementedReadFrom."
+            ),
+        }
+
+    if implemented >= total and verified >= total:
+        state = "done"
     else:
-        data["milestone"]["state"] = "not-started"
+        state = "in-progress" if implemented else "not-started"
+
+    return state, {
+        "how": "derived-from-the-repository",
+        "what": (
+            f"{implemented} of {total} catalog resources are implemented in the agent; "
+            f"{verified} of {total} have ever converged on real hardware. Both numbers are "
+            "measured on every write, not recorded."
+        ),
+        "notWitnessed": (
+            "The triple bar this milestone is graded on - state-diff against the frozen v1 "
+            "reference, checkpoint assertions, validation battery on the mule - has not been run "
+            "for any group. No state-diff harness exists yet."
+        ),
+    }
+
+
+def _refresh(data: dict[str, Any]) -> None:
+    """Rebuild every derived section. Never authored, never hand-edited.
+
+    Constants that belong to the code rather than to accumulated state - the milestone ladder,
+    the orientation pointers, the environment contract, the read-me - are rewritten from the
+    templates above on every save. Otherwise a file created weeks ago keeps quoting a spec line
+    that has since been reworded, and the record slowly stops describing the thing it records.
+    """
+    data["schema"] = SCHEMA
+    data["generatedBy"] = "tools/harness/fl.py"
+    data["readMeFirst"] = list(_READ_ME_FIRST)
+    data["orientation"] = dict(_ORIENTATION)
+    data["environment"] = _environment()
+
+    ledger = _resource_ledger()
+    data["resources"] = ledger
+
+    milestones: list[dict[str, Any]] = []
+    for template in _MILESTONES:
+        milestone = {
+            "id": template["id"],
+            "title": template["title"],
+            "doneWhen": template["doneWhen"],
+            "specRef": template["specRef"],
+            "state": "not-started",
+            "stateFrom": template["stateFrom"],
+        }
+        if template["stateFrom"] == "capabilities":
+            milestone["state"] = _milestone_state_from_capabilities(data)
+            milestone["evidence"] = {
+                "how": "earned-by-harness-commands",
+                "what": (
+                    "Every one of the seven capabilities below was proven by the fl.py subcommand "
+                    "that performs it. Nothing here was recorded by hand."
+                ),
+            }
+        elif template["stateFrom"] == "resources":
+            milestone["state"], milestone["evidence"] = _milestone_state_from_resources(ledger)
+        elif template["stateFrom"] == "witness":
+            milestone["state"] = template["state"]
+            milestone["evidence"] = dict(template["evidence"])
+        milestones.append(milestone)
+
+    data["milestones"] = milestones
+    data["currentMilestone"] = next(
+        (m["id"] for m in milestones if m["state"] != "done"),
+        milestones[-1]["id"] if milestones else None,
+    )
+
+    # The singular `milestone` key was this file's whole vocabulary when M0 was the whole
+    # world. It is gone, and it is popped rather than merely not written because an older
+    # copy of this module still running in another process re-creates it at its own next
+    # save. Leaving it would put a stale M0 header above a ladder that disagrees with it.
+    data.pop("milestone", None)

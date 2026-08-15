@@ -1,8 +1,11 @@
-"""FrameLink autonomy harness - milestone M0 (version2.md section 5.1).
+"""FrameLink autonomy harness - the machinery of milestone M0 (version2.md section 5.1).
 
     "A code change reaches the mule and is verified with no human help: build path,
      deploy script, power-cycle control, screenshot + journal collection, resumable
      progress file, test runner."
+
+M0 is what this package *is*, not where the build has got to. The build is further on;
+``progress.json`` holds the milestone ladder and ``fl.py status`` prints it.
 
 One entry point drives all of it: ``python tools/harness/fl.py <subcommand>``.
 

@@ -1,33 +1,164 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-15T05:08:03Z",
-  "readMeFirst": "You are looking at the FrameLink autonomy harness progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand'. Read 'milestone', then 'capabilities' (state is earned by a command actually succeeding, never hand-edited), then 'blockers' and 'nextActions'. If 'inFlight' is not null, a previous session died in the middle of that command and the state it was changing is unverified. Run 'python tools/harness/fl.py status' for a live re-probe of the environment.",
-  "milestone": {
-    "id": "M0",
-    "title": "Autonomy harness",
-    "doneWhen": "A code change reaches the mule and is verified with no human help: build path, deploy script, power-cycle control, screenshot + journal collection, resumable progress file, test runner.",
-    "specRef": "version2.md section 5.1",
-    "state": "in-progress"
-  },
+  "updatedUtc": "2026-08-15T23:32:58Z",
+  "readMeFirst": [
+    "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, orientation names the other durable artifacts, environment names the hosts and the credentials.",
+    "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
+    "Two words mean different things and are never blended. 'proven' is earned: some fl.py subcommand ran, succeeded, and wrote that transition itself - see provenBy and provenUtc. 'witnessed' is observed on real hardware by a person and recorded in tools/harness/flh/progress.py with its evidence, because no command in this harness can perform an adoption or read a physical panel. Nothing here is ever true because somebody typed it into the JSON: save() rewrites every derived section, so a hand-edit lasts until the next fl.py invocation and no longer.",
+    "To record a new hardware observation, add it to _MILESTONES or _HARDWARE_VERIFIED_RESOURCES in tools/harness/flh/progress.py with what was seen, when, on which host and where the evidence lives. That is a reviewable commit, which is the point. Do not write it into this file.",
+    "If inFlight is not null a previous session died in the middle of that command and whatever it was changing is unverified - which matters most for `deploy` and `power`, the two subcommands that change something outside this repository.",
+    "Credentials are supplied inline per session and never stored, logged or defaulted (CLAUDE.md section 1.2). The environment block names which variable unlocks what; it holds no values and must never be made to."
+  ],
+  "currentMilestone": "M2.5",
   "inFlight": null,
+  "nextActions": [
+    "Orient before touching anything: version2.md section 5.1 is the milestone ladder, reference/resource-catalog.md is the resource spec M3 is migrating, reference/v1-state-inventory.txt is the parity target, `git log --oneline -40` is the reasoning record. The 'orientation' block in this file says what each one is for.",
+    "dotnet run --project tests/FrameLink.Tests  - the only gate between a change and a release (version2.md section 7.2: no red test ships). Not `dotnet test`, which discovers zero tests under xunit.v3 on this SDK. `fl.py test` wraps it with telemetry off and a deadline.",
+    "Ask the user for FL_PW and supply it inline (FL_PW='...' python tools/harness/fl.py <cmd>) to unlock deploy / collect / any SSH to the mule. Never store it.",
+    "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
+    "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199. The mule's agent is pointed at http://10.20.30.200:5199 and is retrying forever; its journal is a wall of connection warnings until this is up.",
+    "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
+    "THE FRONTIER (M3): 69 of 79 catalog resources are implemented and only 9 have ever converged on hardware. The first full provision of the whole catalog on a frame has not happened and is the largest unknown in the build. Do it against a freshly flashed card, and watch it on the panel.",
+    "Finish the catalog: 10 resources are still unimplemented. reference/resource-catalog.md is the spec; the count above is read from the assertion in tests/FrameLink.Tests/AgentResourceGraphTests.cs, which goes red when the graph and the catalog disagree.",
+    "Settle the WirePlumber question, which is one read-only command and has blocked the audio mixer resources' design since the catalog was written: list ~/.local/state/wireplumber/ on the mule. If stored device state is there it is a second owner of every audio.mixer.* value and wins, because it applies after alsa-restore. See reference/resource-catalog.md, suspected-reverts item 4.",
+    "M2.5 is NOT done and cannot be finished at this desk: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is attached. Ask the user for one."
+  ],
+  "blockers": [
+    {
+      "id": "fl-pw-unset",
+      "what": "FL_PW is not set, so no command can reach the mule.",
+      "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
+      "since": "2026-08-15T23:32:58Z"
+    },
+    {
+      "id": "ha-token-unset",
+      "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
+      "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
+      "since": "2026-08-15T23:32:58Z"
+    },
+    {
+      "id": "operator-password-unset",
+      "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
+      "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
+      "since": "2026-08-15T23:32:58Z"
+    }
+  ],
+  "milestones": [
+    {
+      "id": "M0",
+      "title": "Autonomy harness",
+      "doneWhen": "A code change reaches the mule and is verified with no human help: build path, deploy script, power-cycle control, screenshot + journal collection, resumable progress file, test runner.",
+      "specRef": "version2.md section 5.1",
+      "state": "done",
+      "stateFrom": "capabilities",
+      "evidence": {
+        "how": "earned-by-harness-commands",
+        "what": "Every one of the seven capabilities below was proven by the fl.py subcommand that performs it. Nothing here was recorded by hand."
+      }
+    },
+    {
+      "id": "M1",
+      "title": "Walking skeleton",
+      "doneWhen": "Agent connects -> appears pending -> adopted in the GUI -> reconciles one trivial resource -> self-updates from the Fleet Manager. Every integration risk retired at once.",
+      "specRef": "version2.md section 5.1",
+      "state": "done",
+      "stateFrom": "witness",
+      "evidence": {
+        "how": "observed-on-hardware",
+        "what": "The agent on the mule connected to the dev Fleet Manager, appeared in the adoption queue as a pending device, was adopted from the GUI under the name 'Mule' (device T1RJ-6JCQ-9HN8-3920, hardware serial 19aa037e525b27b6), went online, and streamed live reconcile telemetry that the GUI rendered.",
+        "whenUtc": "2026-08-15",
+        "where": "mule framelink@10.20.30.53, Fleet Manager running on the workstation at http://10.20.30.200:5199",
+        "recordedIn": "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI); the device identity is visible in every journal capture under tools/harness/runs/ (gitignored, local only); the adoption row itself lives in the Fleet Manager's SQLite database outside this repository",
+        "notWitnessed": "The self-update leg was not separately re-observed in that session. The update path is wired and running - the mule's journal shows repeated update checks against /agent/release/linux-arm64 - but they are failing right now because the dev Fleet Manager is not up, so a successful binary swap has not been watched."
+      }
+    },
+    {
+      "id": "M2",
+      "title": "Reconciler engine",
+      "doneWhen": "DAG, status vocabulary, retry/backoff, reboot-verified apply, escalation ladder, live telemetry, console and browser narration.",
+      "specRef": "version2.md section 5.1",
+      "state": "done",
+      "stateFrom": "witness",
+      "evidence": {
+        "how": "observed-on-hardware",
+        "what": "Nine resources converged on the mule and each was verified after a real reboot, not after a service restart. The console stage rendered on the physical DSI panel and read correctly. The nine are listed under resources.hardwareVerified.",
+        "whenUtc": "2026-08-15",
+        "where": "mule framelink@10.20.30.53, physical panel on card0-DSI-2",
+        "recordedIn": "git log (011cf3a reconciler engine, 28a5264 agent seams and honest console, 9eedf91 telemetry payloads, 6d77144 console stage); the panel was photographed by `fl.py collect` - see artifacts.lastCollection",
+        "notWitnessed": "Only those nine. Everything the catalog has gained since is code with tests and has never run on hardware - see resources.hardwareVerified versus resources.implemented."
+      }
+    },
+    {
+      "id": "M2.5",
+      "title": "Image generation",
+      "doneWhen": "A card flashed from a Fleet-Manager-generated image boots, starts the agent unattended, and appears in the adoption queue (section 3.9).",
+      "specRef": "version2.md section 5.1 and section 3.9",
+      "state": "in-progress",
+      "stateFrom": "witness",
+      "evidence": {
+        "how": "measured-against-the-real-base-image",
+        "what": "The generator is built (src/FrameLink.Control/Imaging) and its whole premise was measured against the real pinned 2026-06-18-raspios-trixie-arm64-lite.img in a plain debian:trixie-slim container with no --privileged, no --cap-add and no device mapping: debugfs writes the binary and sets mode and owner, debugfs symlink does what `systemctl enable` does, mcopy writes the boot-partition file, and `e2fsck -fn` calls the result clean. `mount -o loop` fails in that same container, which is what proves loopback was never involved.",
+        "whenUtc": "2026-08-15",
+        "where": "workstation, debian:trixie-slim container",
+        "recordedIn": "git log commit ba5a873 carries the full measurement and the debugfs-exits-0-on-failure finding; decision 52 supersedes 32 in version2.md Appendix A; the tests are tests/FrameLink.Tests/ControlImageGenerationTests.cs",
+        "notWitnessed": "The milestone's own acceptance test - flash a card, watch a row appear - has not happened and cannot yet: version2.md section 5.3 item 3 records that no SD card reader is attached. Nothing generated has been written to a card, booted, or seen in the adoption queue. This milestone is NOT done."
+      }
+    },
+    {
+      "id": "M3",
+      "title": "Resource migration",
+      "doneWhen": "Guide by guide, lowest-risk first, firmware DFU last. Each group passes the triple bar: state-diff vs the frozen v1 reference, checkpoint assertions, validation battery on the mule.",
+      "specRef": "version2.md section 5.1",
+      "state": "in-progress",
+      "stateFrom": "resources",
+      "evidence": {
+        "how": "derived-from-the-repository",
+        "what": "69 of 79 catalog resources are implemented in the agent; 9 of 79 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
+        "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. No state-diff harness exists yet."
+      }
+    },
+    {
+      "id": "Mn+1",
+      "title": "Bundled LiveKit",
+      "doneWhen": "Fleet Manager supervises LiveKit and mints tokens at adoption; guide 7 obsolete.",
+      "specRef": "version2.md section 5.1 and section 3.7",
+      "state": "not-started",
+      "stateFrom": "none"
+    },
+    {
+      "id": "Mn+2",
+      "title": "Production Fleet Manager",
+      "doneWhen": "Deployed as a PortainerCompose stack behind Traefik at framelink.huisman.io, with alerting.",
+      "specRef": "version2.md section 5.1 and section 3.8",
+      "state": "not-started",
+      "stateFrom": "none"
+    },
+    {
+      "id": "Mn+3",
+      "title": "Parity",
+      "doneWhen": "Stock image -> adopt -> fully green frame, mechanically equal to the frozen v1 reference. Deep, triple-checked verification. Only then do guides retire to the minimum set (section 8).",
+      "specRef": "version2.md section 5.1 and section 8",
+      "state": "not-started",
+      "stateFrom": "none"
+    }
+  ],
   "capabilities": {
     "build-path": {
       "title": "Native AOT linux-arm64 binary built in an emulated container",
       "state": "proven",
       "provenBy": "fl.py build",
-      "provenUtc": "2026-08-15T05:08:03Z",
+      "provenUtc": "2026-08-15T23:21:43Z",
       "provenCommand": "fl.py build",
-      "detail": "0.0.0+a273b31.dirty linux-arm64 7677712 bytes in framelink-build:arm64"
+      "detail": "0.0.0+2f43094.dirty linux-arm64 10131568 bytes in framelink-build:arm64"
     },
     "test-runner": {
       "title": "Test suite runs and propagates its exit code",
       "state": "proven",
       "provenBy": "fl.py test",
-      "provenUtc": "2026-08-15T04:22:40Z",
+      "provenUtc": "2026-08-15T23:32:01Z",
       "provenCommand": "fl.py test",
-      "detail": "tests/FrameLink.Tests (Debug) produced a verdict and exit 5 was propagated",
-      "currentlyUnrunnable": "exit 1: tests/FrameLink.Tests does not compile - C:\\Program Files\\dotnet\\sdk\\10.0.302\\Microsoft.Common.CurrentVersion.targets(5096,5): error MSB3027: Could not copy \"C:\\Source\\SixFive7\\FrameLink\\src\\FrameLink.Agent\\bin\\Debug\\net10.0\\fl-agent.dll\" to \"bin\\Debug\\net10.0\\"
+      "detail": "tests/FrameLink.Tests (Debug) exit 0 - succeeded: 857"
     },
     "progress-file": {
       "title": "Progress is written to disk continuously and survives a dead session",
@@ -39,81 +170,160 @@
     },
     "deploy": {
       "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
-      "state": "unproven",
-      "provenBy": null,
-      "provenUtc": null,
+      "state": "proven",
+      "provenBy": "fl.py deploy",
+      "provenUtc": "2026-08-15T23:22:15Z",
       "provenCommand": "fl.py deploy",
-      "detail": null
+      "detail": "0.0.0+2f43094.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
     },
     "power-cycle": {
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
-      "state": "unproven",
-      "provenBy": null,
-      "provenUtc": null,
+      "state": "proven",
+      "provenBy": "fl.py power",
+      "provenUtc": "2026-08-15T13:27:38Z",
       "provenCommand": "fl.py power",
-      "detail": null
+      "detail": "cycle: 2 relay operation(s), wrong-entity guard passed"
     },
     "collect": {
       "title": "Screenshot and journal tail come back from the mule",
-      "state": "unproven",
-      "provenBy": null,
-      "provenUtc": null,
+      "state": "proven",
+      "provenBy": "fl.py collect",
+      "provenUtc": "2026-08-15T19:14:48Z",
       "provenCommand": "fl.py collect",
-      "detail": null
+      "detail": "screenshot via framebuffer, journal 200 lines"
     },
     "closed-loop": {
       "title": "A code change reaches the mule and is verified with no human help (M0 done)",
-      "state": "unproven",
-      "provenBy": null,
-      "provenUtc": null,
+      "state": "proven",
+      "provenBy": "fl.py build + fl.py deploy",
+      "provenUtc": "2026-08-15T23:22:15Z",
       "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
-      "detail": null
+      "detail": "fl-agent 0.0.0+2f43094.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
+    }
+  },
+  "resources": {
+    "catalogTotal": 79,
+    "catalogTotalReadFrom": "reference/resource-catalog.md",
+    "implemented": 69,
+    "implementedReadFrom": "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
+    "remaining": 10,
+    "hardwareVerifiedCount": 9,
+    "hardwareVerified": [
+      "boot.config.dtoverlay-waveshare-panel",
+      "boot.cmdline.fbcon-rotate",
+      "journal.storage-persistent",
+      "agent.adoption",
+      "agent.device-name",
+      "identity.hostname",
+      "unit.cpu-performance.content",
+      "unit.cpu-performance.enabled",
+      "cpu.governor.performance"
+    ],
+    "meaning": {
+      "implemented": "The resource exists in the agent's catalog with tests. It has never necessarily run on a frame.",
+      "hardwareVerified": "The resource converged on the mule and was verified after a real reboot. Only the M2 nine have ever done this."
+    },
+    "gap": "The first full provision of the whole catalog on hardware has not happened. That is the largest single unknown in the build: every resource beyond the nine is code that has never met a real device."
+  },
+  "orientation": {
+    "specification": "version2.md - the build specification. Section 5.1 is the milestone ladder mirrored below, section 5.5 is why this file exists, Appendix A preserves every decision with its reasoning.",
+    "resourceSpec": "reference/resource-catalog.md - the enumeration of all 79 device settings extracted from build guides 3-12, one block per resource with its Observe, Act and Verify. This is what M3 is migrating, and it is the spec each new resource is written against.",
+    "parityTarget": "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, config contents and hashes, mixer values, firmware versions. This is what Mn+3 measures 'at parity' against, and the catalog's cross-check.",
+    "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",
+    "repoRules": "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
+    "harness": "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does and what it refuses to do; flh/config.py holds every host, path and default in one place.",
+    "openItems": "TODO.md is v1's outstanding work and is gitignored; version2.md Appendix B holds v2's open items."
+  },
+  "environment": {
+    "mule": {
+      "address": "framelink@10.20.30.53",
+      "what": "The development mule: the existing frame, repurposed. Raspberry Pi 5, Raspberry Pi OS Lite (Trixie), 800x1280 DSI panel on card0-DSI-2, on a controllable smart plug.",
+      "agentUnit": "fl-agent.service, running as root, binary at /usr/local/bin/fl-agent",
+      "override": "FL_HOST / FL_USER"
+    },
+    "fleetManager": {
+      "address": "http://10.20.30.200:5199",
+      "what": "The dev Fleet Manager, run on the workstation from src/FrameLink.Control. The mule's agent is pointed here and retries forever while it is down, which is why a journal capture taken with the server stopped is a wall of connection warnings rather than a fault.",
+      "startedBy": "dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199, with FRAMELINK_OPERATOR_PASSWORD set and FRAMELINK_DATA_DIR pointing at the operator data directory outside this repository.",
+      "agentPointedBy": "--control-url on `fl-agent install`, or the FL_CONTROL_URL variable"
+    },
+    "homeAssistant": {
+      "address": "http://10.20.30.250:8123",
+      "entity": "switch.wall_plug_25",
+      "what": "Switches the mule's power for `fl.py power`. Port 8123 was verified against the live instance; 8086 on the same host is a different service that answers 404 for every path, which once read exactly like 'that entity does not exist'.",
+      "override": "FL_HA_URL / FL_HA_ENTITY"
+    },
+    "credentials": [
+      {
+        "variable": "FL_PW",
+        "unlocks": "fl.py deploy, fl.py collect - and it is also the answer to sudo on the mule",
+        "howToObtain": "Ask the user. Supplied inline per session; there is deliberately no key-based fallback."
+      },
+      {
+        "variable": "FL_HA_TOKEN",
+        "unlocks": "fl.py power",
+        "howToObtain": "A long-lived access token from the Home Assistant profile page at http://10.20.30.250:8123"
+      },
+      {
+        "variable": "FRAMELINK_OPERATOR_PASSWORD",
+        "unlocks": "the Fleet Manager GUI - the single operator credential of version2.md section 3.2",
+        "howToObtain": "Ask the user. An instance started without it still runs and serves a setup page naming the variable, and answers connecting frames 'not-configured'."
+      }
+    ],
+    "credentialRule": "CLAUDE.md section 1.2, absolute: supplied in-session by environment variable only. Never a file, a log, a shell history, a config, a keychain or a default. Never echoed, never summarised back, never written into this file.",
+    "measurements": {
+      "rebootToSshReadySeconds": 22.3,
+      "rebootMeasurement": "Measured twice on the mule 2026-08-15 with loss of tcp/22 confirmed in between. Every wait ceiling in the harness is a margin over this number, not an estimate of it - power.on(wait_s=120) is roughly five boots.",
+      "eepromPowerOffOnHalt": "POWER_OFF_ON_HALT=1 is set in this Pi's EEPROM, so `halt` genuinely cuts power. A silent frame on a live relay has three explanations, not two: booting, hung, or halted and drawing nothing."
     }
   },
   "artifacts": {
     "agentBinary": {
       "path": "build/out/fl-agent",
-      "version": "0.0.0+a273b31.dirty",
+      "version": "0.0.0+2f43094.dirty",
       "runtimeIdentifier": "linux-arm64",
-      "sha256": "4d8f83ebaf97261a01c0053bf220846799afe9530cdb93f26ee24506465adc19",
-      "sizeBytes": 7677712,
+      "sha256": "ece680d8440954a0a265b2eb4bb769a0babad1d96608d9deb7119192f22f051e",
+      "sizeBytes": 10131568,
       "image": "framelink-build:arm64",
-      "builtUtc": "2026-08-15T05:08:03Z"
+      "builtUtc": "2026-08-15T23:21:43Z"
     },
-    "deployed": null,
-    "lastCollection": null
+    "deployed": {
+      "host": "10.20.30.53",
+      "binary": "/usr/local/bin/fl-agent",
+      "version": "0.0.0+2f43094.dirty",
+      "sha256": "ece680d8440954a0a265b2eb4bb769a0babad1d96608d9deb7119192f22f051e",
+      "isActive": "active",
+      "isEnabled": "enabled",
+      "sudoMode": "sudo -S (password on stdin)",
+      "deployedUtc": "2026-08-15T23:22:15Z"
+    },
+    "lastCollection": {
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260815T191447Z-collect",
+      "capturedUtc": "2026-08-15T19:14:48Z",
+      "screenshot": {
+        "method": "framebuffer",
+        "bytes": 16825,
+        "geometry": "800x1280",
+        "bitsPerPixel": 32,
+        "stride": 3200,
+        "pixelFormat": "bgrx",
+        "rotate": 0,
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T191447Z-collect\\screenshot.png"
+      },
+      "journal": {
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T191447Z-collect\\journal-fl-agent.service.txt",
+        "unit": "fl-agent.service",
+        "lines": 200
+      }
+    }
   },
   "counters": {
-    "builds": 2,
-    "deploys": 0,
-    "testRuns": 11,
-    "collections": 0,
-    "relayOperations": 0
+    "builds": 6,
+    "deploys": 4,
+    "testRuns": 13,
+    "collections": 4,
+    "relayOperations": 2
   },
-  "blockers": [
-    {
-      "id": "test-suite-red",
-      "what": "tests/FrameLink.Tests does not compile: C:\\Program Files\\dotnet\\sdk\\10.0.302\\Microsoft.Common.CurrentVersion.targets(5096,5): error MSB3027: Could not copy \"C:\\Source\\SixFive7\\FrameLink\\src\\FrameLink.Agent\\bin\\Debug\\net10.0\\fl-agent.dll\" to \"bin\\Debug\\net10.0\\",
-      "needs": "Fix the compile errors; until then no test result exists at all.",
-      "since": "2026-08-15T04:32:22Z"
-    },
-    {
-      "id": "fl-pw-unset",
-      "what": "FL_PW is not set, so no command can reach the mule.",
-      "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-15T04:32:30Z"
-    },
-    {
-      "id": "ha-token-unset",
-      "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
-      "needs": "Create a long-lived access token at http://10.20.30.250:8086 and pass it as FL_HA_TOKEN.",
-      "since": "2026-08-15T04:32:30Z"
-    }
-  ],
-  "nextActions": [
-    "Set FL_PW for this session to unlock deploy / collect",
-    "Set FL_HA_TOKEN to unlock power control"
-  ],
   "log": [
     {
       "utc": "2026-08-15T03:49:38Z",
@@ -257,6 +467,104 @@
       "command": "build",
       "ok": true,
       "summary": "0.0.0+a273b31.dirty 7677712B 4d8f83ebaf97"
+    },
+    {
+      "utc": "2026-08-15T06:37:47Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+a273b31.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-15T06:38:04Z",
+      "command": "collect",
+      "ok": false,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T063804Z-collect"
+    },
+    {
+      "utc": "2026-08-15T12:45:01Z",
+      "command": "power",
+      "ok": false,
+      "summary": "Home Assistant returned HTTP 404 for GET /api/states/switch.wall_plug_25: Not Found"
+    },
+    {
+      "utc": "2026-08-15T13:14:06Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+4d1dfdd.dirty 8278840B 69bc35a8d41e"
+    },
+    {
+      "utc": "2026-08-15T13:14:47Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+4d1dfdd.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-15T13:20:20Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T132019Z-collect"
+    },
+    {
+      "utc": "2026-08-15T13:27:38Z",
+      "command": "power",
+      "ok": true,
+      "summary": "cycle - {'action': 'cycle', 'relayOperations': 2, 'offSeconds': 10.0, 'aliveAfterSeconds': 20.7}"
+    },
+    {
+      "utc": "2026-08-15T13:27:54Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T132753Z-collect"
+    },
+    {
+      "utc": "2026-08-15T13:36:30Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+6d77144.dirty 8278888B 11090f9a54f5"
+    },
+    {
+      "utc": "2026-08-15T19:14:14Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+11a4216.dirty 8344992B 5c142c44d435"
+    },
+    {
+      "utc": "2026-08-15T19:14:35Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+11a4216.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-15T19:14:48Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T191447Z-collect"
+    },
+    {
+      "utc": "2026-08-15T23:21:43Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+2f43094.dirty 10131568B ece680d84409"
+    },
+    {
+      "utc": "2026-08-15T23:22:15Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+2f43094.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-15T23:31:31Z",
+      "command": "test",
+      "ok": false,
+      "summary": "succeeded: 856",
+      "exitCode": 2
+    },
+    {
+      "utc": "2026-08-15T23:32:01Z",
+      "command": "test",
+      "ok": true,
+      "summary": "succeeded: 857",
+      "exitCode": 0
     }
   ]
 }
