@@ -12,10 +12,16 @@
       §7.2 "Analyzers run at error severity and are never weakened to make code pass."
            TreatWarningsAsErrors makes every analyser diagnostic build-breaking.
            AnalysisLevel is 'latest-recommended' rather than 'latest-all' deliberately:
-           the -all set turns on micro-performance rules (CA1848 logger delegates,
-           CA1861 constant arrays) whose only realistic resolution in a codebase this
-           size is bulk suppression — and bulk suppression IS weakening. Recommended
-           at error severity is the honest reading of the rule.
+           the -all set adds rules whose only realistic resolution at this size is bulk
+           suppression, and bulk suppression IS the weakening §7.2 forbids.
+
+           What 'latest-recommended' does NOT do is spare this codebase the
+           micro-performance rules. CA1848 (use LoggerMessage delegates) is in the
+           recommended set and fired at error severity across the Fleet Manager, and the
+           resolution was to move every call site to source-generated [LoggerMessage] —
+           see ControlLog.cs, which also picks up CA1873 on the boxed-argument overload.
+           That is the outcome §7.2 wants: the rule was satisfied, not silenced. Anything
+           later reading this as "recommended avoids the fiddly rules" will be wrong.
   -->
 
   <PropertyGroup>
@@ -24,6 +30,28 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    §2.8's updater MATCHES the served version string against the one the binary reports; it
+    never compares them. That makes an informational version a wire value, and the SDK must
+    not decorate it.
+
+    By default the SDK appends '.$(SourceRevisionId)' to InformationalVersion even when the
+    build sets that property explicitly, so a release published as 0.0.0+a273b31 reports
+    itself as 0.0.0+a273b31.<40-char-sha>. Those can never be equal, so every frame downloads
+    the binary it is already running, swaps it, restarts, and does it again an hour later —
+    fleet wide, forever, presenting only as "the frames restart every hour".
+
+    Repo-wide rather than in the agent project, and that placement is the fix rather than
+    tidiness. build.sh passes -p:InformationalVersion, which is a GLOBAL property and therefore
+    reaches every project in the graph. With the opt-out set only on FrameLink.Agent,
+    FrameLink.Protocol was still stamped with the decorated string and — being linked into the
+    single AOT binary — carried it into the shipped ELF. The agent's own attribute happened to
+    be right, but the value was one project away from being wrong with nothing to say so.
+  -->
+  <PropertyGroup>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -53,8 +81,32 @@
     <Product>FrameLink</Product>
     <Company>FrameLink</Company>
     <Copyright>Copyright (c) Jori Huisman</Copyright>
-    <!-- Bespoke five-year FSL variant (§7.3). Never the bare FSL-1.1-MIT identifier. -->
-    <PackageLicenseExpression>LicenseRef-FrameLink-FSL-1.1-MIT-5yr</PackageLicenseExpression>
+
+    <!--
+      Bespoke five-year FSL variant (§7.3). Never the bare FSL-1.1-MIT identifier.
+
+      It has to be PackageLicenseFile, not PackageLicenseExpression. NuGet documents
+      PackageLicenseExpression as taking "an SPDX license identifier or expression", and
+      PackageLicenseFile as the property "if you're using a custom license or a license
+      that hasn't been assigned an SPDX identifier" — which is exactly what
+      LicenseRef-FrameLink-FSL-1.1-MIT-5yr is. Putting the LicenseRef in the expression
+      property is not merely untidy: pack fails it as NU5124 "the license identifier is
+      not recognized by the current toolset", and with TreatWarningsAsErrors on that is a
+      build break the moment anything is packed.
+    -->
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
   </PropertyGroup>
+
+  <!--
+    PackageLicenseFile only names the path inside the package; the file still has to be
+    put there. The explicit item is doubly required here because LICENSE has no
+    extension, and NuGet/MSBuild treat an extensionless path as a directory — the
+    "packing a file without an extension" case, whose documented remedy is precisely this
+    None item. MSBuildThisFileDirectory anchors it to the repository root rather than to
+    each project's own directory.
+  -->
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)LICENSE" Pack="true" PackagePath="" Visible="false" />
+  </ItemGroup>
 
 </Project>
