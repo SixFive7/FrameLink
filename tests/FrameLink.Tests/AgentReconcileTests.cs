@@ -95,7 +95,7 @@ public sealed class AgentReconcileTests
     {
         using var files = new TemporaryStore();
         using var loop = new ReconcileHarness(
-            new AdoptionResource(files.Store, () => true),
+            new AdoptionResource(files.Store, () => ServerAnswer.Adopted),
             new DeviceNameResource(files.Store, () => "Hallway"));
 
         var outcome = await loop.ConvergeAsync();
@@ -111,7 +111,7 @@ public sealed class AgentReconcileTests
         var desired = "Hallway";
         using var files = new TemporaryStore();
         using var loop = new ReconcileHarness(
-            new AdoptionResource(files.Store, () => true),
+            new AdoptionResource(files.Store, () => ServerAnswer.Adopted),
             new DeviceNameResource(files.Store, () => desired));
 
         await loop.ConvergeAsync();
@@ -130,7 +130,7 @@ public sealed class AgentReconcileTests
     {
         using var files = new TemporaryStore();
         using var loop = new ReconcileHarness(
-            new AdoptionResource(files.Store, () => true),
+            new AdoptionResource(files.Store, () => ServerAnswer.Adopted),
             new DeviceNameResource(files.Store, () => "Hallway"));
 
         await loop.ConvergeAsync();
@@ -147,10 +147,13 @@ public sealed class AgentReconcileTests
     {
         // A frame adopted without a display name would otherwise be permanently "drifted", which
         // under §2.6 means permanently not green — for a field the operator simply left blank.
+        // The empty string is that blank field, and it is an answer: the Fleet Manager said this
+        // frame has no name. Null would mean it has not said anything, which is a different
+        // outcome entirely and is asserted in AgentServerSilenceTests.
         using var files = new TemporaryStore();
         using var loop = new ReconcileHarness(
-            new AdoptionResource(files.Store, () => true),
-            new DeviceNameResource(files.Store, () => null));
+            new AdoptionResource(files.Store, () => ServerAnswer.Adopted),
+            new DeviceNameResource(files.Store, () => string.Empty));
 
         await loop.ConvergeAsync();
         var second = await loop.PassAsync();

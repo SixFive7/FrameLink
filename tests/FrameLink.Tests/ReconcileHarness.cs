@@ -209,6 +209,15 @@ internal sealed class ScriptedResource : IResource
     /// <summary>When true, the value is put back at the next boot — cloud-init's shape.</summary>
     public bool RevertedAtBoot { get; set; }
 
+    /// <summary>
+    /// When true, Observe cannot see anything at all — the Fleet Manager's shape (§2.6).
+    /// </summary>
+    /// <remarks>
+    /// Distinct from a wrong observed value on purpose. This is the third outcome, and the loop
+    /// has to treat it as neither success nor failure: no attempt spent, no reboot, no escalation.
+    /// </remarks>
+    public bool Unevaluable { get; set; }
+
     public int Observations { get; private set; }
 
     public int Acts { get; private set; }
@@ -216,6 +225,14 @@ internal sealed class ScriptedResource : IResource
     public ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
         Observations++;
+
+        if (Unevaluable)
+        {
+            return ValueTask.FromResult(ResourceObservation.Unevaluable(
+                _desired,
+                "the Fleet Manager has not answered"));
+        }
+
         return ValueTask.FromResult(new ResourceObservation(
             string.Equals(_desired, _observed, StringComparison.Ordinal),
             _desired,

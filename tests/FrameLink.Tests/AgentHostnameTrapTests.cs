@@ -129,7 +129,7 @@ public sealed class AgentHostnameTrapTests
 
         using var harness = new ReconcileHarness(
             Fast,
-            new AdoptionResource(files.Store, () => true),
+            new AdoptionResource(files.Store, () => ServerAnswer.Adopted),
             Resource(files, cloudInit));
 
         harness.Boundary.OnBoot = (_, _) =>

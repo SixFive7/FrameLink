@@ -204,7 +204,7 @@ public sealed class AgentRealResourceTests
         // §3.3: a pending device receives nothing, and that has to include the record that says
         // it received something.
         using var files = new TemporaryFiles();
-        using var harness = new ReconcileHarness(Fast, new AdoptionResource(files.Store, () => false));
+        using var harness = new ReconcileHarness(Fast, new AdoptionResource(files.Store, () => ServerAnswer.Rejected));
 
         var outcome = await harness.ConvergeAsync();
         var status = ReconcileHarness.StatusOf(outcome, AdoptionResource.ResourceName);
@@ -221,7 +221,7 @@ public sealed class AgentRealResourceTests
 
         using var harness = new ReconcileHarness(
             Fast,
-            new AdoptionResource(files.Store, () => false),
+            new AdoptionResource(files.Store, () => ServerAnswer.Rejected),
             new HostnameResource(files.Files, processes, HostnameValues("framelink-douwe")));
 
         var outcome = await harness.ConvergeAsync();

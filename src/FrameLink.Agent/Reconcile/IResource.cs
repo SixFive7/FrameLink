@@ -34,14 +34,87 @@ public enum ResourceStatusKind
     Halted,
 }
 
+/// <summary>
+/// How an Observe ended. <b>Three outcomes, not two.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// §2.6: <b>rejection is an answer; silence is not</b>. A resource whose desired or observed
+/// value can only be learned from the Fleet Manager has a third possible outcome that a boolean
+/// cannot hold — <i>I could not determine the observed value</i> — and collapsing it into
+/// "observed something wrong" is what produces a false diagnosis. The agent said "did not
+/// survive the reboot" of a frame that was adopted the whole time and simply could not ask, and
+/// then spent its attempt budget, its escalations and four reboots in twelve minutes proving it.
+/// </para>
+/// <para>
+/// The distinction lives here rather than in any one resource because the reason it exists is
+/// not about adoption: it belongs to every resource that consults something off the device.
+/// </para>
+/// </remarks>
+public enum ObservationOutcome
+{
+    /// <summary>Observed equals desired.</summary>
+    InSync,
+
+    /// <summary>Observed was read, and it is not what it should be. This is drift.</summary>
+    Drifted,
+
+    /// <summary>
+    /// The observed value could not be determined at all, so nothing may be concluded.
+    /// </summary>
+    /// <remarks>
+    /// <b>Reserved for an authority that did not answer</b> — the Fleet Manager being
+    /// unreachable is the whole of it today. It is <i>not</i> for a local read that failed: an
+    /// Observe that cannot read a file or a sysfs node has learned something real about this
+    /// machine, and <see cref="ReconcileLoop"/> turns even a thrown exception into
+    /// <see cref="Drifted"/> for exactly that reason. A resource that genuinely cannot be applied
+    /// must still escalate on the ordinary schedule, and this outcome must never become the place
+    /// a real failure goes to be quiet.
+    /// </remarks>
+    Unevaluable,
+}
+
 /// <summary>What a single Observe found.</summary>
 /// <param name="InSync">Whether observed equals desired.</param>
 /// <param name="Expected">The desired value, as a person would read it.</param>
 /// <param name="Observed">What is actually there.</param>
+/// <remarks>
+/// The positional constructor covers the two ordinary outcomes; <see cref="Unevaluable"/> is the
+/// third. <see cref="InSync"/> stays <see langword="false"/> for an unevaluable observation on
+/// purpose: anything that reads the flag and ignores <see cref="Outcome"/> then behaves as it did
+/// before this type grew a third state — it treats the resource as drifted, which is noisy and
+/// wrong but never silent. Failing towards a visible escalation is the safe direction to be wrong
+/// in.
+/// </remarks>
 public sealed record ResourceObservation(bool InSync, string Expected, string Observed)
 {
+    /// <summary>Which of the three outcomes this is.</summary>
+    public ObservationOutcome Outcome { get; private init; } =
+        InSync ? ObservationOutcome.InSync : ObservationOutcome.Drifted;
+
     /// <summary>Expected-versus-observed in the one form §2.5 requires everywhere.</summary>
-    public string Delta => $"expected '{Expected}', observed '{Observed}'";
+    /// <remarks>
+    /// An unevaluable observation gets its own wording, and that wording is half the fix. This
+    /// string is what reaches the log, the frame's screen and the Fleet Manager's device row, and
+    /// the <i>observed</i> form of it — "expected 'adopted', observed 'waiting for adoption'" —
+    /// asserts that a value was read and was wrong. Said of a frame that could not ask, it is the
+    /// sentence that sends an operator hunting a persistence bug that does not exist.
+    /// </remarks>
+    public string Delta => Outcome is ObservationOutcome.Unevaluable
+        ? $"expected '{Expected}', could not be determined: {Observed}"
+        : $"expected '{Expected}', observed '{Observed}'";
+
+    /// <summary>
+    /// An observation that could not be made, because the authority that owns the value said
+    /// nothing.
+    /// </summary>
+    /// <param name="expected">The desired value, as a person would read it.</param>
+    /// <param name="why">
+    /// Why it could not be determined, in plain language. It stands where the observed value
+    /// would have gone, because there is no observed value — that is the point.
+    /// </param>
+    public static ResourceObservation Unevaluable(string expected, string why) =>
+        new(false, expected, why) { Outcome = ObservationOutcome.Unevaluable };
 }
 
 /// <summary>

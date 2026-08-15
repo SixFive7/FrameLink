@@ -33,8 +33,15 @@ public sealed record DeviceCatalogContext
     /// <summary>The Fleet Manager's effective settings (§3.4).</summary>
     public FleetValues Values { get; init; } = FleetValues.None;
 
-    /// <summary>Whether the last authoritative handshake answered <c>ok</c>.</summary>
-    public Func<bool> Adopted { get; init; } = () => false;
+    /// <summary>
+    /// What the Fleet Manager last actually said — including whether it said anything (§2.6).
+    /// </summary>
+    /// <remarks>
+    /// The default is <see cref="ServerAnswer.Silence"/> and not "not adopted", which is the
+    /// whole distinction: a catalog built before anything has answered knows nothing about this
+    /// frame's adoption, and must not act as though it had been told.
+    /// </remarks>
+    public Func<ServerAnswer> FleetAnswer { get; init; } = () => ServerAnswer.Silence;
 
     /// <summary>The name to keep when the Fleet Manager has not set one.</summary>
     public string? FallbackHostname { get; init; }
@@ -93,7 +100,7 @@ public static class DeviceCatalog
             new JournalStorageResource(context.Files, context.Values),
 
             // The root of everything the Fleet Manager supplies a value for (decision 34).
-            new AdoptionResource(context.Store, context.Adopted),
+            new AdoptionResource(context.Store, context.FleetAnswer),
             new DeviceNameResource(context.Store, context.DesiredDeviceName),
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 

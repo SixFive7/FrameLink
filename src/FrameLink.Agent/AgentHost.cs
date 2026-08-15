@@ -55,8 +55,19 @@ public sealed class AgentHost
     /// </summary>
     private IReadOnlyDictionary<string, string> _settings = new Dictionary<string, string>(StringComparer.Ordinal);
 
-    /// <summary>Whether the last <i>authoritative</i> answer was <c>ok</c> (§2.6, §3.3).</summary>
-    private volatile bool _adopted;
+    /// <summary>
+    /// What the Fleet Manager last <i>authoritatively</i> said, or that it has said nothing
+    /// (§2.6, §3.3).
+    /// </summary>
+    /// <remarks>
+    /// It starts at <see cref="ServerAnswer.Silence"/> on every process start and never returns
+    /// there. A completed handshake is knowledge this process keeps: §2.6 has the last
+    /// authoritative answer standing through an outage, so a link that drops after an <c>ok</c>
+    /// leaves the frame adopted rather than unknown. What resets it is a reboot, and that is
+    /// exactly right — a frame that comes back up while its server is down genuinely does not
+    /// know anything yet, and the resources that need an answer say so instead of guessing.
+    /// </remarks>
+    private volatile ServerAnswer _fleetAnswer;
 
     /// <summary>Creates a host for the given command line.</summary>
     public AgentHost(IReadOnlyList<string> arguments, IAgentLog log, IAgentClock? clock = null)
@@ -154,7 +165,7 @@ public sealed class AgentHost
                 Clock = _clock,
                 Log = _log,
                 Values = new FleetValues(key => Volatile.Read(ref _settings).GetValueOrDefault(key)),
-                Adopted = () => _adopted,
+                FleetAnswer = () => _fleetAnswer,
                 DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
             }),
             Journal = new ReconcileJournal(store, _log),
@@ -298,11 +309,14 @@ public sealed class AgentHost
             // §3.3: a pending device receives nothing — no configuration, no token, no commands.
             // The reconciler keeps running regardless; its adoption resource simply observes
             // that this frame is not adopted and blocks everything that needs an issued value.
-            _adopted = false;
+            // This branch is reached only because the server answered, which is what makes it a
+            // rejection rather than silence — the two are different states here, and the only
+            // way into either of them is a completed handshake.
+            _fleetAnswer = ServerAnswer.Rejected;
             return;
         }
 
-        _adopted = true;
+        _fleetAnswer = ServerAnswer.Adopted;
         Volatile.Write(ref _desiredDeviceName, verdict.DeviceName ?? string.Empty);
 
         // §4.1: buffered telemetry drains on reconnect. Done here rather than in the loop

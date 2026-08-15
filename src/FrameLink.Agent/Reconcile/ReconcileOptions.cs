@@ -77,6 +77,27 @@ public sealed record ReconcileOptions
     /// </remarks>
     public TimeSpan PassInterval { get; init; } = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// How long the loop waits before asking again about a resource whose observation could not
+    /// be made (<see cref="ObservationOutcome.Unevaluable"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Not a backoff.</b> Nothing is being retried and nothing is wearing out — no command
+    /// runs, nothing is written, nothing reboots — so §2.4's argument for a growing delay does
+    /// not apply and a flat interval is the honest shape. What it costs per tick is a file read
+    /// and a delegate call.
+    /// </para>
+    /// <para>
+    /// Thirty seconds because it is measured against the reconnect schedule it is waiting on:
+    /// <see cref="Link.Backoff.DefaultCap"/> is thirty seconds, so a frame whose server comes back
+    /// learns of it within one link attempt and one recheck rather than sitting out a
+    /// five-minute drift sweep. On a bare frame that difference is per boot, and there are 79 of
+    /// those.
+    /// </para>
+    /// </remarks>
+    public TimeSpan UnevaluableRecheck { get; init; } = TimeSpan.FromSeconds(30);
+
     /// <summary>The per-resource retry schedule these options describe.</summary>
     public Backoff RetrySchedule() => new(InitialBackoff, BackoffCap);
 }

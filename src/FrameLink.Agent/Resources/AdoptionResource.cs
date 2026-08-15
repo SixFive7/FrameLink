@@ -21,6 +21,16 @@ namespace FrameLink.Agent.Resources;
 /// green when contact dropped — the file simply stays where it is, which is the whole reason the
 /// answer is persisted rather than held in memory.
 /// </para>
+/// <para>
+/// <b>And silence is not a failed observation either.</b> A frame with no <c>adopted</c> record
+/// and no answer does not know whether it is adopted, so it says so: the observation is
+/// <see cref="ResourceObservation.Unevaluable"/>, the loop leaves the attempt budget alone, and
+/// nothing reboots. Measured on the mule with the Fleet Manager deliberately stopped, the
+/// previous two-state reading produced <i>"did not survive the reboot — expected 'adopted',
+/// observed 'waiting for adoption'"</i> on a frame that was adopted throughout, burned three of
+/// five attempts on a server outage, and would have reached device-wide <c>Halted</c> given a
+/// long enough one. Rebooting cannot make an unreachable server reachable.
+/// </para>
 /// </remarks>
 public sealed class AdoptionResource : IResource
 {
@@ -34,22 +44,23 @@ public sealed class AdoptionResource : IResource
     public const string AdoptedMarker = "adopted";
 
     private readonly IStateStore _store;
-    private readonly Func<bool> _authoritativelyAdopted;
+    private readonly Func<ServerAnswer> _answer;
 
     /// <summary>Creates the resource.</summary>
     /// <param name="store">Where the record lives (§2.1, §3.3).</param>
-    /// <param name="authoritativelyAdopted">
-    /// Whether the last answer the Fleet Manager actually gave was <c>ok</c>. Read at
-    /// observation time rather than captured, so a frame blocked while it is running notices on
-    /// the next pass.
+    /// <param name="answer">
+    /// What the Fleet Manager last actually said — including whether it said anything at all.
+    /// Read at observation time rather than captured, so a frame blocked while it is running
+    /// notices on the next pass, and a frame whose server comes back mid-outage converges on the
+    /// pass after it answers.
     /// </param>
-    public AdoptionResource(IStateStore store, Func<bool> authoritativelyAdopted)
+    public AdoptionResource(IStateStore store, Func<ServerAnswer> answer)
     {
         ArgumentNullException.ThrowIfNull(store);
-        ArgumentNullException.ThrowIfNull(authoritativelyAdopted);
+        ArgumentNullException.ThrowIfNull(answer);
 
         _store = store;
-        _authoritativelyAdopted = authoritativelyAdopted;
+        _answer = answer;
     }
 
     /// <inheritdoc/>
@@ -67,12 +78,31 @@ public sealed class AdoptionResource : IResource
         cancellationToken.ThrowIfCancellationRequested();
 
         var recorded = _store.ReadText(FileName)?.Trim() ?? string.Empty;
-        var adopted = string.Equals(recorded, AdoptedMarker, StringComparison.Ordinal);
+        var onRecord = string.Equals(recorded, AdoptedMarker, StringComparison.Ordinal);
+        var answer = _answer();
+
+        if (answer is ServerAnswer.Silence)
+        {
+            // The persisted record is the last authoritative answer, so when it says adopted the
+            // frame stands on it and stays green through the outage — that is §2.6's "a frame
+            // that was green when contact dropped keeps running", and it is why the answer is
+            // written to disk at all. Anything else is genuinely unknown: this frame may have
+            // been adopted a minute ago and cannot ask.
+            return ValueTask.FromResult(onRecord
+                ? new ResourceObservation(true, AdoptedMarker, recorded)
+                : ResourceObservation.Unevaluable(
+                    AdoptedMarker,
+                    "the Fleet Manager has not answered, so whether this frame is adopted is not known"));
+        }
+
+        var observed = answer is ServerAnswer.Rejected && onRecord
+            ? "adopted here, but the Fleet Manager says otherwise"
+            : recorded.Length == 0 ? "no adoption record" : recorded;
 
         return ValueTask.FromResult(new ResourceObservation(
-            adopted,
+            answer is ServerAnswer.Adopted && onRecord,
             AdoptedMarker,
-            recorded.Length == 0 ? "no adoption record" : recorded));
+            observed));
     }
 
     /// <inheritdoc/>
@@ -80,23 +110,34 @@ public sealed class AdoptionResource : IResource
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (!_authoritativelyAdopted())
+        switch (_answer())
         {
-            // The agent cannot adopt itself, and pretending otherwise would write a record that
-            // §3.3 says a pending device may not hold. Writing what is actually true is the
-            // honest Act: it fails verification, the resource retries and escalates, and the
-            // frame's screen keeps saying "adopt me" throughout.
-            _store.WriteText(FileName, "waiting for adoption");
+            case ServerAnswer.Adopted:
+                _store.WriteText(FileName, AdoptedMarker);
 
-            return ValueTask.FromResult(new ResourceAction(
-                $"record 'waiting for adoption' in {_store.PathOf(FileName)}",
-                "Waiting for someone to press Adopt in the Fleet Manager. Nothing on this frame can be set up until then."));
+                return ValueTask.FromResult(new ResourceAction(
+                    $"record '{AdoptedMarker}' in {_store.PathOf(FileName)}",
+                    "Remembering that this frame has been adopted, so it still knows that if the Fleet Manager goes away."));
+
+            case ServerAnswer.Rejected:
+                // The agent cannot adopt itself, and pretending otherwise would write a record
+                // that §3.3 says a pending device may not hold. Writing what is actually true is
+                // the honest Act: it fails verification, the resource retries and escalates, and
+                // the frame's screen keeps saying "adopt me" throughout.
+                _store.WriteText(FileName, "waiting for adoption");
+
+                return ValueTask.FromResult(new ResourceAction(
+                    $"record 'waiting for adoption' in {_store.PathOf(FileName)}",
+                    "Waiting for someone to press Adopt in the Fleet Manager. Nothing on this frame can be set up until then."));
+
+            default:
+                // Unreachable through the loop, which never acts on an unevaluable observation.
+                // It is written out anyway because the one thing that must not happen here is
+                // overwriting a good record on the strength of silence — which is precisely the
+                // way this resource used to destroy its own adoption during an outage.
+                return ValueTask.FromResult(new ResourceAction(
+                    $"nothing was written to {_store.PathOf(FileName)}",
+                    "Waiting for the Fleet Manager to answer before deciding anything about this frame."));
         }
-
-        _store.WriteText(FileName, AdoptedMarker);
-
-        return ValueTask.FromResult(new ResourceAction(
-            $"record '{AdoptedMarker}' in {_store.PathOf(FileName)}",
-            "Remembering that this frame has been adopted, so it still knows that if the Fleet Manager goes away."));
     }
 }

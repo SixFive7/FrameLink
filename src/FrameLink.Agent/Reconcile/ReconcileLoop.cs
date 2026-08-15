@@ -116,6 +116,28 @@ public sealed record ReconcileServices
 /// </remarks>
 public sealed class ReconcileLoop
 {
+    /// <summary>
+    /// What a resource is <c>Blocked</c> on when its observation could not be made (§2.6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// An unevaluable observation lands on <see cref="ResourceStatusKind.Blocked"/> rather than
+    /// on a new rung, and the fit is exact rather than convenient: §2.2 defines <c>Blocked</c> as
+    /// "this was not attempted, because something it depends on is not in sync", which is
+    /// precisely a resource waiting on an authority that has not answered. The one thing it is
+    /// not is a dependency the DAG can express, because it is not on this device — so it is named
+    /// here instead, in the words the console already renders as <i>"waiting for the Fleet
+    /// Manager"</i>.
+    /// </para>
+    /// <para>
+    /// <c>Blocked</c> carries the two properties this case needs and nothing else does: it
+    /// consumes no attempt, and it propagates, so every resource that depends on adoption is
+    /// blocked behind it for the length of an outage instead of half-applying settings it was
+    /// never issued.
+    /// </para>
+    /// </remarks>
+    public const string SilentAuthority = "the Fleet Manager";
+
     private readonly ReconcileServices _services;
     private readonly Link.Backoff _retry;
     private string _deviceId = "unknown";
@@ -355,6 +377,21 @@ public sealed class ReconcileLoop
         _services.Journal.Update(existing => existing with { Pending = null });
 
         var observation = await ObserveAsync(resource, "verify", cancellationToken).ConfigureAwait(false);
+
+        if (observation.Outcome is ObservationOutcome.Unevaluable)
+        {
+            // The change is neither proven nor failed — it cannot be looked at. §2.4 forbids
+            // claiming it stuck; §2.6 forbids calling silence a failure. So the ledger is left
+            // exactly as it was, no attempt is spent, and the walk carries on to observe this
+            // resource again a few lines below, where it reports as blocked on the server. The
+            // resources that need nothing from the Fleet Manager keep converging meanwhile,
+            // which is §1.2.2's offline autonomy.
+            _services.Log.Warn(
+                $"{resource.Name}: '{pending.Change}' cannot be checked — {observation.Observed}. Nothing has been concluded.");
+
+            return null;
+        }
+
         if (observation.InSync)
         {
             _services.Log.Info($"{resource.Name}: '{pending.Change}' survived the reboot.");
@@ -428,7 +465,7 @@ public sealed class ReconcileLoop
 
             if (entry.NextAttemptUtc is { } next && _services.Clock.UtcNow < next)
             {
-                earliest = earliest is { } current && current <= next ? current : next;
+                earliest = Sooner(earliest, next);
                 Record(new ResourceStatus
                 {
                     Name = resource.Name,
@@ -445,6 +482,31 @@ public sealed class ReconcileLoop
             }
 
             var observation = await ObserveAsync(resource, "observe", cancellationToken).ConfigureAwait(false);
+
+            if (observation.Outcome is ObservationOutcome.Unevaluable)
+            {
+                // §2.6: silence is not an answer, so it is not drift either. Nothing is acted on,
+                // nothing reboots, and the ledger is not touched in either direction — an attempt
+                // is not spent, and one already spent is not forgiven. The resource is simply
+                // waiting, and it says what for.
+                var recheck = Recheck();
+                earliest = Sooner(earliest, recheck);
+
+                Record(new ResourceStatus
+                {
+                    Name = resource.Name,
+                    Kind = ResourceStatusKind.Blocked,
+                    BlockedBy = SilentAuthority,
+                    Delta = observation.Delta,
+                    Attempts = entry.Attempts,
+                    AttemptBudget = _services.Options.AttemptBudget,
+                    NextAttemptUtc = recheck,
+                });
+
+                result = Worst(result, PassResult.Pending);
+                continue;
+            }
+
             if (observation.InSync)
             {
                 if (entry.Attempts > 0 || entry.Escalations > 0 || entry.NextAttemptUtc is not null)
@@ -489,7 +551,7 @@ public sealed class ReconcileLoop
 
             if (applied.Status.NextAttemptUtc is { } retryAt)
             {
-                earliest = earliest is { } current && current <= retryAt ? current : retryAt;
+                earliest = Sooner(earliest, retryAt);
             }
 
             if (applied.Status.Kind is ResourceStatusKind.Halted)
@@ -685,6 +747,39 @@ public sealed class ReconcileLoop
                 _services.Journal.Update(state => state with { Pending = null });
 
                 var after = await ObserveAsync(resource, "verify", cancellationToken).ConfigureAwait(false);
+
+                if (after.Outcome is ObservationOutcome.Unevaluable)
+                {
+                    // Crossed the boundary and still cannot look. Nothing is claimed and nothing
+                    // is charged: the attempt this apply already recorded stands, no failure is
+                    // added to it, and the resource waits on the server exactly as it would have
+                    // had the pass never acted at all.
+                    _services.Log.Warn(
+                        $"{resource.Name}: '{change}' cannot be checked — {after.Observed}. Nothing has been concluded.");
+
+                    var recheck = Recheck();
+
+                    return await FinishAsync(
+                        PassResult.Pending,
+                        [
+                            new ResourceStatus
+                            {
+                                Name = resource.Name,
+                                Kind = ResourceStatusKind.Blocked,
+                                BlockedBy = SilentAuthority,
+                                Delta = after.Delta,
+                                Action = change,
+                                Gloss = gloss,
+                                Attempts = attempt,
+                                AttemptBudget = _services.Options.AttemptBudget,
+                                NextAttemptUtc = recheck,
+                            },
+                        ],
+                        recheck,
+                        null,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
                 if (after.InSync)
                 {
                     _services.Log.Info($"{resource.Name}: in sync after '{change}', verified across a reboot.");
@@ -915,6 +1010,20 @@ public sealed class ReconcileLoop
             Escalations = entry.Escalations,
         };
     }
+
+    /// <summary>When the loop should ask again about something it could not evaluate.</summary>
+    /// <remarks>
+    /// It is a separate interval from <see cref="ReconcileOptions.PassInterval"/> because it
+    /// measures a different thing. The pass interval is a drift sweep over the filesystem, where
+    /// five minutes is generous; this is a wait for a network round trip that has already failed,
+    /// where five minutes would stall a bare frame's provisioning by five minutes per boot for no
+    /// reason. Publishing it as <c>NextAttemptUtc</c> also keeps §2.7 item 6 satisfied: the pause
+    /// has a visible end, so it never reads as a hang.
+    /// </remarks>
+    private DateTimeOffset Recheck() => _services.Clock.UtcNow + _services.Options.UnevaluableRecheck;
+
+    private static DateTimeOffset Sooner(DateTimeOffset? earliest, DateTimeOffset candidate) =>
+        earliest is { } current && current <= candidate ? current : candidate;
 
     private static ResourceStatus Terminal(string name, ResourceStatusKind kind, ResourceLedgerEntry entry) => new()
     {

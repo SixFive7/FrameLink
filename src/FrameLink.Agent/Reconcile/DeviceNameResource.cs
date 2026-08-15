@@ -23,6 +23,9 @@ namespace FrameLink.Agent.Reconcile;
 /// </remarks>
 public sealed class DeviceNameResource : IResource
 {
+    /// <summary>The catalog id.</summary>
+    public const string ResourceName = "app.config.identity";
+
     /// <summary>File name inside the state store.</summary>
     public const string FileName = "device-name";
 
@@ -34,6 +37,10 @@ public sealed class DeviceNameResource : IResource
     /// <param name="desired">
     /// The name the Fleet Manager assigned, read at observation time rather than captured, so a
     /// name changed while the frame is running is drift the next pass corrects.
+    /// <b>Null and empty are different answers.</b> Empty is the server saying this frame has no
+    /// name; null is the server not having said anything, and the two must not be collapsed —
+    /// collapsing them is how an outage used to erase a name the Fleet Manager had issued, write
+    /// the empty string over it, and then report the resource green for agreeing with itself.
     /// </param>
     public DeviceNameResource(IStateStore store, Func<string?> desired)
     {
@@ -45,7 +52,7 @@ public sealed class DeviceNameResource : IResource
     }
 
     /// <inheritdoc/>
-    public string Name => "app.config.identity";
+    public string Name => ResourceName;
 
     /// <inheritdoc/>
     public IReadOnlyList<string> DependsOn => [Resources.AdoptionResource.ResourceName];
@@ -61,7 +68,14 @@ public sealed class DeviceNameResource : IResource
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var expected = _desired() ?? string.Empty;
+        var expected = _desired();
+        if (expected is null)
+        {
+            return ValueTask.FromResult(ResourceObservation.Unevaluable(
+                "the name the Fleet Manager assigned",
+                "the Fleet Manager has not answered, so the name it assigned is not known"));
+        }
+
         var observed = _store.ReadText(FileName) ?? string.Empty;
 
         return ValueTask.FromResult(new ResourceObservation(
@@ -75,7 +89,17 @@ public sealed class DeviceNameResource : IResource
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var expected = _desired() ?? string.Empty;
+        var expected = _desired();
+        if (expected is null)
+        {
+            // Unreachable through the loop, which does not act on an unevaluable observation.
+            // Writing nothing is still the right behaviour if it ever is reached: the file holds
+            // a value the Fleet Manager issued, and an outage is not a reason to delete it.
+            return ValueTask.FromResult(new ResourceAction(
+                $"nothing was written to {_store.PathOf(FileName)}",
+                "Waiting for the Fleet Manager to say what this frame is called."));
+        }
+
         _store.WriteText(FileName, expected);
 
         return ValueTask.FromResult(new ResourceAction(
