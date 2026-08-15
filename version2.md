@@ -1,8 +1,8 @@
 # FrameLink v2 — Build Specification
 
-**Status: design complete, not yet started.** No v2 code exists. This document is the
-specification the build follows; §5 is the execution plan, and Appendix A preserves every
-decision with its reasoning.
+**Status: building.** M0 is closed on hardware, M1 and M2 are built, and the agent runs on the
+development mule. This document remains the specification the build follows; §5 is the execution
+plan, and Appendix A preserves every decision with its reasoning.
 
 v2 replaces the hand-followed build guides with two programs: an agent that provisions and
 maintains each frame, and a fleet manager that owns them centrally.
