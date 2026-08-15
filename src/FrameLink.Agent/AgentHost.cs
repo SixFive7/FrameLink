@@ -284,6 +284,13 @@ public sealed class AgentHost
                 CountdownSource = () => CountdownDuration.Resolve(
                     Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey),
                     development),
+
+                // Decision 53's sibling of the line above, read the same way and for a sharper
+                // version of the same reason: the frame this one paces is mid-provision, so its
+                // settings are arriving for the first time while the loop is already running.
+                ProvisioningPaceSource = () => ProvisioningPace.Resolve(
+                    Volatile.Read(ref _settings).GetValueOrDefault(ProvisioningPace.SettingKey),
+                    development),
             },
         })
         {

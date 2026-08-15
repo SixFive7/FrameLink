@@ -374,6 +374,215 @@ public sealed class AgentCountdownScopeTests
 }
 
 /// <summary>
+/// Decision 53 — the provisioning pace, the countdown's sibling for a frame being set up.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Decision 51 cut a bare provision from about 108 minutes to 30 by taking the countdown away
+/// from it, and took with it the only thing that let a person watch one happen: 79 screens now
+/// paint at machine speed. This puts that back as a fleet setting rather than as a default — zero
+/// unless an operator raises it, so every assertion in <c>AgentCountdownScopeTests</c> above still
+/// describes the shipping behaviour.
+/// </para>
+/// <para>
+/// The two settings meet in one place, <see cref="CountdownScope.ForReboot"/>, which is what makes
+/// them siblings rather than two mechanisms: one function, two durations, and the question of
+/// which applies answered by the same durable "has this frame ever been green".
+/// </para>
+/// </remarks>
+public sealed class AgentProvisioningPaceTests
+{
+    [Fact]
+    public void The_built_in_pace_is_zero_so_nothing_changes_until_an_operator_asks()
+    {
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Default);
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve());
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: null));
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "  "));
+    }
+
+    [Fact]
+    public void The_fleet_value_is_what_raises_it()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(20), ProvisioningPace.Resolve(fleetValue: "20"));
+        Assert.Equal(TimeSpan.FromSeconds(0.5), ProvisioningPace.Resolve(fleetValue: "0.5"));
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "0"));
+    }
+
+    [Fact]
+    public void A_mistyped_pace_falls_back_to_zero_rather_than_to_a_pause()
+    {
+        // The opposite fallback from CountdownDuration's, on purpose. A typo there must not
+        // silently remove the one pause a person has to read a repair; a typo here must not
+        // silently add an hour and a half to a provision nobody is watching.
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "slowly"));
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "-5"));
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "999999"));
+    }
+
+    [Fact]
+    public void The_development_switch_forces_zero_for_the_pace_too()
+    {
+        // §2.7 keeps `--development` as a binary switch rather than a setting, and decision 53
+        // does not give it a second meaning: a development run pauses for nothing at all, on a
+        // frame that has been green and on one that has not.
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(development: true));
+        Assert.Equal(TimeSpan.Zero, ProvisioningPace.Resolve(fleetValue: "60", development: true));
+    }
+
+    [Fact]
+    public void The_setting_key_is_the_one_the_fleet_manager_gui_offers()
+    {
+        // Same requirement as the repair countdown's: a key the agent reads but nobody can type is
+        // not a setting. Both live under the same heading in the catalog, so reading one tells an
+        // operator the other exists.
+        Assert.Equal("provisioning.paceSeconds", ProvisioningPace.SettingKey);
+        Assert.NotEqual(CountdownDuration.SettingKey, ProvisioningPace.SettingKey);
+
+        var catalog = File.ReadAllText(Path.Combine(
+            GuiFreshnessTests.RepositoryRoot(),
+            "src",
+            "FrameLink.Control",
+            "gui",
+            "src",
+            "lib",
+            "settings-catalog.ts"));
+
+        Assert.Contains($"'{ProvisioningPace.SettingKey}'", catalog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_frame_that_has_never_been_green_gets_the_pace_and_not_the_repair_countdown()
+    {
+        Assert.Equal(
+            TimeSpan.FromSeconds(15),
+            CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: false, TimeSpan.FromSeconds(15)));
+    }
+
+    [Fact]
+    public void A_frame_that_has_been_green_gets_the_repair_countdown_and_never_the_pace()
+    {
+        // The pace belongs to setting a frame up, and a frame in somebody's living room is past
+        // that. Leaving a raised pace on a converged fleet must not change a single repair.
+        Assert.Equal(
+            CountdownDuration.Default,
+            CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: true, TimeSpan.FromMinutes(5)));
+    }
+
+    [Fact]
+    public void Omitting_the_pace_leaves_decision_51_exactly_as_it_was()
+    {
+        // Every caller written before decision 53 asks for two arguments and means "no pause".
+        Assert.Equal(TimeSpan.Zero, CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: false));
+        Assert.Equal(
+            TimeSpan.Zero,
+            CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: false, ProvisioningPace.Default));
+    }
+
+    [Fact]
+    public void The_pace_is_read_at_each_reboot_rather_than_once_at_startup()
+    {
+        // Sharper than the countdown's version of this: the frame being paced is mid-provision, so
+        // its settings are arriving for the first time while the loop is already running. An
+        // operator who raises the pace to watch a frame that is halfway through is served by the
+        // next reboot rather than by the next reflash.
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var options = new ReconcileOptions
+        {
+            ProvisioningPaceSource = () => ProvisioningPace.Resolve(
+                settings.GetValueOrDefault(ProvisioningPace.SettingKey)),
+        };
+
+        Assert.Equal(TimeSpan.Zero, options.CurrentProvisioningPace());
+
+        settings[ProvisioningPace.SettingKey] = "8";
+        Assert.Equal(TimeSpan.FromSeconds(8), options.CurrentProvisioningPace());
+    }
+
+    [Fact]
+    public async Task A_raised_pace_pauses_before_every_provisioning_reboot()
+    {
+        var resources = new[]
+        {
+            new ScriptedResource("first", "want", "have-not"),
+            new ScriptedResource("second", "want", "have-not"),
+        };
+
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions
+            {
+                Countdown = CountdownDuration.Default,
+                ProvisioningPace = TimeSpan.FromSeconds(15),
+            },
+            resources);
+
+        var countdowns = 0;
+        using var subscription = harness.Hub.Subscribe(status =>
+        {
+            if (status.Reconcile.Countdown is not null)
+            {
+                countdowns++;
+            }
+        });
+
+        var outcome = await harness.ConvergeAsync();
+
+        Assert.Equal(PassResult.Converged, outcome.Result);
+        Assert.Equal(2, harness.Boundary.Crossings.Count);
+        Assert.True(countdowns > 0, "a paced provision has to narrate the pause it is taking");
+
+        // The pace, twice, and nothing else: the repair countdown is 60 s and would be visible
+        // immediately in this total if the scope rule had let it through.
+        Assert.Equal(
+            TimeSpan.FromSeconds(30),
+            harness.Clock.Delays.Aggregate(TimeSpan.Zero, (total, step) => total + step));
+    }
+
+    [Fact]
+    public async Task A_paced_provisioning_reboot_can_still_be_skipped()
+    {
+        // Because it is the same countdown, "Restart now" works during a provision without a
+        // second implementation — which is the argument for putting this at
+        // CountdownScope.ForReboot rather than beside it. An operator who has seen enough gets
+        // the frame back at full speed by tapping the screen.
+        var resource = new ScriptedResource("only", "want", "have-not");
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { ProvisioningPace = TimeSpan.FromMinutes(5) },
+            resource);
+
+        harness.Countdown.SkipNow();
+        await harness.ConvergeAsync();
+
+        Assert.Equal(1, harness.Countdown.Skips);
+        Assert.Empty(harness.Clock.Delays);
+    }
+
+    [Fact]
+    public async Task A_pace_left_raised_does_not_follow_the_frame_into_service()
+    {
+        // The whole risk of adding this setting: an operator raises it to watch a build, forgets
+        // it, and every frame in the fleet inherits a pause on a path it does not belong to.
+        var resource = new ScriptedResource("only", "want", "have-not");
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions
+            {
+                Countdown = TimeSpan.Zero,
+                ProvisioningPace = TimeSpan.FromSeconds(15),
+            },
+            resource);
+
+        await harness.ConvergeAsync();
+        harness.Clock.Delays.Clear();
+
+        resource.Drift();
+        await harness.PassAsync();
+
+        Assert.NotNull(harness.Journal.Read().FirstInSyncUtc);
+        Assert.Empty(harness.Clock.Delays);
+    }
+}
+
+/// <summary>
 /// §2.7 items 1–7 as rendered text. The renderer is a pure function, so every claim §2.7 makes
 /// about the repair screen is an assertion over a string.
 /// </summary>

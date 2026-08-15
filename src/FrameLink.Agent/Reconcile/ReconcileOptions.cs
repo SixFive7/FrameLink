@@ -70,6 +70,26 @@ public sealed record ReconcileOptions
     /// <summary>The countdown to run right now (§2.7 item 4).</summary>
     public TimeSpan CurrentCountdown() => CountdownSource is null ? Countdown : CountdownSource();
 
+    /// <summary>How long each provisioning reboot pauses first (§2.7, decision 53).</summary>
+    /// <remarks>
+    /// The fixed value, used when <see cref="ProvisioningPaceSource"/> is not set. Zero, so a test
+    /// that says nothing about pace gets exactly the behaviour decision 51 left behind.
+    /// </remarks>
+    public TimeSpan ProvisioningPace { get; init; } = Reconcile.ProvisioningPace.Default;
+
+    /// <summary>The provisioning pace as the Fleet Manager currently has it.</summary>
+    /// <remarks>
+    /// A delegate for the same reason <see cref="CountdownSource"/> is one, and with one extra
+    /// consequence: this value is read while a bare frame is provisioning, which is exactly when
+    /// its settings are arriving for the first time. An operator who raises the pace to watch a
+    /// frame that is already mid-provision is served by the next reboot, not by the next reflash.
+    /// </remarks>
+    public Func<TimeSpan>? ProvisioningPaceSource { get; init; }
+
+    /// <summary>The provisioning pace to apply right now.</summary>
+    public TimeSpan CurrentProvisioningPace() =>
+        ProvisioningPaceSource is null ? ProvisioningPace : ProvisioningPaceSource();
+
     /// <summary>How long the loop sleeps between passes when nothing needs doing.</summary>
     /// <remarks>
     /// Level-triggered means a pass on a converged frame is a sweep of cheap observations and
@@ -210,7 +230,85 @@ public static class CountdownDuration
 }
 
 /// <summary>
-/// <b>Which reboots the countdown applies to</b> — §2.7, decision 51.
+/// The pause before a <i>provisioning</i> reboot — §2.7, decision 53.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The sibling of <see cref="CountdownDuration"/>, and deliberately shaped like it.</b> That one
+/// governs a repair on a frame that has already been green; this one governs the reboots a frame
+/// takes on its way to being green for the first time. Same unit, same fleet-default-plus-override
+/// mechanism (§3.4), same <c>--development</c> override, and both are consumed at the same single
+/// decision point, <see cref="CountdownScope.ForReboot"/> — so this is one more input to an
+/// existing rule rather than a second mechanism standing beside it.
+/// </para>
+/// <para>
+/// <b>Why it exists.</b> Decision 51 took the countdown away from provisioning because a pause for
+/// a reader is worth nothing when there is no reader, and that cut a bare provision from roughly
+/// 108 minutes to 30. What it also removed was the only thing that let a human <i>watch</i> one
+/// happen: 79 screens now paint at machine speed. This gives that back as an option rather than as
+/// a default — an operator standing in front of a frame raises it, watches, and puts it back.
+/// </para>
+/// <para>
+/// <b>The default is zero, and that is the whole safety argument.</b> Unset, this resolves to zero
+/// and <see cref="CountdownScope.ForReboot"/> behaves exactly as decision 51 left it, so nothing
+/// about today's provisioning changes until somebody deliberately changes it. The fallback for a
+/// mistyped value is zero for the same reason, which is the opposite of
+/// <see cref="CountdownDuration"/>'s: a typo there must not silently remove the one pause a person
+/// has to read a repair, and a typo here must not silently add 79 minutes to a provision nobody is
+/// watching. Each falls back to the value that is harmless in its own scope.
+/// </para>
+/// </remarks>
+public static class ProvisioningPace
+{
+    /// <summary>No pause — decision 51's behaviour, and what an unconfigured fleet gets.</summary>
+    public static readonly TimeSpan Default = TimeSpan.Zero;
+
+    /// <summary>The fleet setting key carrying the pace, in seconds (§3.4).</summary>
+    /// <remarks>
+    /// Named for what an operator is doing when they reach for it — pacing a provision they want
+    /// to see — rather than for the mechanism underneath, which is the same countdown
+    /// <see cref="CountdownDuration.SettingKey"/> uses. Both appear in the Fleet Manager GUI's
+    /// catalog (<c>gui/src/lib/settings-catalog.ts</c>) under the same heading, because reading
+    /// one should tell you the other exists.
+    /// </remarks>
+    public const string SettingKey = "provisioning.paceSeconds";
+
+    /// <summary>Resolves the pace from the fleet value, with <c>--development</c> above it.</summary>
+    /// <param name="fleetValue">
+    /// The effective value from the Fleet Manager — the device's override if it has one, otherwise
+    /// the fleet default, resolved server-side; null when the frame is unadopted or has never been
+    /// told. §3.3 gives a pending device nothing, so a frame provisioning before adoption paces at
+    /// zero however the fleet is configured; adoption is itself a resource (decision 34), so the
+    /// setting takes effect for the resources that follow it.
+    /// </param>
+    /// <param name="development">
+    /// Whether <see cref="CountdownDuration.DevelopmentFlag"/> was passed. It is a binary switch
+    /// rather than a setting, and it forces zero here exactly as it does for the repair countdown:
+    /// a development run pauses for nothing at all.
+    /// </param>
+    public static TimeSpan Resolve(string? fleetValue = null, bool development = false) =>
+        development ? TimeSpan.Zero : TryParse(fleetValue) ?? Default;
+
+    private static TimeSpan? TryParse(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        // Bounded at an hour like the countdown is, and for a sharper reason: this value is
+        // multiplied by 79 reboots. An hour would already be three and a half days of provision,
+        // which is well past anything a person could mean, and anything above it is a typo.
+        return double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            && seconds >= 0
+            && seconds <= 3600
+                ? TimeSpan.FromSeconds(seconds)
+                : null;
+    }
+}
+
+/// <summary>
+/// <b>Which reboots the countdown applies to</b> — §2.7, decisions 51 and 53.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -241,7 +339,14 @@ public static class CountdownDuration
 /// hand a living-room frame the provisioning behaviour.
 /// </para>
 /// <para>
-/// <b>Reverting is one line.</b> Everything this decision changes is
+/// <b>Provisioning pauses only when an operator asks it to (decision 53).</b> The zero this used
+/// to return unconditionally is now <see cref="ProvisioningPace"/>'s default rather than a
+/// constant, so a frame that has never been green paces at whatever the fleet says and that is
+/// nothing unless somebody raised it. The shape of the rule is unchanged: one function, two
+/// durations, and the question of which one applies answered in one place.
+/// </para>
+/// <para>
+/// <b>Reverting is one line.</b> Everything these decisions change is
 /// <see cref="ForReboot"/>; returning its configured duration unconditionally restores the
 /// behaviour decision 48 described, with no other edit anywhere.
 /// </para>
@@ -259,6 +364,15 @@ public static class CountdownScope
     /// Whether this frame has ever had every resource verified at once — <see
     /// cref="ReconcileJournalState.FirstInSyncUtc"/> being set.
     /// </param>
-    public static TimeSpan ForReboot(TimeSpan configured, bool hasEverBeenInSync) =>
-        hasEverBeenInSync ? configured : TimeSpan.Zero;
+    /// <param name="provisioningPace">
+    /// What <see cref="ProvisioningPace"/> resolved to, for the frame that has not been green yet.
+    /// Defaulted, so every caller that predates decision 53 keeps decision 51's behaviour exactly:
+    /// omitting it is asking for no pause. <c>--development</c> has already collapsed both
+    /// durations to zero before either reaches this.
+    /// </param>
+    public static TimeSpan ForReboot(
+        TimeSpan configured,
+        bool hasEverBeenInSync,
+        TimeSpan provisioningPace = default) =>
+        hasEverBeenInSync ? configured : provisioningPace;
 }

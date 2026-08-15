@@ -132,6 +132,15 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Behaviour',
 		example: '60'
 	},
+	'provisioning.paceSeconds': {
+		label: 'Provisioning pace',
+		hint:
+			'Seconds a frame being set up for the first time pauses before each restart, so you ' +
+			'can watch it happen. Leave it at 0 and setting up runs at full speed.',
+		kind: 'duration',
+		group: 'Behaviour',
+		example: '0'
+	},
 	'update.enabled': {
 		label: 'Automatic updates',
 		hint: 'Whether the agent converges on the version this server serves. On by default.',

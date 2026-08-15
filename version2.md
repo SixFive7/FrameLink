@@ -211,6 +211,20 @@ green and later drifts is still a frame with a viewer. What made the scope worth
 arithmetic: 79 resources at 60 s is 79 minutes of countdown against 29 minutes of measured reboot,
 so three quarters of a bare provision would have been spent pausing for nobody.
 
+**A provisioning pace gives the watching back, as an option** (decision 53). What decision 51 also
+removed is the only thing that let a human *see* a provision happen — 79 screens now paint at
+machine speed — so `provisioning.paceSeconds` is a fleet setting (§3.4) that inserts a pause before
+each provisioning reboot, exactly as `repair.countdownSeconds` does for a repair. **It defaults to
+0**, so an unconfigured fleet provisions precisely as it does today; an operator standing in front
+of a frame raises it, watches, and puts it back. It is the same pause through the same code — one
+function, `CountdownScope.ForReboot`, takes both durations and the durable "has this frame ever
+been green" decides which one applies — so the "Reboot now" skip works on a paced provision
+without a second implementation. The two settings are siblings and read as siblings: same unit,
+same fleet-default-plus-per-device-override, and opposite fallbacks for a mistyped value, because
+a typo must never silently remove the one pause a person has to read a repair and must never
+silently add an hour and a half to a provision nobody is watching. `--development` is unaffected
+and forces 0 for both — it is a binary switch, not a setting.
+
 One consequence follows, and it is stated rather than worked around. §3.3 gives a pending device
 *nothing* — no configuration at all — so the built-in 60 s is the whole chain an unadopted frame
 has, and "development runs use 0" is not reachable through configuration. Decision 51 answers that
@@ -490,8 +504,8 @@ presses **Adopt** or **Block**. Blocked devices are filtered from the list by de
 **Every setting is fleet-managed: a fleet default with a per-device override**, the override
 always winning. Not a fixed list but a generic mechanism, because the list will grow. Covers
 connection values (identity, room, LiveKit, Immich), audio (volume), display (backlight
-schedule), slideshow (album, interval), locale and time zone, countdown duration, call room,
-and whatever comes later.
+schedule), slideshow (album, interval), locale and time zone, countdown duration, provisioning
+pace, call room, and whatever comes later.
 
 Calls stay **single-room** with v1's one-button, auto-answer, no-choices behaviour. Because
 room is a per-device setting, group calling is already achievable by configuration if ever
@@ -1024,6 +1038,7 @@ The record of *what was decided and why*, in the order decided.
 | 50 | Display granularity | The display is **two resources**, panel overlay and console rotation, so a dark panel and a sideways one are different diagnoses (§2.2). The dependency runs one way only — rotation depends on the overlay, never the reverse — so a failed cosmetic rotation can never keep the panel dark or mark it `Blocked`. A sideways console is a strictly better state than a dark one, which is what makes the split affordable under decision 46's early scheduling |
 | 51 | Countdown scope | The countdown applies to **drift repair, not to initial provisioning** (§2.7). It does not supersede decision 48 — that chain still decides *how long*; this decides *whether at all*. §2.7's reason for the pause is a viewer in front of a working frame reading what a repair is about to do before it takes their photos away, and initial provisioning has no viewer and no product to interrupt: the frame has never displayed anything and nobody is standing there. At decision 48's 60 s that pause costs 79 minutes across 79 resources against 29 minutes of measured reboot — three quarters of a bare provision spent waiting for nobody. So a frame that has never reached `InSync` reboots as soon as a resource is applied; once it has been green, every later repair pauses in full. The condition is durable state — first-green is written to the progress journal beside the attempt ledger (§2.1), never inferred from the link, the hub or anything else that resets at boot — and it is never cleared. `--development` is unaffected and still forces 0, which is what covers the mule *after* its first convergence, since by this decision it is then a frame that has been green. One function decides it, so reverting is one edit |
 | 52 | Image generation, again | **In v2, as §3.9 and milestone M2.5. Supersedes decision 32**, which stays above as history. What deferred it was an assumed blocker that does not exist: writing into an arm64 ext4 filesystem was taken to need privilege, loop devices and emulation, and measured against the real `2026-06-18-raspios-trixie-arm64-lite.img` in a plain `debian:trixie-slim` container with no `--privileged`, no `--cap-add` and no device mapping, `debugfs` and `mtools` do the whole job and `e2fsck -fn` calls the result clean — while `mount -o loop` fails in that same container, which is what proves loopback was never involved. It is 2 MB of packages editing a file, so an amd64 Fleet Manager writes an arm64 image with no emulation at all. **Tier C — a real ~500 MB image — over the cheaper tiers**, even though decision 32's literal wording ("URL, Wi-Fi and settings pre-seeded") is already satisfied by a ~2 KB boot-partition file, because §2.8 serves the binary over versionless HTTPS and §4.3 already accepts that file. The cheaper tiers all leave the operator flashing a stock image and mounting a card; tier C is flash-and-go, and it is what makes the milestone pay for the migration phase behind it. **Tier D — one image per frame — is refused on principle**, not on cost: a per-device image is exactly where identity gets pre-seeded and decision 17 dies. The image carries the binary, the unit, the enable symlink and `control-url=`, and it carries **no token, key or adoption credential** — the request type has two fields and both are URLs. The base image becomes a pinned upstream dependency under §7.1, verified by digest before the generator touches it, and `e2fsck -fn` gates every artifact because `debugfs -R` exits 0 on failure and `debugfs mkdir` on an existing directory corrupts the filesystem while doing so. **Not delivered and named as such:** Wi-Fi seeding, which needs `custom.toml` and a wireless regulatory country to work at all, and a card flashed from a generated image and booted, which is M2.5's acceptance test |
+| 53 | Provisioning pace | A fleet setting, **`provisioning.paceSeconds`, default 0** (§2.7, §3.4). Decision 51 cut a bare provision from ~108 minutes to ~30 by taking the countdown away from it, and removed with it the only thing that let a person *watch* one happen — 79 screens now paint at machine speed. This gives the watching back as an option and never as a default: at 0 the behaviour decision 51 left is exactly unchanged, and raising it inserts before each provisioning reboot the same pause `repair.countdownSeconds` inserts before a repair's. **The sibling of that setting, not a second mechanism beside it** — one function, `CountdownScope.ForReboot`, takes both durations and the durable first-green field decides which applies, so the "Reboot now" skip, the narration and the screen work on a paced provision with no new code, and reverting is still one edit. Opposite fallbacks for a mistyped value, deliberately: the countdown falls back to 60 s because a typo must not silently remove the one pause a person has to read a repair, and the pace falls back to 0 because a typo must not silently add an hour and a half to a provision nobody is watching. `--development` is unaffected and still forces 0 for both — a binary switch, not a setting |
 
 ## Appendix B — Open items
 

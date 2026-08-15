@@ -869,17 +869,20 @@ public sealed class ReconcileLoop
     }
 
     /// <summary>
-    /// How long this reboot pauses first — the single decision point of decision 51.
+    /// How long this reboot pauses first — the single decision point of decisions 51 and 53.
     /// </summary>
     /// <remarks>
     /// The whole of "the countdown is for drift repair, not for initial provisioning" is this one
-    /// call. It is deliberately not a condition spread through the loop: nothing else in here
-    /// asks whether the frame has been green, so putting the rule back is an edit to
-    /// <see cref="CountdownScope.ForReboot"/> and nothing more.
+    /// call, and so is "unless an operator asked to watch a provision". It is deliberately not a
+    /// condition spread through the loop: nothing else in here asks whether the frame has been
+    /// green, so changing the rule is an edit to <see cref="CountdownScope.ForReboot"/> and
+    /// nothing more. Both durations are read here rather than captured, because both are fleet
+    /// settings that arrive after the agent starts and can move while it runs.
     /// </remarks>
     private TimeSpan CountdownForThisReboot() => CountdownScope.ForReboot(
         _services.Options.CurrentCountdown(),
-        _services.Journal.Read().FirstInSyncUtc is not null);
+        _services.Journal.Read().FirstInSyncUtc is not null,
+        _services.Options.CurrentProvisioningPace());
 
     /// <summary>
     /// Records the first moment this frame had everything verified at once (decision 51).
