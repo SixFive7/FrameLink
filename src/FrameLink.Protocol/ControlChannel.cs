@@ -47,6 +47,18 @@ public static class ControlWire
     /// <summary>Server to agent. Effective settings for an adopted device (§3.4).</summary>
     public const string KindSettings = "settings";
 
+    /// <summary>
+    /// Agent to server, on <see cref="ProtocolConstants.ChannelTelemetry"/>. The whole loop
+    /// state and the per-resource status list (§3.5).
+    /// </summary>
+    public const string KindReconcileReport = "reconcile-report";
+
+    /// <summary>
+    /// Agent to server, on <see cref="ProtocolConstants.ChannelEvents"/>. Drift, escalation and
+    /// boot (§4.1).
+    /// </summary>
+    public const string KindDeviceEvent = "device-event";
+
     /// <summary>Property name carrying the ping's sequence number on the wire.</summary>
     private const string SequenceProperty = "sequence";
 

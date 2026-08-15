@@ -32,6 +32,9 @@ namespace FrameLink.Protocol;
 [JsonSerializable(typeof(AgentPing))]
 [JsonSerializable(typeof(AgentPong))]
 [JsonSerializable(typeof(SettingsPush))]
+[JsonSerializable(typeof(ResourceReport))]
+[JsonSerializable(typeof(ReconcileReport))]
+[JsonSerializable(typeof(DeviceEvent))]
 public sealed partial class ProtocolJson : JsonSerializerContext;
 
 /// <summary>Envelope construction and payload extraction, shared by both programs.</summary>
@@ -66,6 +69,40 @@ public static class WireMessage
             Channel = channel,
             CorrelationId = correlationId,
             Payload = JsonSerializer.SerializeToElement(payload, payloadTypeInfo),
+        };
+        return JsonSerializer.SerializeToUtf8Bytes(envelope, ProtocolJson.Default.WireEnvelope);
+    }
+
+    /// <summary>
+    /// Wraps an already-serialised payload in the frozen envelope.
+    /// </summary>
+    /// <remarks>
+    /// For payloads that were serialised earlier and stored — the agent's offline telemetry
+    /// buffer (§4.1). Re-parsing and re-serialising through the typed overload would work and
+    /// is strictly worse: a buffered event would go out as different bytes from the ones that
+    /// would have gone out live, so what the Fleet Manager receives would depend on whether the
+    /// frame happened to be online at the time.
+    /// </remarks>
+    /// <param name="kind">The message discriminator.</param>
+    /// <param name="payload">
+    /// The body. Must stay valid for the duration of this call — if it came from a
+    /// <see cref="JsonDocument"/>, that document must not be disposed yet.
+    /// </param>
+    /// <param name="channel">Logical channel, or null for handshake traffic.</param>
+    /// <param name="correlationId">Correlation id, or null.</param>
+    public static byte[] EncodeRaw(
+        string kind,
+        JsonElement payload,
+        string? channel = null,
+        string? correlationId = null)
+    {
+        var envelope = new WireEnvelope
+        {
+            Magic = ProtocolConstants.Magic,
+            Kind = kind,
+            Channel = channel,
+            CorrelationId = correlationId,
+            Payload = payload,
         };
         return JsonSerializer.SerializeToUtf8Bytes(envelope, ProtocolJson.Default.WireEnvelope);
     }
