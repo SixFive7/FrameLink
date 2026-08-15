@@ -1,0 +1,1622 @@
+# FrameLink v1 reference state inventory
+#
+# Captured from the working v1 frame before it was repurposed as the v2 development mule.
+# This is the machine-readable definition of 'at parity' (version2.md Precondition zero).
+# Secrets are redacted at capture time.
+
+
+==============================================================================
+== IDENTITY
+==============================================================================
+Raspberry Pi 5 Model B Rev 1.0
+Debian GNU/Linux 13 (trixie)
+6.12.75+rpt-rpi-2712
+aarch64
+arm64
+
+==============================================================================
+== KERNEL_CMDLINE
+==============================================================================
+console=serial0,115200 console=tty1 root=PARTUUID=f870549c-02 rootfstype=ext4 fsck.repair=yes rootwait cfg80211.ieee80211_regdom=NL ds=nocloud;i=rpi-imager-1776005232619 fbcon=rotate:1
+
+==============================================================================
+== BOOT_CONFIG
+==============================================================================
+# For more options and information see
+# http://rptl.io/configtxt
+# Some settings may impact device functionality. See link above for details
+
+# Uncomment some or all of these to enable the optional hardware interfaces
+#dtparam=i2c_arm=on
+#dtparam=i2s=on
+#dtparam=spi=on
+
+# Enable audio (loads snd_bcm2835)
+dtparam=audio=on
+
+# Additional overlays and parameters are documented
+# /boot/firmware/overlays/README
+
+# Automatically load overlays for detected cameras
+camera_auto_detect=1
+
+# Automatically load overlays for detected DSI displays
+display_auto_detect=1
+
+# Automatically load initramfs files, if found
+auto_initramfs=1
+
+# Enable DRM VC4 V3D driver
+dtoverlay=vc4-kms-v3d,noaudio
+max_framebuffers=2
+
+# Don't have the firmware create an initial video= setting in cmdline.txt.
+# Use the kernel's default instead.
+disable_fw_kms_setup=1
+
+# Run in 64-bit mode
+arm_64bit=1
+
+# Disable compensation for displays with overscan
+disable_overscan=1
+
+# Run as fast as firmware / board allows
+arm_boost=1
+
+[cm4]
+# Enable host mode on the 2711 built-in XHCI USB controller.
+# This line should be removed if the legacy DWC2 controller is required
+# (e.g. for USB device mode) or if USB support is not required.
+otg_mode=1
+
+[cm5]
+dtoverlay=dwc2,dr_mode=host
+
+[all]
+dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a
+
+==============================================================================
+== EEPROM_CONFIG
+==============================================================================
+[all]
+BOOT_UART=1
+POWER_OFF_ON_HALT=1
+BOOT_ORDER=0xf461
+
+==============================================================================
+== PACKAGES
+==============================================================================
+7zip 25.01+dfsg-1~deb13u1
+adduser 3.152
+adwaita-icon-theme 48.1-1
+alsa-topology-conf 1.2.5.1-3
+alsa-ucm-conf 1.2.14-1
+alsa-utils 1.2.14-1+rpt1
+apparmor 4.1.0-1
+apt 3.0.3
+apt-listchanges 4.8
+apt-utils 3.0.3
+at-spi2-common 2.56.2-1+deb13u1
+at-spi2-core 2.56.2-1+deb13u1
+avahi-daemon 0.8-16
+awb-nn 0~git20251217.c7112b6-1
+base-files 13.8+deb13u4
+base-passwd 3.6.7
+bash 5.2.37-2+b8
+bash-completion 1:2.16.0-7
+binutils 2.44-3
+binutils-aarch64-linux-gnu 2.44-3
+binutils-common 2.44-3
+bluez 5.82-1.1+rpt1
+bluez-firmware 1.2-13+rpt2
+bsdextrautils 2.41-5
+bsdutils 1:2.41-5
+bubblewrap 0.11.0-2+deb13u1
+build-essential 12.12
+busybox 1:1.37.0-6+b7
+bzip2 1.0.8-6
+ca-certificates 20250419
+chromium 1:146.0.7680.164-1~deb13u1+rpt1
+chromium-common 1:146.0.7680.164-1~deb13u1+rpt1
+chromium-l10n 1:146.0.7680.164-1~deb13u1+rpt1
+chromium-sandbox 1:146.0.7680.164-1~deb13u1+rpt1
+cifs-utils 2:7.4-1
+cloud-guest-utils 0.33-1
+cloud-init 25.2-1~bpo13+1+rpt19
+console-setup 1.242~deb13u1
+console-setup-linux 1.242~deb13u1
+containerd.io 2.2.5-1~debian.13~trixie
+coreutils 9.7-3
+cpio 2.15+dfsg-2
+cpp-14 14.2.0-19
+cpp-14-aarch64-linux-gnu 14.2.0-19
+cpp 4:14.2.0-1
+cpp-aarch64-linux-gnu 4:14.2.0-1
+cron 3.0pl1-197
+cron-daemon-common 3.0pl1-197
+curl 8.14.1-2+deb13u3
+dash 0.5.12-12
+dbus 1.16.2-2
+dbus-bin 1.16.2-2
+dbus-daemon 1.16.2-2
+dbus-session-bus-common 1.16.2-2
+dbus-system-bus-common 1.16.2-2
+dbus-user-session 1.16.2-2
+dconf-cli 0.40.0-5
+dconf-gsettings-backend 0.40.0-5
+dconf-service 0.40.0-5
+debconf 1.5.91
+debconf-i18n 1.5.91
+debconf-utils 1.5.91
+debian-archive-keyring 2025.1
+debianutils 5.23.2
+device-tree-compiler 1.7.2-2+b1
+dfu-util 0.11-3
+dhcpcd-base 1:10.1.0-11+deb13u2
+diffutils 1:3.10-4
+dirmngr 2.4.7-21+deb13u1+b2
+distro-info-data 0.66+deb13u1
+dmidecode 3.6-2
+dmsetup 2:1.02.205-2
+dnsmasq-base 2.91-1
+dns-root-data 2025080400~deb13u1
+docker-buildx-plugin 0.34.1-1~debian.13~trixie
+docker-ce 5:29.6.0-1~debian.13~trixie
+docker-ce-cli 5:29.6.0-1~debian.13~trixie
+docker-ce-rootless-extras 5:29.6.0-1~debian.13~trixie
+docker-compose-plugin 5.1.4-1~debian.13~trixie
+docker-model-plugin 1.2.4-1~debian.13~trixie
+dos2unix 7.5.2-1+b1
+dosfstools 4.2-1.2
+dpkg 1.22.22
+dpkg-dev 1.22.22
+dracut-install 106-6
+e2fsprogs 1.47.2-3+b10
+eatmydata 131-2
+ed 1.21.1-1
+eject 2.41-5
+ethtool 1:6.14.2-1
+exfatprogs 1.2.9-1+deb13u1
+fakeroot 1.37.1.1-1
+fbset 2.1-34
+fdisk 2.41-5
+file 1:5.46-5
+findutils 4.10.0-3
+firmware-atheros 1:20250410-2+rpt1
+firmware-brcm80211 1:20250410-2+rpt1
+firmware-libertas 1:20250410-2+rpt1
+firmware-mediatek 1:20250410-2+rpt1
+firmware-realtek 1:20250410-2+rpt1
+flashrom 1.4.0-3
+fontconfig 2.15.0-2.3
+fontconfig-config 2.15.0-2.3
+fonts-dejavu-core 2.37-8
+fonts-dejavu-mono 2.37-8
+fonts-liberation 1:2.1.5-3
+fonts-liberation-sans-narrow 1:1.07.6-4
+fuse3 3.17.2-3
+g++-14 14.2.0-19
+g++-14-aarch64-linux-gnu 14.2.0-19
+g++ 4:14.2.0-1
+g++-aarch64-linux-gnu 4:14.2.0-1
+gcc-14 14.2.0-19
+gcc-14-aarch64-linux-gnu 14.2.0-19
+gcc-14-base 14.2.0-19
+gcc 4:14.2.0-1
+gcc-aarch64-linux-gnu 4:14.2.0-1
+gdb 16.3-1
+gdisk 1.0.10-2+b1
+gettext-base 0.23.1-2
+git 1:2.47.3-0+deb13u1
+git-man 1:2.47.3-0+deb13u1
+glib-networking 2.80.1-1
+glib-networking-common 2.80.1-1
+glib-networking-services 2.80.1-1
+gnupg 2.4.7-21+deb13u1
+gnupg-l10n 2.4.7-21+deb13u1
+gnupg-utils 2.4.7-21+deb13u1+b2
+gpg 2.4.7-21+deb13u1+b2
+gpg-agent 2.4.7-21+deb13u1+b2
+gpgconf 2.4.7-21+deb13u1+b2
+gpgsm 2.4.7-21+deb13u1+b2
+gpgv 2.4.7-21+deb13u1+b2
+gpg-wks-client 2.4.7-21+deb13u1+b2
+gpiod 2.2.1-2+deb13u1
+grep 3.11-4+b1
+grim 1.4.0+ds-2+b2
+groff-base 1.23.0-9
+gsettings-desktop-schemas 48.0-1+rpt1
+gstreamer1.0-libcamera 0.7.0+rpt20260205-1
+gstreamer1.0-pipewire 1.4.2-1+rpt3
+gstreamer1.0-plugins-base 1.26.2-1+rpt3+deb13u1
+gstreamer1.0-plugins-good 1.26.2-1+deb13u2
+gstreamer1.0-tools 1.26.2-2
+gstreamer1.0-x 1.26.2-1+rpt3+deb13u1
+gtk-update-icon-cache 4.18.6+ds-2
+gzip 1.13-1
+hicolor-icon-theme 0.18-2
+hostname 3.25
+htop 3.4.1-5
+init 1.69~deb13u1
+initramfs-tools 0.148.3+rpt2
+initramfs-tools-bin 0.148.3+rpt2
+initramfs-tools-core 0.148.3+rpt2
+init-system-helpers 1.69~deb13u1
+inotify-tools 4.23.9.0-2+b1
+iproute2 6.15.0-1
+iptables 1.8.11-2
+iputils-arping 3:20240905-3
+iputils-ping 3:20240905-3
+iso-codes 4.18.0-1
+iw 6.9-1+b1
+kbd 2.7.1-2
+keyboard-configuration 1.242~deb13u1
+klibc-utils 2.0.14-1
+kmod 34.2-2
+kms++-utils 0~git20250807.1813ada-1
+labwc 0.9.2-1+rpt4
+less 668-1
+libaa1 1.4p5-51.1+b1
+libabsl20240722 20240722.0-4
+libacl1 2.3.2-2+b1
+libalgorithm-diff-perl 1.201-1
+libalgorithm-diff-xs-perl 0.04-9
+libalgorithm-merge-perl 0.08-5
+libapparmor1 4.1.0-1
+libapt-pkg7.0 3.0.3
+libasan8 14.2.0-19
+libasound2-data 1.2.14-1+rpt1
+libasound2t64 1.2.14-1+rpt1
+libassuan9 3.0.2-2
+libasyncns0 0.8-6+b5
+libatasmart4 0.19-5+b2
+libatk1.0-0t64 2.56.2-1+deb13u1
+libatk-bridge2.0-0t64 2.56.2-1+deb13u1
+libatomic1 14.2.0-19
+libatopology2t64 1.2.14-1+rpt1
+libatspi2.0-0t64 2.56.2-1+deb13u1
+libattr1 1:2.5.2-3
+libaudit1 1:4.0.2-2+b2
+libaudit-common 1:4.0.2-2
+libauthen-sasl-perl 2.1700-1
+libavahi-client3 0.8-16
+libavahi-common3 0.8-16
+libavahi-common-data 0.8-16
+libavahi-core7 0.8-16
+libavc1394-0 0.5.4-5+b2
+libb2-1 0.98.1-1.1+b2
+libbabeltrace1 1.5.11-4+b2
+libbinutils 2.44-3
+libblkid1 2.41-5
+libblockdev3 3.3.0-2.1
+libblockdev-crypto3 3.3.0-2.1
+libblockdev-fs3 3.3.0-2.1
+libblockdev-loop3 3.3.0-2.1
+libblockdev-mdraid3 3.3.0-2.1
+libblockdev-nvme3 3.3.0-2.1
+libblockdev-part3 3.3.0-2.1
+libblockdev-swap3 3.3.0-2.1
+libblockdev-utils3 3.3.0-2.1
+libbluetooth3 5.82-1.1+rpt1
+libboost-filesystem1.83.0 1.83.0-4.2
+libboost-log1.83.0 1.83.0-4.2
+libboost-program-options1.83.0 1.83.0-4.2
+libboost-thread1.83.0 1.83.0-4.2
+libbpf1 1:1.5.0-3
+libbrotli1 1.1.0-2+b7
+libbsd0 0.12.2-2
+libbytesize1 2.11-2
+libbytesize-common 2.11-2
+libbz2-1.0 1.0.8-6
+libc6 2.41-12+rpt1+deb13u2
+libc6-dev 2.41-12+rpt1+deb13u2
+libcaca0 0.99.beta20-5
+libcairo2 1.18.4-1+rpt1
+libcairo-gobject2 1.18.4-1+rpt1
+libcamera0.7 0.7.0+rpt20260205-1
+libcamera-ipa 0.7.0+rpt20260205-1
+libcap2 1:2.75-10+b8
+libcap2-bin 1:2.75-10+b8
+libcap-ng0 0.8.5-4+b1
+libc-bin 2.41-12+rpt1+deb13u2
+libcbor0.10 0.10.2-2
+libcc1-0 14.2.0-19
+libc-dev-bin 2.41-12+rpt1+deb13u2
+libcdparanoia0 3.10.2+debian-14+b1
+libc-l10n 2.41-12+rpt1+deb13u2
+libclone-perl 0.47-1+b1
+libcloudproviders0 0.3.6-2
+libcolord2 1.4.7-3
+libcom-err2 1.47.2-3+b10
+libconfig++11 1.7.3-2
+libcpuinfo0 0.0~git20250327.39ea79a-1
+libcrypt1 1:4.4.38-1
+libcrypt-dev 1:4.4.38-1
+libcryptsetup12 2:2.7.5-2
+libctf0 2.44-3
+libctf-nobfd0 2.44-3
+libcups2t64 2.4.10-3+rpt2+deb13u1
+libcurl3t64-gnutls 8.14.1-2+deb13u3
+libcurl4t64 8.14.1-2+deb13u3
+libdaemon0 0.14-7.1+b3
+libdata-dump-perl 1.25-1
+libdatrie1 0.2.13-3+b1
+libdav1d7 1.5.1-1
+libdb5.3t64 5.3.28+dfsg2-9
+libdbus-1-3 1.16.2-2
+libdconf1 0.40.0-5
+libdebconfclient0 0.280
+libdebuginfod1t64 0.192-4
+libdebuginfod-common 0.192-4
+libdecor-0-0 0.2.2-2
+libdecor-0-plugin-1-gtk 0.2.2-2
+libdeflate0 1.23-2
+libdevmapper1.02.1 2:1.02.205-2
+libdisplay-info2 0.2.0-2
+libdouble-conversion3 3.3.1-1
+libdpkg-perl 1.22.22
+libdrm2 2.4.131-1~bpo13+1+rpt2
+libdrm-amdgpu1 2.4.131-1~bpo13+1+rpt2
+libdrm-common 2.4.131-1~bpo13+1+rpt2
+libdtovl0 20260304+1-1
+libduktape207 2.7.0-2+b2
+libdv4t64 1.0.0-17.1+b1
+libdvdread8t64 6.1.3-2
+libdw1t64 0.192-4
+libeatmydata1 131-2+b1
+libebml5 1.4.5-1+b1
+libebur128-1 1.2.6-1+b2
+libedit2 3.1-20250104-1
+libegl1 1.7.0-1+b2
+libegl-mesa0 25.0.7-2+rpt4
+libelf1t64 0.192-4
+libencode-locale-perl 1.05-3
+libepoxy0 1.5.10-2
+liberror-perl 0.17030-1
+libevdev2 1.13.4+dfsg-1
+libexif12 0.6.25-1
+libexpat1 2.7.1-2
+libext2fs2t64 1.47.2-3+b10
+libfakeroot 1.37.1.1-1
+libfarmhash0 0~git20190513.0d859a8-3+b1
+libfdisk1 2.41-5
+libfdt1 1.7.2-2+b1
+libffado2 2.4.9-2
+libffi8 3.4.8-2
+libfftw3-single3 3.3.10-2+b1
+libfido2-1 1.15.0-1+b1
+libfile-basedir-perl 0.09-2
+libfile-desktopentry-perl 0.22-3
+libfile-fcntllock-perl 0.22-4+b4
+libfile-listing-perl 6.16-1
+libfile-mimeinfo-perl 0.35-1
+libflac14 1.5.0+ds-2
+libfmt10 10.1.1+ds1-4
+libfont-afm-perl 1.20-4
+libfontconfig1 2.15.0-2.3
+libfontenc1 1:1.1.8-1+b2
+libfreetype6 2.13.3+dfsg-1+deb13u1
+libfribidi0 1.0.16-1
+libftdi1-2 1.5-10
+libfuse3-4 3.17.2-3
+libgbm1 25.0.7-2+rpt4
+libgcc-14-dev 14.2.0-19
+libgcc-s1 14.2.0-19
+libgcrypt20 1.11.0-7
+libgdbm6t64 1.24-2
+libgdbm-compat4t64 1.24-2
+libgdk-pixbuf-2.0-0 2.42.12+dfsg-4+deb13u1
+libgdk-pixbuf2.0-bin 2.42.12+dfsg-4+deb13u1
+libgdk-pixbuf2.0-common 2.42.12+dfsg-4+deb13u1
+libgl1 1.7.0-1+b2
+libgl1-mesa-dri 25.0.7-2+rpt4
+libgles2 1.7.0-1+b2
+libglib2.0-0t64 2.84.4-3~deb13u2
+libglib2.0-data 2.84.4-3~deb13u2
+libglibmm-2.4-1t64 2.66.8-1
+libglvnd0 1.7.0-1+b2
+libglx0 1.7.0-1+b2
+libglx-mesa0 25.0.7-2+rpt4
+libgmp10 2:6.3.0+dfsg-3
+libgnutls30t64 3.8.9-3+deb13u2
+libgomp1 14.2.0-19
+libgpg-error0 1.51-4
+libgpg-error-l10n 1.51-4
+libgpgme11t64 1.24.2-3
+libgpiod3 2.2.1-2+deb13u1
+libgpiolib0 20260304+1-1
+libgpm2 1.20.7-11+b2
+libgprofng0 2.44-3
+libgraphite2-3 1.3.14-2+b1
+libgssapi-krb5-2 1.21.3-5
+libgstreamer1.0-0 1.26.2-2
+libgstreamer-plugins-base1.0-0 1.26.2-1+rpt3+deb13u1
+libgtk-3-0t64 1:3.24.49-3+rpt8
+libgtk-3-bin 1:3.24.49-3+rpt8
+libgtk-3-common 1:3.24.49-3+rpt8
+libgudev-1.0-0 238-6
+libharfbuzz0b 10.2.0-1+b1
+libharfbuzz-subset0 10.2.0-1+b1
+libhidapi-hidraw0 0.14.0-1+b2
+libhogweed6t64 3.10.1-1
+libhtml-format-perl 2.16-2
+libhtml-form-perl 6.12-1
+libhtml-parser-perl 3.83-1+b2
+libhtml-tagset-perl 3.24-1
+libhtml-tree-perl 5.07-3
+libhttp-cookies-perl 6.11-1
+libhttp-daemon-perl 6.16-1
+libhttp-date-perl 6.06-1
+libhttp-message-perl 7.00-2
+libhttp-negotiate-perl 6.01-2
+libhwasan0 14.2.0-19
+libice6 2:1.1.1-1
+libicu76 76.1-4
+libidn2-0 2.3.8-2
+libiec61883-0 1.2.0-7
+libimobiledevice-1.0-6 1.3.0+git20250228-2
+libimobiledevice-glue-1.0-0 1.3.1-1
+libinotifytools0 4.23.9.0-2+b1
+libinput10 1.28.1-1
+libinput-bin 1.28.1-1
+libio-compress-brotli-perl 0.004001-2+b3
+libio-html-perl 1.004-3
+libio-socket-ssl-perl 2.089-1
+libio-stringy-perl 2.113-2
+libip4tc2 1.8.11-2
+libip6tc2 1.8.11-2
+libipc-system-simple-perl 1.30-2
+libisl23 0.27-1
+libitm1 14.2.0-19
+libiw30t64 30~pre9-18+b1
+libjansson4 2.14-2+b3
+libjaylink0 0.4.0-1
+libjbig0 2.1-6.1+b2
+libjim0.83 0.83-2
+libjpeg62-turbo 1:2.1.5-4
+libjson-c5 0.18+ds-1
+libjson-glib-1.0-0 1.10.6+ds-2
+libjson-glib-1.0-common 1.10.6+ds-2
+libk5crypto3 1.21.3-5
+libkeyutils1 1.6.3-6
+libklibc 2.0.14-1
+libkmod2 34.2-2
+libkms++0 0~git20250807.1813ada-1
+libkrb5-3 1.21.3-5
+libkrb5support0 1.21.3-5
+libksba8 1.6.7-2+b1
+liblastlog2-2 2.41-5
+liblcms2-2 2.16-2
+libldap2 2.6.10+dfsg-1
+libldap-common 2.6.10+dfsg-1
+liblerc4 4.0.0+ds-5
+liblgpio1 0.2.2-1~rpt1+trixie
+libliftoff0 0.5.0-1.1+rpt6
+liblilv-0-0 0.24.26-1
+libllvm19 1:19.1.7-3+b1
+liblocale-gettext-perl 1.07-7+b1
+liblsan0 14.2.0-19
+liblttng-ust1t64 2.13.9-1
+liblttng-ust-common1t64 2.13.9-1
+liblttng-ust-ctl5t64 2.13.9-1
+liblua5.4-0 5.4.7-1+b2
+libluajit-5.1-2 2.1.0+openresty20250117-2
+libluajit-5.1-common 2.1.0+openresty20250117-2
+liblwp-mediatypes-perl 6.04-2
+liblwp-protocol-https-perl 6.14-1
+liblz4-1 1.10.0-4
+liblzma5 5.8.1-1
+libmagic1t64 1:5.46-5
+libmagic-mgc 1:5.46-5
+libmailtools-perl 2.22-1
+libmatroska7 1.7.1-1+b2
+libmbim-glib4 1.32.0-1
+libmbim-proxy 1.32.0-1
+libmbim-utils 1.32.0-1
+libmd0 1.1.0-2+b1
+libminizip1t64 1:1.3.dfsg+really1.3.1-1+b1
+libmm-glib0 1.24.0-1+deb13u1
+libmnl0 1.0.5-3
+libmount1 2.41-5
+libmp3lame0 3.100-6+b3
+libmpc3 1.3.1-1+b3
+libmpfr6 4.2.2-1
+libmpg123-0t64 1.32.10-1+deb13u1
+libmtdev1t64 1.1.7-1
+libmtp9t64 1.1.22-1
+libmtp-common 1.1.22-1
+libmtp-runtime 1.1.22-1
+libmysofa1 1.3.3+dfsg-1
+libncurses6 6.5+20250216-2
+libncursesw6 6.5+20250216-2
+libndp0 1.9-1+b1
+libnet-dbus-perl 1.2.0-2+b3
+libnetfilter-conntrack3 1.1.0-1
+libnet-http-perl 6.23-1
+libnetplan1 1.1.2-7+rpt1
+libnet-smtp-ssl-perl 1.04-2
+libnet-ssleay-perl 1.94-3
+libnettle8t64 3.10.1-1
+libnewt0.52 0.52.25-1
+libnfnetlink0 1.0.2-3
+libnftables1 1.1.3-1
+libnftnl11 1.2.9-1
+libnghttp2-14 1.64.0-1.1
+libnghttp3-9 1.8.0-1
+libngtcp2-16 1.11.0-1
+libngtcp2-crypto-gnutls8 1.11.0-1
+libnl-3-200 3.7.0-2
+libnl-genl-3-200 3.7.0-2
+libnl-route-3-200 3.7.0-2
+libnm0 1.52.1-1+rpt4
+libnpth0t64 1.8-3
+libnspr4 2:4.36-1
+libnss3 2:3.110-1+deb13u1
+libnss-mdns 0.15.1-4+b1
+libntfs-3g89t64 1:2022.10.3-5
+libnuma1 2.0.19-1
+libnvme1t64 1.13-2
+libogg0 1.3.5-3+b2
+libopencore-amrnb0 0.1.6-1+b2
+libopencore-amrwb0 0.1.6-1+b2
+libopenfec1 1.4.2.11+dfsg-1
+libopenh264-8 2.6.0+dfsg-2
+libopenjp2-7 2.5.3-2.1~deb13u1
+libopus0 1.5.2-2
+liborc-0.4-0t64 1:0.4.41-1
+libossp-uuid16 1.6.4-1
+libp11-kit0 0.25.5-3
+libpam0g 1.7.0-5
+libpam-chksshpwd 2.0
+libpam-modules 1.7.0-5
+libpam-modules-bin 1.7.0-5
+libpam-runtime 1.7.0-5
+libpam-systemd 257.9-1~deb13u1
+libpango-1.0-0 1.56.3-1
+libpangocairo-1.0-0 1.56.3-1
+libpangoft2-1.0-0 1.56.3-1
+libparted2t64 3.6-5
+libpcap0.8t64 1.10.5-2
+libpci3 1:3.13.0-2
+libpcre2-16-0 10.46-1~deb13u1
+libpcre2-8-0 10.46-1~deb13u1
+libpcsclite1 2.3.3-1
+libperl5.40 5.40.1-6
+libpipeline1 1.5.8-1
+libpipewire-0.3-0t64 1.4.2-1+rpt3
+libpipewire-0.3-common 1.4.2-1+rpt3
+libpipewire-0.3-modules 1.4.2-1+rpt3
+libpisp1 1.4.0-1
+libpisp-common 1.4.0-1
+libpixman-1-0 0.46.4-1+rpt1
+libpkgconf3 1.8.1-4
+libplist-2.0-4 2.6.0-2+b1
+libpng16-16t64 1.6.48-1+deb13u4
+libpolkit-agent-1-0 126-2
+libpolkit-gobject-1-0 126-2
+libpopt0 1.19+dfsg-2
+libproc2-0 2:4.0.4-9
+libproxy1v5 0.5.9-1
+libpsl5t64 0.21.2-1.1+b1
+libpugixml1v5 1.14-2
+libpulse0 17.0+dfsg1-2+rpt1
+libpython3.13 3.13.5-2
+libpython3.13-minimal 3.13.5-2
+libpython3.13-stdlib 3.13.5-2
+libpython3-stdlib 3.13.5-1
+libqmi-glib5 1.36.0-1
+libqmi-proxy 1.36.0-1
+libqmi-utils 1.36.0-1
+libqrtr-glib0 1.2.2-1+b2
+libqt6core6t64 6.8.2+dfsg-9+deb13u1
+libraw1394-11 2.1.2-2+b2
+libreadline8t64 8.2-6
+libroc0.4 0.4.0+dfsg-5
+librpicam-app1 1.11.1-1
+librsvg2-2 2.60.0+dfsg-1
+librsvg2-common 2.60.0+dfsg-1
+librtmp1 2.4+20151223.gitfa8646d.1-2+b5
+libsamplerate0 0.2.2-4+b2
+libsasl2-2 2.1.28+dfsg1-9
+libsasl2-modules 2.1.28+dfsg1-9
+libsasl2-modules-db 2.1.28+dfsg1-9
+libseat1 0.9.1-1
+libseccomp2 2.6.0-2
+libselinux1 3.8.1-1
+libsemanage2 3.8.1-1
+libsemanage-common 3.8.1-1
+libsensors5 1:3.6.2-2
+libsensors-config 1:3.6.2-2
+libsepol2 3.8.1-1
+libserd-0-0 0.32.4-1
+libsfdo0 0.1.3-1+b1
+libsframe1 2.44-3
+libsharpyuv0 1.5.0-0.1
+libshout3 2.4.6-1+b3
+libsigc++-2.0-0v5 2.12.1-3
+libslang2 2.3.3-5+b2
+libsm6 2:1.2.6-1
+libsmartcols1 2.41-5
+libsndfile1 1.2.2-2+deb13u1
+libsord-0-0 0.16.18-1
+libsoup-3.0-0 3.6.5-3
+libsoup-3.0-common 3.6.5-3
+libsource-highlight4t64 3.1.9-4.3+b1
+libsource-highlight-common 3.1.9-4.3
+libspa-0.2-modules 1.4.2-1+rpt3
+libspeex1 1.2.1-3
+libspeexdsp1 1.2.1-3
+libsqlite3-0 3.46.1-7+deb13u1
+libsratom-0-0 0.6.18-1
+libss2 1.47.2-3+b10
+libssh2-1t64 1.11.1-1
+libssl3t64 3.5.5-1~deb13u2
+libstdc++-14-dev 14.2.0-19
+libstdc++6 14.2.0-19
+libsystemd0 257.9-1~deb13u1
+libsystemd-shared 257.9-1~deb13u1
+libtag2 2.0.2-2
+libtalloc2 2:2.4.3+samba4.22.8+dfsg-0+deb13u1
+libtasn1-6 4.20.0-2
+libteamdctl0 1.31-1+b2
+libtensorflow-lite2.20.0 2.20.0-1+rpt1
+libtext-charwidth-perl 0.04-11+b4
+libtext-iconv-perl 1.7-8+b4
+libtext-wrapi18n-perl 0.06-10
+libthai0 0.1.29-2+b1
+libthai-data 0.1.29-2
+libtheora0 1.2.0~alpha1+dfsg-6
+libtheoradec1 1.2.0~alpha1+dfsg-6
+libtheoraenc1 1.2.0~alpha1+dfsg-6
+libtie-ixhash-perl 1.23-4
+libtiff6 4.7.0-3+deb13u2
+libtimedate-perl 2.3300-2
+libtinfo6 6.5+20250216-2
+libtirpc3t64 1.3.6+ds-1
+libtirpc-common 1.3.6+ds-1
+libtry-tiny-perl 0.32-1
+libtsan2 14.2.0-19
+libtwolame0 0.4.0-2+b2
+libubsan1 14.2.0-19
+libuchardet0 0.0.8-1+b2
+libudev1 257.9-1~deb13u1
+libudisks2-0 2.10.1-12.1+deb13u1
+libunistring5 1.3-2
+libupower-glib3 1.90.9-1
+liburi-perl 5.30-1
+libusb-1.0-0 2:1.0.28-1
+libusbmuxd-2.0-7 2.1.0-1+b1
+libuuid1 2.41-5
+libuv1t64 1.50.0-2
+libv4l-0t64 1.30.1-1
+libv4l2rds0t64 1.30.1-1
+libv4lconvert0t64 1.30.1-1
+libvisual-0.4-0 0.4.2-2+b2
+libvolume-key1 0.3.12-9
+libvorbis0a 1.3.7-3
+libvorbisenc2 1.3.7-3
+libvpx9 1.15.0-2.1+deb13u1
+libvulkan1 1.4.309.0-1
+libwacom9 2.14.0-1
+libwacom-common 2.14.0-1
+libwavpack1 5.8.1-1
+libwayland-client0 1.24.0-2~bpo13+1~rpt1
+libwayland-cursor0 1.24.0-2~bpo13+1~rpt1
+libwayland-egl1 1.24.0-2~bpo13+1~rpt1
+libwayland-server0 1.24.0-2~bpo13+1~rpt1
+libwbclient0 2:4.22.8+dfsg-0+deb13u1
+libwebp7 1.5.0-0.1
+libwebrtc-audio-processing-1-3 1.3-3+b1
+libwidevinecdm0 4.10.2662.3+1
+libwireplumber-0.5-0 0.5.8-2
+libwlroots-0.19 0.19.1-1+rpt3
+libwrap0 7.6.q-36
+libwtmpdb0 0.73.0-3+deb13u1
+libwww-perl 6.78-1
+libwww-robotrules-perl 6.02-1
+libx11-6 2:1.8.12-1
+libx11-data 2:1.8.12-1
+libx11-protocol-perl 0.56-9
+libx11-xcb1 2:1.8.12-1
+libxau6 1:1.0.11-1
+libxaw7 2:1.0.16-1
+libxcb1 1.17.0-2+b1
+libxcb-composite0 1.17.0-2+b1
+libxcb-dri3-0 1.17.0-2+b1
+libxcb-errors0 1.0.1-4
+libxcb-ewmh2 0.4.2-1
+libxcb-glx0 1.17.0-2+b1
+libxcb-icccm4 0.4.2-1
+libxcb-present0 1.17.0-2+b1
+libxcb-randr0 1.17.0-2+b1
+libxcb-render0 1.17.0-2+b1
+libxcb-render-util0 0.3.10-1
+libxcb-res0 1.17.0-2+b1
+libxcb-shape0 1.17.0-2+b1
+libxcb-shm0 1.17.0-2+b1
+libxcb-sync1 1.17.0-2+b1
+libxcb-xfixes0 1.17.0-2+b1
+libxcb-xinput0 1.17.0-2+b1
+libxcomposite1 1:0.4.6-1
+libxcursor1 1:1.2.3-1
+libxcvt0 0.1.3-1
+libxdamage1 1:1.1.6-1+b2
+libxdmcp6 1:1.1.5-1
+libxext6 2:1.3.4-1+b3
+libxfixes3 1:6.0.0-2+b4
+libxfont2 1:2.0.6-1+b3
+libxft2 2.3.6-1+b4
+libxi6 2:1.8.2-1
+libxinerama1 2:1.1.4-3+b4
+libxkbcommon0 1.7.0-2
+libxkbfile1 1:1.1.0-1+b4
+libxml2 2.12.7+dfsg+really2.9.14-2.1+deb13u2
+libxml++2.6-2v5 2.42.3-2
+libxml-parser-perl 2.47-2~deb13u1
+libxml-twig-perl 1:3.52-3
+libxml-xpathengine-perl 0.14-2
+libxmu6 2:1.1.3-3+b4
+libxmuu1 2:1.1.3-3+b4
+libxnvctrl0 535.171.04-1+b2
+libxpm4 1:3.5.17-1+b3
+libxrandr2 2:1.5.4-1+b3
+libxrender1 1:0.9.12-1
+libxshmfence1 1.3.3-1
+libxt6t64 1:1.2.1-1.2+b2
+libxtables12 1.8.11-2
+libxtst6 2:1.2.5-1
+libxv1 2:1.0.11-1.1+b3
+libxxf86dga1 2:1.1.5-1+b3
+libxxf86vm1 1:1.1.4-1+b4
+libxxhash0 0.8.3-2
+libyaml-0-2 0.2.5-2
+libyuv0 0.0.1904.20250204-1
+libz3-4 4.13.3-1
+libzix-0-0 0.6.2-1
+libzstd1 1.5.7+dfsg-1
+linux-base 4.12.1
+linux-headers-6.12.47+rpt-common-rpi 1:6.12.47-1+rpt1
+linux-headers-6.12.47+rpt-rpi-2712 1:6.12.47-1+rpt1
+linux-headers-6.12.47+rpt-rpi-v8 1:6.12.47-1+rpt1
+linux-headers-6.12.75+rpt-common-rpi 1:6.12.75-1+rpt1
+linux-headers-6.12.75+rpt-rpi-2712 1:6.12.75-1+rpt1
+linux-headers-6.12.75+rpt-rpi-v8 1:6.12.75-1+rpt1
+linux-headers-rpi-2712 1:6.12.75-1+rpt1
+linux-headers-rpi-v8 1:6.12.75-1+rpt1
+linux-image-6.12.47+rpt-rpi-2712 1:6.12.47-1+rpt1
+linux-image-6.12.47+rpt-rpi-v8 1:6.12.47-1+rpt1
+linux-image-6.12.75+rpt-rpi-2712 1:6.12.75-1+rpt1
+linux-image-6.12.75+rpt-rpi-v8 1:6.12.75-1+rpt1
+linux-image-rpi-2712 1:6.12.75-1+rpt1
+linux-image-rpi-v8 1:6.12.75-1+rpt1
+linux-kbuild-6.12.47+rpt 1:6.12.47-1+rpt1
+linux-kbuild-6.12.75+rpt 1:6.12.75-1+rpt1
+linux-libc-dev 1:6.12.75-1+rpt1
+linux-sysctl-defaults 4.12.1
+locales 2.41-12+rpt1+deb13u2
+login 1:4.16.0-2+really2.41-5
+login.defs 1:4.17.4-2
+logrotate 3.22.0-1+b2
+logsave 1.47.2-3+b10
+lsb-release 12.1-1
+lua5.1 5.1.5-11
+luajit 2.1.0+openresty20250117-2
+luit 2.0.20240910-1+b1
+make 4.4.1-2
+man-db 2.13.1-1
+manpages 6.9.1-1
+manpages-dev 6.9.1-1
+mawk 1.3.4.20250131-1
+media-types 13.0.0
+mesa-libgallium 25.0.7-2+rpt4
+mesa-vulkan-drivers 25.0.7-2+rpt4
+mkvtoolnix 92.0-1
+modemmanager 1.24.0-1+deb13u1
+mount 2.41-5
+nano 8.4-1
+ncdu 1.22-1
+ncurses-base 6.5+20250216-2
+ncurses-bin 6.5+20250216-2
+ncurses-term 6.5+20250216-2
+netbase 6.5
+netcat-openbsd 1.229-1
+netplan-generator 1.1.2-7+rpt1
+netplan.io 1.1.2-7+rpt1
+net-tools 2.10-1.3
+network-manager 1.52.1-1+rpt4
+network-manager-l10n 1.52.1-1+rpt4
+nftables 1.1.3-1
+notification-daemon 3.20.0-5
+ntfs-3g 1:2022.10.3-5
+openssh-client 1:10.0p1-7+deb13u2
+openssh-server 1:10.0p1-7+deb13u2
+openssh-sftp-server 1:10.0p1-7+deb13u2
+openssl 3.5.5-1~deb13u2
+openssl-provider-legacy 3.5.5-1~deb13u2
+p7zip-full 16.02+transitional.1
+pahole 1.30-1
+parted 3.6-5
+passwd 1:4.17.4-2
+pastebinit 1.7.1-1+~rpt2
+patch 2.8-2
+pci.ids 0.0~2025.06.09-1
+pciutils 1:3.13.0-2
+perl 5.40.1-6
+perl-base 5.40.1-6
+perl-modules-5.40 5.40.1-6
+perl-openssl-defaults 7+b2
+pigz 2.8-1+b1
+pinentry-curses 1.3.1-2
+pipewire 1.4.2-1+rpt3
+pipewire-alsa 1.4.2-1+rpt3
+pipewire-bin 1.4.2-1+rpt3
+pipewire-pulse 1.4.2-1+rpt3
+pkgconf 1.8.1-4
+pkgconf-bin 1.8.1-4
+pkg-config 1.8.1-4
+polkitd 126-2
+ppp 2.5.2-1+1
+procps 2:4.0.4-9
+psmisc 23.7-2
+publicsuffix 20250328.1952-0.1
+python3.13 3.13.5-2
+python3.13-minimal 3.13.5-2
+python3.13-venv 3.13.5-2
+python3 3.13.5-1
+python3-apt 3.0.0
+python3-arrow 1.3.0-1.1
+python3-attr 25.3.0-1
+python3-babel 2.17.0-1
+python3-bcrypt 4.2.0-2.1+b1
+python3-blinker 1.9.0-1
+python3-certifi 2025.1.31+ds-1
+python3-cffi-backend 1.17.1-3
+python3-chardet 5.2.0+dfsg-2
+python3-charset-normalizer 3.4.2-1
+python3-colorzero 2.0-4
+python3-configobj 5.0.9-1
+python3-cryptography 43.0.0-3+deb13u1
+python3-dateutil 2.9.0-4
+python3-debconf 1.5.91
+python3-distro 1.9.0-1
+python3-fqdn 1.5.1-2
+python3-gpiozero 2.0.1-0+rpt1+trixie
+python3-idna 3.10-1
+python3-isoduration 20.11.0+git20211126.ae0bd61-2
+python3-jinja2 3.1.6-1
+python3-jsonpatch 1.32-5
+python3-json-pointer 2.4-3
+python3-jsonschema 4.19.2-6
+python3-jsonschema-specifications 2023.12.1-2
+python3-jwt 2.10.1-2
+python3-lgpio 0.2.2-1~rpt1+trixie
+python3-libgpiod 2.2.1-2+deb13u1
+python3-linkify-it 2.0.3-1
+python3-markdown-it 3.0.0-3
+python3-markupsafe 2.1.5-1+b4
+python3-mdurl 0.1.2-1
+python3-minimal 3.13.5-1
+python3-netplan 1.1.2-7+rpt1
+python3-oauthlib 3.2.2-3
+python3-pip-whl 25.1.1+dfsg-1+rpt1
+python3-pycryptodome 3.20.0+dfsg-3
+python3-pygments 2.18.0+dfsg-2
+python3-referencing 0.36.2-1
+python3-requests 2.32.3+dfsg-5+deb13u1
+python3-rfc3339-validator 0.1.4-2
+python3-rfc3986-validator 0.1.1-2
+python3-rfc3987 1.3.8-3
+python3-rich 13.9.4-1
+python3-rpds-py 0.21.0-2+b1
+python3-rpi-lgpio 0.6-0~rpt1+trixie
+python3-setuptools-whl 78.1.1-0.1
+python3-smbus2 0.4.3-1
+python3-spidev 3.6-1+b6
+python3-typeshed 0.0~git20241223.ea91db2-1
+python3-uc-micro 1.0.3-1
+python3-uritemplate 4.1.1-3
+python3-urllib3 2.3.0-3+deb13u1
+python3-venv 3.13.5-1
+python3-webcolors 1.13-1
+python3-websockets 15.0.1-1
+python3-yaml 6.0.2-1+b2
+python-apt-common 3.0.0
+python-babel-localedata 2.17.0-1
+python-is-python3 3.13.3-1
+raspberrypi-archive-keyring 2025.1+rpt1
+raspberrypi-net-mods 1.4.4
+raspberrypi-sys-mods 1:20260315
+raspi-config 20260303
+raspi-config-core 20260303
+raspi-firmware 1:1.20250915-1
+raspinfo 20260304+1-1
+raspi-utils 20260304+1-1
+raspi-utils-core 20260304+1-1
+raspi-utils-dt 20260304+1-1
+raspi-utils-eeprom 20260304+1-1
+raspi-utils-otp 20260304+1-1
+readline-common 8.2-6
+rfkill 2.41-5
+rpcsvc-proto 1.4.3-1+b1
+rpicam-apps-core 1.11.1-1
+rpicam-apps-lite 1.11.1-1
+rpi-chromium-mods 20260211
+rpi-cloud-init-mods 1:20260119
+rpi-connect-lite 2.10.0
+rpi-eeprom 28.14-1
+rpi-keyboard-config 1.0
+rpi-keyboard-fw-update 1.0.1
+rpi-loop-utils 1.2.1
+rpi-swap 1.2.1
+rpi-systemd-config 1.1.1
+rpi-update 20230904
+rpi-usb-gadget 1.0.6
+rsync 3.4.1+ds1-5+deb13u1
+rtkit 0.13-5.1+b1
+runit-helper 2.16.4
+sed 4.9-2+b1
+sensible-utils 0.0.25
+sgml-base 1.31+nmu1
+shared-mime-info 2.4-5+b2
+sq 1.3.1-2+b2
+sqv 1.3.0-3+b2
+ssh 1:10.0p1-7+deb13u2
+ssh-import-id 5.10-3
+strace 6.13+ds-1
+sudo 1.9.16p2-3+deb13u1
+systemd 257.9-1~deb13u1
+systemd-sysv 257.9-1~deb13u1
+systemd-timesyncd 257.9-1~deb13u1
+systemd-zram-generator 1.2.1-2
+sysvinit-utils 3.14-4
+tar 1.35+dfsg-3.1
+tzdata 2026a-0+deb13u1
+ucf 3.0052
+udev 257.9-1~deb13u1
+udisks2 2.10.1-12.1+deb13u1
+unzip 6.0-29
+upower 1.90.9-1
+usb-modeswitch 2.6.1-4+b2
+usb-modeswitch-data 20191128-7
+usbmuxd 1.1.1-6+deb13u1
+usbutils 1:018-2
+userconf-pi 0.17
+util-linux 2.41-5
+uuid 1.6.4-1
+v4l-utils 1.30.1-1
+vim-common 2:9.1.1230-2
+vim-tiny 2:9.1.1230-2
+wget 1.25.0-2
+whiptail 0.52.25-1
+wireless-regdb 2026.02.04-1~deb13u1
+wireless-tools 30~pre9-18+b1
+wireplumber 0.5.8-2
+wlr-randr 0.4.1-1
+wpasupplicant 2:2.10-24
+x11-common 1:7.7+24+deb13u1
+x11-utils 7.7+7
+x11-xkb-utils 7.7+9
+x11-xserver-utils 7.7+11
+xauth 1:1.1.2-1.1
+xdg-desktop-portal 1.20.3+ds-1
+xdg-desktop-portal-gtk 1.15.3-1
+xdg-user-dirs 0.18-2
+xdg-utils 1.2.1-2
+xfonts-base 1:1.0.5+nmu1
+xfonts-encodings 1:1.0.4-2.2
+xfonts-utils 1:7.7+7
+xkb-data 2.42-1
+xml-core 0.19
+xserver-common 2:21.1.16-1.3+rpt1+deb13u1
+xwayland 2:24.1.6-1+rpt1
+xz-utils 5.8.1-1
+zenoty 0.3
+zip 3.0-15
+zlib1g 1:1.3.dfsg+really1.3.1-1+b1
+zstd 1.5.7+dfsg-1
+zutty 0.16.2.20241020+dfsg1-1
+
+==============================================================================
+== APT_SOURCES
+==============================================================================
+debian.sources
+docker.list
+raspi.sources
+Types: deb
+URIs: http://deb.debian.org/debian/
+Suites: trixie trixie-updates
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+
+Types: deb
+URIs: http://deb.debian.org/debian-security/
+Suites: trixie-security
+Components: main contrib non-free non-free-firmware
+Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp
+Types: deb
+URIs: http://archive.raspberrypi.com/debian/
+Suites: trixie
+Components: main
+Signed-By: /usr/share/keyrings/raspberrypi-archive-keyring.pgp
+
+==============================================================================
+== SYSTEM_UNITS_ENABLED
+==============================================================================
+apparmor.service                   enabled enabled
+apt-daily.timer                    enabled enabled
+apt-daily-upgrade.timer            enabled enabled
+avahi-daemon.service               enabled enabled
+avahi-daemon.socket                enabled enabled
+bluetooth.service                  enabled enabled
+cloud-config.service               enabled enabled
+cloud-final.service                enabled enabled
+cloud-init-hotplugd.socket         enabled enabled
+cloud-init-local.service           enabled enabled
+cloud-init-main.service            enabled enabled
+cloud-init-network.service         enabled enabled
+console-setup.service              enabled enabled
+containerd.service                 enabled enabled
+cpu-performance.service            enabled enabled
+cron.service                       enabled enabled
+docker-selfheal.service            enabled enabled
+docker.service                     enabled enabled
+docker.socket                      enabled enabled
+dpkg-db-backup.timer               enabled enabled
+e2scrub_all.timer                  enabled enabled
+e2scrub_reap.service               enabled enabled
+fstrim.timer                       enabled enabled
+getty@.service                     enabled enabled
+keyboard-setup.service             enabled enabled
+logrotate.timer                    enabled enabled
+man-db.timer                       enabled enabled
+ModemManager.service               enabled enabled
+NetworkManager-dispatcher.service  enabled enabled
+NetworkManager.service             enabled enabled
+NetworkManager-wait-online.service enabled enabled
+regenerate_ssh_host_keys.service   enabled enabled
+remote-fs.target                   enabled enabled
+rpi-eeprom-update.service          enabled enabled
+sshd-keygen.service                enabled enabled
+sshd-mute-monitor.service          enabled enabled
+ssh.service                        enabled enabled
+sshswitch.service                  enabled enabled
+systemd-pstore.service             enabled enabled
+systemd-timesyncd.service          enabled enabled
+udisks2.service                    enabled enabled
+wpa_supplicant.service             enabled enabled
+
+==============================================================================
+== USER_UNITS_ENABLED
+==============================================================================
+chromium-kiosk.service                       enabled enabled
+chromium-restart.timer                       enabled enabled
+chromium-watchdog.timer                      enabled enabled
+dirmngr.socket                               enabled enabled
+filter-chain.service                         enabled enabled
+framelink-camera.service                     enabled enabled
+framelink-gpio.service                       enabled enabled
+framelink-spa.service                        enabled enabled
+gpg-agent-browser.socket                     enabled enabled
+gpg-agent-extra.socket                       enabled enabled
+gpg-agent.socket                             enabled enabled
+gpg-agent-ssh.socket                         enabled enabled
+keyboxd.socket                               enabled enabled
+mpris-proxy.service                          enabled enabled
+pipewire-pulse.service                       enabled enabled
+pipewire-pulse.socket                        enabled enabled
+pipewire.service                             enabled enabled
+pipewire.socket                              enabled enabled
+rpi-connect.service                          enabled enabled
+rpi-connect-signin.path                      enabled enabled
+ssh-agent.socket                             enabled enabled
+wireplumber.service                          enabled enabled
+xdg-desktop-portal-rewrite-launchers.service enabled enabled
+
+==============================================================================
+== USER_UNIT_FILES
+==============================================================================
+##### /home/framelink/.config/systemd/user/chromium-kiosk.service
+[Unit]
+Description=Chromium Kiosk Browser
+After=graphical-session.target framelink-spa.service framelink-camera.service
+Wants=framelink-spa.service framelink-camera.service
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+Environment="WAYLAND_DISPLAY=wayland-0"
+ExecStartPre=/bin/rm -rf /tmp/framelink-chromium
+ExecStartPre=/bin/bash -c 'while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done'
+ExecStartPre=/bin/bash -c 'until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done'
+ExecStart=/usr/bin/chromium \
+  --ozone-platform=wayland \
+  --user-data-dir=/tmp/framelink-chromium \
+  --kiosk \
+  --noerrdialogs \
+  --disable-infobars \
+  --disable-session-crashed-bubble \
+  --no-first-run \
+  --auto-accept-camera-and-microphone-capture \
+  --enable-features=UsePipeWireCamera \
+  --autoplay-policy=no-user-gesture-required \
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  http://localhost:8888/
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+##### /home/framelink/.config/systemd/user/chromium-restart.service
+[Unit]
+Description=Restart Chromium kiosk
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl --user restart chromium-kiosk.service
+##### /home/framelink/.config/systemd/user/chromium-watchdog.service
+[Unit]
+Description=Chromium memory watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/home/framelink/chromium-watchdog.sh
+##### /home/framelink/.config/systemd/user/framelink-camera.service
+[Unit]
+Description=FrameLink camera node (Pi Camera -> PipeWire, full-FoV 1080p30)
+After=pipewire.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/gst-launch-1.0 libcamerasrc ! video/x-raw,format=NV12,width=1920,height=1080,framerate=30/1 ! queue max-size-buffers=4 leaky=downstream ! pipewiresink sync=false mode=provide stream-properties=props,media.class=Video/Source,media.role=Camera,node.name=framelink-cam,node.description=FrameLinkCam
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+##### /home/framelink/.config/systemd/user/framelink-gpio.service
+[Unit]
+Description=FrameLink GPIO button daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/framelink/FrameLink/deploy/gpio/framelink-gpio.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target
+##### /home/framelink/.config/systemd/user/framelink-spa.service
+[Unit]
+Description=FrameLink SPA static server (busybox httpd)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/busybox httpd -f -p 127.0.0.1:8888 -h /home/framelink/FrameLink/app
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+##### /home/framelink/.config/systemd/user/chromium-restart.timer
+[Unit]
+Description=Daily Chromium restart at 3 AM
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+##### /home/framelink/.config/systemd/user/chromium-watchdog.timer
+[Unit]
+Description=Run the Chromium memory watchdog every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+
+==============================================================================
+== USER_UNIT_DROPINS
+==============================================================================
+##### /home/framelink/.config/systemd/user/xdg-desktop-portal.service.d/desktop.conf
+[Service]
+Environment=XDG_CURRENT_DESKTOP=labwc
+
+==============================================================================
+== SYSTEM_UNIT_FILES
+==============================================================================
+##### /etc/systemd/system/cpu-performance.service
+[Unit]
+Description=Pin CPU governor to performance
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo performance | tee /sys/devices/system/cpu/cpufreq/policy*/scaling_governor'
+
+[Install]
+WantedBy=multi-user.target
+##### /etc/systemd/system/docker-selfheal.service
+[Unit]
+Description=FrameLink: repair Docker after power-loss corruption and ensure the slideshow container runs
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/docker-selfheal.sh
+
+[Install]
+WantedBy=multi-user.target
+##### /etc/systemd/system/sshd-mute-monitor.service
+[Unit]
+Description=FrameLink testbed: sshd mute monitor (diagnostics, remove at fresh-flash)
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/sshd-mute-monitor.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+==============================================================================
+== SYSTEM_DROPINS
+==============================================================================
+##### /etc/systemd/journald.conf
+#  This file is part of systemd.
+#
+#  systemd is free software; you can redistribute it and/or modify it under the
+#  terms of the GNU Lesser General Public License as published by the Free
+#  Software Foundation; either version 2.1 of the License, or (at your option)
+#  any later version.
+#
+# Entries in this file show the compile time defaults. Local configuration
+# should be created by either modifying this file (or a copy of it placed in
+# /etc/ if the original file is shipped in /usr/), or by creating "drop-ins" in
+# the /etc/systemd/journald.conf.d/ directory. The latter is generally
+# recommended. Defaults can be restored by simply deleting the main
+# configuration file and all drop-ins located in /etc/.
+#
+# Use 'systemd-analyze cat-config systemd/journald.conf' to display the full config.
+#
+# See journald.conf(5) for details.
+
+[Journal]
+#Storage=auto
+#Compress=yes
+#Seal=yes
+#SplitMode=uid
+#SyncIntervalSec=5m
+#RateLimitIntervalSec=30s
+#RateLimitBurst=10000
+#SystemMaxUse=
+#SystemKeepFree=
+#SystemMaxFileSize=
+#SystemMaxFiles=100
+#RuntimeMaxUse=
+#RuntimeKeepFree=
+#RuntimeMaxFileSize=
+#RuntimeMaxFiles=100
+#MaxRetentionSec=0
+#MaxFileSec=1month
+#ForwardToSyslog=no
+#ForwardToKMsg=no
+#ForwardToConsole=no
+#ForwardToWall=yes
+#TTYPath=/dev/console
+#MaxLevelStore=debug
+#MaxLevelSyslog=debug
+#MaxLevelKMsg=notice
+#MaxLevelConsole=info
+#MaxLevelWall=emerg
+#MaxLevelSocket=debug
+#LineMax=48K
+#ReadKMsg=yes
+#Audit=yes
+##### /etc/systemd/sleep.conf
+#  This file is part of systemd.
+#
+#  systemd is free software; you can redistribute it and/or modify it under the
+#  terms of the GNU Lesser General Public License as published by the Free
+#  Software Foundation; either version 2.1 of the License, or (at your option)
+#  any later version.
+#
+# Entries in this file show the compile time defaults. Local configuration
+
+==============================================================================
+== MODPROBE_D
+==============================================================================
+##### /etc/modprobe.d/alsa-base.conf
+options snd-usb-audio index=0 vid=0x2886 pid=0x001a
+##### /etc/modprobe.d/blacklist-8192cu.conf
+blacklist 8192cu
+##### /etc/modprobe.d/rfkill_default.conf
+options rfkill default_state=0
+
+==============================================================================
+== ALSA_MIXER
+==============================================================================
+Simple mixer control 'PCM',0
+  Capabilities: pvolume pswitch
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 60
+  Mono:
+  Front Left: Playback 60 [100%] [0.00dB] [on]
+  Front Right: Playback 60 [100%] [0.00dB] [on]
+Simple mixer control 'PCM',1
+  Capabilities: pvolume pvolume-joined pswitch pswitch-joined
+  Playback channels: Mono
+  Limits: Playback 0 - 60
+  Mono: Playback 60 [100%] [0.00dB] [on]
+Simple mixer control 'Headset',0
+  Capabilities: cvolume cswitch
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 60
+  Front Left: Capture 60 [100%] [0.00dB] [on]
+  Front Right: Capture 60 [100%] [0.00dB] [on]
+Simple mixer control 'Headset',1
+  Capabilities: cvolume cvolume-joined cswitch cswitch-joined
+  Capture channels: Mono
+  Limits: Capture 0 - 60
+  Mono: Capture 60 [100%] [0.00dB] [on]
+
+==============================================================================
+== ALSA_CARDS
+==============================================================================
+ 0 [Array          ]: USB-Audio - reSpeaker XVF3800 4-Mic Array
+                      Seeed Studio reSpeaker XVF3800 4-Mic Array at usb-xhci-hcd.0-1, high speed
+--- state file ---
+state.Array {
+	control.1 {
+		iface PCM
+		name 'Playback Channel Map'
+		value.0 3
+		value.1 4
+		comment {
+			access 'read volatile'
+			type INTEGER
+			count 2
+			range '0 - 36'
+		}
+	}
+	control.2 {
+		iface PCM
+		name 'Capture Channel Map'
+		value.0 0
+		value.1 0
+		comment {
+			access 'read volatile'
+			type INTEGER
+			count 2
+			range '0 - 36'
+		}
+	}
+	control.3 {
+		iface MIXER
+		name 'PCM Playback Switch'
+		value.0 true
+		value.1 true
+		comment {
+			access 'read write'
+			type BOOLEAN
+			count 2
+		}
+	}
+	control.4 {
+		iface MIXER
+		name 'PCM Playback Switch'
+		index 1
+
+==============================================================================
+== XVF3800_FIRMWARE
+==============================================================================
+Device (USB)::device_init() -- Found device VID: 10374 PID: 26 interface: 3
+VERSION 2 0 10
+
+==============================================================================
+== PIPEWIRE
+==============================================================================
+pipewire
+Compiled with libpipewire 1.4.2
+PipeWire 'pipewire-0' [1.4.2, framelink@framelink-douwe, cookie:4249062001]
+ └─ Clients:
+        33. WirePlumber                         [1.4.2, framelink@framelink-douwe, pid:989]
+        34. pipewire                            [1.4.2, framelink@framelink-douwe, pid:990]
+        47. WirePlumber [export]                [1.4.2, framelink@framelink-douwe, pid:989]
+        48. gst-launch-1.0                      [1.4.2, framelink@framelink-douwe, pid:15115]
+        58. xdg-desktop-portal                  [1.4.2, framelink@framelink-douwe, pid:1752]
+        61. Chromium input                      [1.4.2, framelink@framelink-douwe, pid:40161]
+        66. wpctl                               [1.4.2, framelink@framelink-douwe, pid:42010]
+
+Audio
+ ├─ Devices:
+ │      49. reSpeaker XVF3800 4-Mic Array       [alsa]
+ │  
+ ├─ Sinks:
+ │  *   53. reSpeaker XVF3800 4-Mic Array Analog Stereo [vol: 1.00]
+ │  
+ ├─ Sources:
+ │  *   54. reSpeaker XVF3800 4-Mic Array Analog Stereo [vol: 1.00]
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+
+Video
+ ├─ Devices:
+ │  
+ ├─ Sinks:
+ │  
+ ├─ Sources:
+
+==============================================================================
+== WIREPLUMBER_CONF
+==============================================================================
+##### /home/framelink/.config/wireplumber/wireplumber.conf.d/99-framelink-camera.conf
+# FrameLink camera routing.
+# Disable WirePlumber's stock camera monitors so the only camera Chromium can see is the
+# framelink-camera PipeWire node (deploy/systemd/framelink-camera.service):
+#  - monitor.libcamera: the stock libspa-libcamera node is hard-limited to ~30 fps, rejects
+#    non-menu sizes, and Chromium fails to acquire it above 720p (measured).
+#  - monitor.v4l2: without it the raw CFE/ISP V4L2 nodes would surface as bogus cameras.
+# Audio is untouched (that is the ALSA monitor).
+# Install to: ~/.config/wireplumber/wireplumber.conf.d/99-framelink-camera.conf
+wireplumber.profiles = {
+  main = {
+    monitor.libcamera = disabled
+    monitor.v4l2 = disabled
+  }
+}
+
+==============================================================================
+== CAMERA
+==============================================================================
+bash: line 1: libcamera-hello: command not found
+
+==============================================================================
+== DOCKER
+==============================================================================
+Docker version 29.6.0, build fb59821
+immich-kiosk | ghcr.io/damongolding/immich-kiosk:0.39.3 | Up 35 hours
+{
+  "live-restore": true
+}
+
+==============================================================================
+== IMMICH_KIOSK_COMPOSE
+==============================================================================
+services:
+  immich-kiosk:
+    image: ghcr.io/damongolding/immich-kiosk:0.39.3
+    container_name: immich-kiosk
+    restart: always
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      KIOSK_IMMICH_URL: "https://immich.huisman.io"
+      KIOSK_IMMICH_API_KEY: <REDACTED>
+      KIOSK_OFFLINE_MODE_ENABLED: "true"
+      KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS: "200"
+    volumes:
+      - ./offline-assets:/offline-assets
+
+==============================================================================
+== APP_CONFIG
+==============================================================================
+{
+  "identity": "framelink-douwe",
+  "room": "family",
+  "livekitUrl": "ws://10.20.30.250:7880",
+  "immichKioskUrl": "http://127.0.0.1:3000/?disable_ui=true&hide_cursor=true&disable_navigation=true&frameless=true&image_fit=cover&transition=fade&duration=30&background_blur=false&show_more_info=false",
+  "token": "<REDACTED>"
+}
+
+==============================================================================
+== APP_GIT
+==============================================================================
+dd44f21 livekit: retry hygiene + 10-year tokens - the July-23 expiry post-mortem
+
+==============================================================================
+== GOVERNOR_ZRAM_TMPFS
+==============================================================================
+performance
+/tmp tmpfs tmpfs rw,nosuid,nodev,size=1029504k,nr_inodes=1048576
+/ /dev/mmcblk0p2 ext4 rw,noatime
+
+==============================================================================
+== JOURNALD
+==============================================================================
+[Journal]
+Storage=persistent
+SystemMaxUse=64M
+File path: /var/log/journal/1c14a801e00c4dc9a3aa5f278aac5770/system@36911964b9d84e6784bf29a4c446ad50-00000000000246a6-000658ff06c51e35.journal
+
+==============================================================================
+== USERS_GROUPS
+==============================================================================
+uid=1000(framelink) gid=1000(framelink) groups=1000(framelink),4(adm),20(dialout),24(cdrom),27(sudo),29(audio),44(video),46(plugdev),60(games),100(users),102(netdev),985(docker),986(gpio),988(i2c),989(spi),992(render),996(input)
+adm:x:4:framelink
+dialout:x:20:framelink
+cdrom:x:24:framelink
+sudo:x:27:framelink
+audio:x:29:framelink
+video:x:44:framelink
+plugdev:x:46:framelink
+games:x:60:framelink
+users:x:100:framelink
+input:x:996:framelink
+render:x:992:framelink
+netdev:x:102:framelink
+spi:x:989:framelink
+i2c:x:988:framelink
+gpio:x:986:framelink
+framelink:x:1000:
+docker:x:985:framelink
+
+==============================================================================
+== NETWORK
+==============================================================================
+framelink-douwe
+lo               UNKNOWN        127.0.0.1/8 ::1/128 
+eth0             UP             10.20.30.53/24 fe80::9d71:3176:5d8e:5585/64 
+wlan0            DOWN           
+br-6c3b5f626e47  UP             172.19.0.1/16 fe80::14ee:3bff:fee6:746c/64 
+docker0          DOWN           172.17.0.1/16
+
+==============================================================================
+== KEY_FILE_HASHES
+==============================================================================
+1d9b516bf0ca25820a21aa9882ccb8c7cbff0cf63e1a1692740c72ca0e897bd7  /boot/firmware/config.txt
+a853d4b4c1e7ba9a891b1de0057c5ec74076a4168b07d1a46ee862514f9a5bde  /boot/firmware/cmdline.txt
+2a3db6a0afcecaa1f0f7a5fca0434f32114c0a286c5c31f71274636e9ece473e  /etc/modprobe.d/alsa-base.conf
+4d10e25c04715aff0ac2a98c7e1bcfb5ace440b0cd2f08efad90f8d687c1f65d  /home/framelink/.config/systemd/user/chromium-kiosk.service
+a2c9ef326c8d53a7bf17086e786876b447a3c385e088948a19ca23c5b1e75e3e  /home/framelink/.config/systemd/user/framelink-camera.service
+bb33f78639ba54c302134491db026f1e57b746cb83f64f7c84334212a1c136ae  /home/framelink/.config/systemd/user/framelink-gpio.service
+dd30426f925a258476960ed9aabf425417e9ba42436a0911e2b5fd80473551c0  /home/framelink/.config/systemd/user/framelink-spa.service
+
+==============================================================================
+== HOME_TREE
+==============================================================================
+total 6288
+drwx------ 9 framelink framelink    4096 Aug 15 03:39 .
+drwxr-xr-x 3 root      root         4096 Dec  4  2025 ..
+-rwxrwxr-x 1 framelink framelink    1184 Aug  8 16:14 audio-test.sh
+-rw------- 1 framelink framelink     314 Apr 12 17:58 .bash_history
+-rw-r--r-- 1 framelink framelink     220 Dec  4  2025 .bash_logout
+-rw-rw-r-- 1 framelink framelink     118 Apr 13 00:15 .bash_profile
+-rw-r--r-- 1 framelink framelink    3523 Dec  4  2025 .bashrc
+drwx------ 6 framelink framelink    4096 Apr 13 15:24 .cache
+-rw-rw-r-- 1 framelink framelink  835415 Aug 14 00:17 call_after.png
+-rw-rw-r-- 1 framelink framelink  580919 Aug 14 00:12 call_grid.png
+-rwxrwxr-x 1 framelink framelink     415 Aug 14 00:20 chromium-watchdog.sh
+drwxr-xr-x 9 framelink framelink    4096 Jul 13 01:51 .config
+-rw-rw-r-- 1 framelink framelink     652 Aug 13 18:39 config.json.expired-token.bak
+drwxrwxr-x 7 framelink framelink    4096 Aug 13 17:27 FrameLink
+-rw-rw-r-- 1 framelink framelink  933888 Aug  8 16:14 fw-v2.0.10.bin
+-rw-rw-r-- 1 framelink framelink    1660 Aug  8 17:04 gen-noise.py
+drwxrwxr-x 3 framelink framelink    4096 Jun 22 02:19 immich-kiosk
+prw-rw-r-- 1 framelink framelink       0 Aug 13 17:27 .lgd-nfy0
+drwx------ 4 framelink framelink    4096 Apr 13 00:17 .local
+-rwxrwxr-x 1 framelink framelink     133 Aug  8 17:04 noise-test.sh
+-rw-r--r-- 1 framelink framelink     807 Dec  4  2025 .profile
+-rw-rw-r-- 1 framelink framelink    5681 Aug 13 16:26 screen2.png
+-rw-rw-r-- 1 framelink framelink    5681 Aug 13 16:28 screen3.png
+-rw-rw-r-- 1 framelink framelink 1981140 Aug 13 16:28 screen4.png
+-rw-rw-r-- 1 framelink framelink   21225 Aug 13 16:24 screen.png
+-rwxrwxr-x 1 framelink framelink     108 Aug  8 17:14 speech-test.sh
+-rw-r--r-- 1 framelink framelink       0 Apr 12 17:35 .sudo_as_admin_successful
+drwxrwxr-x 2 framelink framelink    4096 Aug  8 17:14 testaudio
+-rw-rw-r-- 1 framelink framelink  442332 Aug 13 17:46 val_healed.png
+-rw-rw-r-- 1 framelink framelink 1502404 Aug 13 17:44 val_recovered.png
+-rw-rw-r-- 1 framelink framelink   12939 Aug 13 17:30 val_splash.png
+drwxrwxr-x 7 framelink framelink    4096 Apr 12 19:31 xvf3800
+-rw-rw-r-- 1 framelink framelink   18916 Aug  8 16:14 xvf-commands.txt
