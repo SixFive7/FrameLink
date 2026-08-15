@@ -1,0 +1,58 @@
+# FrameLink Agent - systemd unit, installed by tools/harness/fl.py deploy.
+#
+# The harness owns this file for M0. Once the agent provisions itself (M2 onwards) the
+# unit becomes an ordinary reconciled resource owned by the agent, and this copy becomes
+# the bootstrap that puts the first one on a bare frame.
+#
+# Deploy rewrites it only when the content differs, so a repeat deploy performs no
+# daemon-reload and no restart (CLAUDE.md section 0.1).
+
+[Unit]
+Description=FrameLink Agent
+Documentation=https://github.com/SixFive7/FrameLink
+# The agent dials out to its Fleet Manager over TLS (version2.md section 4.1) and must not race
+# DHCP on a cold boot. It is designed to run with the server unreachable (section 1.2.2), so this
+# orders the start, it does not gate it.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/fl-agent
+
+# Root, deliberately. The agent owns the device's entire system state (section 1.1): boot config,
+# mixer values, unit files, packages, firmware. Dropping privileges would only mean adding
+# them back through sudo for nearly every resource.
+User=root
+
+# /var/lib/fl-agent - device keypair, last-known desired values, progress journal,
+# telemetry buffer (section 2.1). systemd creates it 0700 root and never touches it on update,
+# which is exactly the "persisted state is data, not program files" rule.
+StateDirectory=fl-agent
+StateDirectoryMode=0700
+
+# Reconnect discipline is the agent's own job (capped exponential backoff, retry forever -
+# section 4.1). systemd's restart exists for the process dying, not for the socket dropping, so
+# RestartSec is short and the burst limiter is generous rather than clever.
+Restart=always
+RestartSec=5s
+StartLimitIntervalSec=0
+
+# Self-update is fetch -> verify SHA-256 -> write fl-agent.new -> atomic rename -> restart
+# (section 2.8), performed in-process. Note what is NOT set here: KillMode. Velopack was dropped
+# for the agent precisely because it spawns an update helper as a child, which lands in
+# this cgroup and dies to the default KillMode=control-group the moment the daemon exits
+# (section 6.2). An in-process updater has no helper to kill, so the default is correct and
+# KillMode=process must not be added back as cargo cult.
+
+# The console stage writes directly to /dev/tty1, the DSI panel's default (section 2.7), before
+# any graphical stack exists. TTYPath tells systemd which terminal that is; the agent opens
+# it itself. Logs go to the journal, which guide 12 step 5 already made persistent and
+# capped at 64 MB.
+TTYPath=/dev/tty1
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fl-agent
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Git Bash / POSIX shim so the harness is one word:  tools/harness/fl status
+# Everything is delegated to fl.py; this file adds no behaviour of its own.
+#
+# Note for anyone extending this: do NOT add docker invocations here. Git Bash rewrites
+# container-absolute paths (/src/build/build.sh becomes a Windows path) unless
+# MSYS_NO_PATHCONV=1 is set, which is exactly why fl.py calls docker.exe directly with an
+# argument list instead of going through a shell.
+exec python "$(dirname "$0")/fl.py" "$@"

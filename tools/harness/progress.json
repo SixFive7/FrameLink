@@ -1,0 +1,262 @@
+{
+  "schema": "framelink.harness.progress/1",
+  "generatedBy": "tools/harness/fl.py",
+  "updatedUtc": "2026-08-15T05:08:03Z",
+  "readMeFirst": "You are looking at the FrameLink autonomy harness progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand'. Read 'milestone', then 'capabilities' (state is earned by a command actually succeeding, never hand-edited), then 'blockers' and 'nextActions'. If 'inFlight' is not null, a previous session died in the middle of that command and the state it was changing is unverified. Run 'python tools/harness/fl.py status' for a live re-probe of the environment.",
+  "milestone": {
+    "id": "M0",
+    "title": "Autonomy harness",
+    "doneWhen": "A code change reaches the mule and is verified with no human help: build path, deploy script, power-cycle control, screenshot + journal collection, resumable progress file, test runner.",
+    "specRef": "version2.md section 5.1",
+    "state": "in-progress"
+  },
+  "inFlight": null,
+  "capabilities": {
+    "build-path": {
+      "title": "Native AOT linux-arm64 binary built in an emulated container",
+      "state": "proven",
+      "provenBy": "fl.py build",
+      "provenUtc": "2026-08-15T05:08:03Z",
+      "provenCommand": "fl.py build",
+      "detail": "0.0.0+a273b31.dirty linux-arm64 7677712 bytes in framelink-build:arm64"
+    },
+    "test-runner": {
+      "title": "Test suite runs and propagates its exit code",
+      "state": "proven",
+      "provenBy": "fl.py test",
+      "provenUtc": "2026-08-15T04:22:40Z",
+      "provenCommand": "fl.py test",
+      "detail": "tests/FrameLink.Tests (Debug) produced a verdict and exit 5 was propagated",
+      "currentlyUnrunnable": "exit 1: tests/FrameLink.Tests does not compile - C:\\Program Files\\dotnet\\sdk\\10.0.302\\Microsoft.Common.CurrentVersion.targets(5096,5): error MSB3027: Could not copy \"C:\\Source\\SixFive7\\FrameLink\\src\\FrameLink.Agent\\bin\\Debug\\net10.0\\fl-agent.dll\" to \"bin\\Debug\\net10.0\\"
+    },
+    "progress-file": {
+      "title": "Progress is written to disk continuously and survives a dead session",
+      "state": "proven",
+      "provenBy": "fl.py build",
+      "provenUtc": "2026-08-15T04:03:10Z",
+      "provenCommand": "any fl.py subcommand",
+      "detail": "inFlight marker written, survived `build`, and was cleared; file written atomically to progress.json"
+    },
+    "deploy": {
+      "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
+      "state": "unproven",
+      "provenBy": null,
+      "provenUtc": null,
+      "provenCommand": "fl.py deploy",
+      "detail": null
+    },
+    "power-cycle": {
+      "title": "Smart plug switches under harness control with wrong-entity and wear guards",
+      "state": "unproven",
+      "provenBy": null,
+      "provenUtc": null,
+      "provenCommand": "fl.py power",
+      "detail": null
+    },
+    "collect": {
+      "title": "Screenshot and journal tail come back from the mule",
+      "state": "unproven",
+      "provenBy": null,
+      "provenUtc": null,
+      "provenCommand": "fl.py collect",
+      "detail": null
+    },
+    "closed-loop": {
+      "title": "A code change reaches the mule and is verified with no human help (M0 done)",
+      "state": "unproven",
+      "provenBy": null,
+      "provenUtc": null,
+      "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
+      "detail": null
+    }
+  },
+  "artifacts": {
+    "agentBinary": {
+      "path": "build/out/fl-agent",
+      "version": "0.0.0+a273b31.dirty",
+      "runtimeIdentifier": "linux-arm64",
+      "sha256": "4d8f83ebaf97261a01c0053bf220846799afe9530cdb93f26ee24506465adc19",
+      "sizeBytes": 7677712,
+      "image": "framelink-build:arm64",
+      "builtUtc": "2026-08-15T05:08:03Z"
+    },
+    "deployed": null,
+    "lastCollection": null
+  },
+  "counters": {
+    "builds": 2,
+    "deploys": 0,
+    "testRuns": 11,
+    "collections": 0,
+    "relayOperations": 0
+  },
+  "blockers": [
+    {
+      "id": "test-suite-red",
+      "what": "tests/FrameLink.Tests does not compile: C:\\Program Files\\dotnet\\sdk\\10.0.302\\Microsoft.Common.CurrentVersion.targets(5096,5): error MSB3027: Could not copy \"C:\\Source\\SixFive7\\FrameLink\\src\\FrameLink.Agent\\bin\\Debug\\net10.0\\fl-agent.dll\" to \"bin\\Debug\\net10.0\\",
+      "needs": "Fix the compile errors; until then no test result exists at all.",
+      "since": "2026-08-15T04:32:22Z"
+    },
+    {
+      "id": "fl-pw-unset",
+      "what": "FL_PW is not set, so no command can reach the mule.",
+      "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
+      "since": "2026-08-15T04:32:30Z"
+    },
+    {
+      "id": "ha-token-unset",
+      "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
+      "needs": "Create a long-lived access token at http://10.20.30.250:8086 and pass it as FL_HA_TOKEN.",
+      "since": "2026-08-15T04:32:30Z"
+    }
+  ],
+  "nextActions": [
+    "Set FL_PW for this session to unlock deploy / collect",
+    "Set FL_HA_TOKEN to unlock power control"
+  ],
+  "log": [
+    {
+      "utc": "2026-08-15T03:49:38Z",
+      "command": "deploy",
+      "ok": false,
+      "summary": "Nothing to deploy — build/out holds no binary."
+    },
+    {
+      "utc": "2026-08-15T03:49:38Z",
+      "command": "collect",
+      "ok": false,
+      "summary": "FL_PW is not set — cannot reach the mule."
+    },
+    {
+      "utc": "2026-08-15T03:49:38Z",
+      "command": "power",
+      "ok": false,
+      "summary": "FL_HA_TOKEN is not set — cannot control the smart plug."
+    },
+    {
+      "utc": "2026-08-15T03:49:38Z",
+      "command": "power",
+      "ok": false,
+      "summary": "FL_HA_TOKEN is not set — cannot control the smart plug."
+    },
+    {
+      "utc": "2026-08-15T03:51:54Z",
+      "command": "test",
+      "ok": true,
+      "summary": "succeeded: 12",
+      "exitCode": 0
+    },
+    {
+      "utc": "2026-08-15T03:52:05Z",
+      "command": "test",
+      "ok": false,
+      "summary": "on  - treat passing tests with warnings as failed",
+      "exitCode": 5
+    },
+    {
+      "utc": "2026-08-15T03:54:21Z",
+      "command": "build",
+      "ok": false,
+      "summary": "build.sh exited 5"
+    },
+    {
+      "utc": "2026-08-15T04:03:10Z",
+      "command": "build",
+      "ok": false,
+      "summary": "build.sh exited 5"
+    },
+    {
+      "utc": "2026-08-15T04:12:42Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+a273b31.dirty 7611720B cc8dc809b0ab"
+    },
+    {
+      "utc": "2026-08-15T04:12:47Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T04:21:46Z",
+      "command": "test",
+      "ok": false,
+      "summary": "no verdict within 20s - killed",
+      "exitCode": null
+    },
+    {
+      "utc": "2026-08-15T04:21:46Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The test suite produced no verdict within 20s."
+    },
+    {
+      "utc": "2026-08-15T04:22:40Z",
+      "command": "test",
+      "ok": false,
+      "summary": "on  - treat passing tests with warnings as failed",
+      "exitCode": 5
+    },
+    {
+      "utc": "2026-08-15T04:27:53Z",
+      "command": "test",
+      "ok": false,
+      "summary": "no verdict within 300s - killed",
+      "exitCode": null
+    },
+    {
+      "utc": "2026-08-15T04:27:53Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The test suite produced no verdict within 300s."
+    },
+    {
+      "utc": "2026-08-15T04:29:06Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T04:30:04Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T04:31:07Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T04:31:46Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T04:32:22Z",
+      "command": "test",
+      "ok": false,
+      "summary": "The build failed. Fix the build errors and run again.",
+      "exitCode": 1
+    },
+    {
+      "utc": "2026-08-15T05:01:29Z",
+      "command": "build",
+      "ok": false,
+      "summary": "build.sh exited 7"
+    },
+    {
+      "utc": "2026-08-15T05:08:03Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+a273b31.dirty 7677712B 4d8f83ebaf97"
+    }
+  ]
+}
