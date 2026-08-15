@@ -20,6 +20,22 @@ public sealed class ControlPresenceTests
 
     private static CancellationToken Token => TestContext.Current.CancellationToken;
 
+    /// <summary>
+    /// A deadline short enough to watch fire, for the two tests that are about the deadline.
+    /// </summary>
+    /// <remarks>
+    /// Every other test in this file — and in the Fleet Manager suite — takes the host default,
+    /// which is long. A test that is not about liveness must not have its socket torn down
+    /// underneath an assertion about something else, and naming the value here is what keeps
+    /// "the server hangs up on a silent frame" an asserted behaviour rather than an ambient
+    /// hazard the rest of the suite has to work around.
+    /// </remarks>
+    private static ControlOptions Liveness(ControlOptions options) => options with
+    {
+        PingInterval = TimeSpan.FromMilliseconds(80),
+        PongDeadline = TimeSpan.FromMilliseconds(500),
+    };
+
     [Fact]
     public async Task An_adopted_device_is_online_while_its_socket_is_open_and_not_after()
     {
@@ -57,25 +73,38 @@ public sealed class ControlPresenceTests
     [Fact]
     public async Task A_device_that_answers_its_pings_stays_connected()
     {
-        await using var server = await ControlServer.StartAsync(Password);
+        await using var server = await ControlServer.StartAsync(Password, Liveness);
         using var key = DeviceIdentity.CreateKeyPair();
         var deviceId = await AdoptedDeviceAsync(server, key);
 
         await using var agent = await server.ConnectAgentAsync(key);
         Assert.Equal(HandshakeStatus.Ok, agent.Result.Status);
 
-        // Well past the 500 ms deadline. A healthy frame must not be disconnected by the very
-        // mechanism that exists to notice unhealthy ones.
-        await agent.AnswerPingsAsync(TimeSpan.FromSeconds(2));
+        using var answering = new CancellationTokenSource();
+        var pump = agent.AnswerPingsUntilAsync(answering.Token);
 
-        Assert.True(agent.IsOpen);
-        Assert.True(await server.WaitForDeviceAsync(deviceId, d => d.Online, TimeSpan.FromSeconds(2)));
+        // Four deadlines and about twenty-five pings. A healthy frame must not be disconnected
+        // by the very mechanism that exists to notice unhealthy ones.
+        await Task.Delay(TimeSpan.FromSeconds(2), Token);
+
+        // Both readings are taken while the frame is still answering, which is the whole point:
+        // stopping the pump first would hand the assertion a 500 ms budget to complete an HTTP
+        // round trip in, and a machine slow enough to miss it would report a correctly torn-down
+        // socket as a failure of the behaviour under test.
+        var stillOpen = agent.IsOpen;
+        var online = await server.WaitForDeviceAsync(deviceId, d => d.Online, TimeSpan.FromSeconds(5));
+
+        await answering.CancelAsync();
+        await pump;
+
+        Assert.True(stillOpen);
+        Assert.True(online);
     }
 
     [Fact]
     public async Task A_device_that_stops_answering_is_torn_down_and_goes_offline()
     {
-        await using var server = await ControlServer.StartAsync(Password);
+        await using var server = await ControlServer.StartAsync(Password, Liveness);
         using var key = DeviceIdentity.CreateKeyPair();
         var deviceId = await AdoptedDeviceAsync(server, key);
 

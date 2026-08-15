@@ -105,8 +105,29 @@ public sealed class SqliteDatabase : IDisposable
         DateTimeOffset.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind)
             .ToUniversalTime();
 
-    /// <summary>Releases the writer semaphore.</summary>
-    public void Dispose() => _writeLock.Dispose();
+    /// <summary>Releases the writer semaphore and this database's pooled file handles.</summary>
+    /// <remarks>
+    /// <para>
+    /// Closing a <see cref="SqliteConnection"/> returns it to a pool rather than closing the
+    /// file, so after the last connection is disposed the operating system still holds this
+    /// database open. Disposing only the semaphore therefore left <c>Dispose</c> not meaning
+    /// what it says: the object was gone and the file was not released.
+    /// </para>
+    /// <para>
+    /// <b>Scoped, never <c>ClearAllPools</c>.</b> The pool is process-global and keyed by
+    /// connection string, so <see cref="SqliteConnection.ClearAllPools"/> reaches into every
+    /// other database open in the process — including ones another thread is using right now.
+    /// <see cref="SqliteConnection.ClearPool"/> resolves the pool group from the connection
+    /// string alone, without opening anything, and so touches this file and no other.
+    /// </para>
+    /// </remarks>
+    public void Dispose()
+    {
+        _writeLock.Dispose();
+
+        using var handle = new SqliteConnection(_connectionString);
+        SqliteConnection.ClearPool(handle);
+    }
 
     private void Initialise()
     {

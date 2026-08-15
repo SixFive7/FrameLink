@@ -7,7 +7,6 @@ using FrameLink.Control.Authentication;
 using FrameLink.Control.Storage;
 using FrameLink.Protocol;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.Data.Sqlite;
 
 namespace FrameLink.Tests;
 
@@ -38,6 +37,13 @@ public sealed class TestClock(DateTimeOffset start) : TimeProvider
 }
 
 /// <summary>A throwaway directory that takes its database and release files with it.</summary>
+/// <remarks>
+/// Deleting the directory needs whoever opened a database inside it to have released the file
+/// first, which <see cref="SqliteDatabase.Dispose"/> now does for its own connection string.
+/// This class must not reach for <c>SqliteConnection.ClearAllPools()</c> to force the issue:
+/// that call is process-global, and calling it from one test's teardown disposes connections
+/// belonging to every other test running in parallel.
+/// </remarks>
 public sealed class TempWorkspace : IDisposable
 {
     /// <summary>Creates an empty workspace under the system temp directory.</summary>
@@ -76,10 +82,6 @@ public sealed class TempWorkspace : IDisposable
     /// <inheritdoc/>
     public void Dispose()
     {
-        // SQLite pools connections, so the file stays open until the pool is cleared. Without
-        // this the delete fails on Windows and every test leaves a directory behind.
-        SqliteConnection.ClearAllPools();
-
         try
         {
             Directory.Delete(Root, recursive: true);
@@ -211,10 +213,16 @@ public sealed class ControlServer : IAsyncDisposable
             DataDirectory = workspace.Root,
             ReleaseDirectory = workspace.ReleaseDirectory,
 
-            // Short enough that a liveness test finishes, long enough that an ordinary test
-            // never trips it by accident.
+            // Probes often, hangs up slowly. The interval stays in milliseconds because
+            // several tests wait to watch a probe arrive. The deadline does not: almost no
+            // test in this suite answers a ping, so a short one made every one of those a
+            // socket the server was entitled to abort in the middle of an assertion about
+            // something else entirely — "is this device online", "did my report arrive" —
+            // giving each of them a hidden few-hundred-millisecond budget and a flake on any
+            // machine slow enough to exceed it. The two tests the deadline actually belongs
+            // to name their own; see ControlPresenceTests.Liveness.
             PingInterval = TimeSpan.FromMilliseconds(80),
-            PongDeadline = TimeSpan.FromMilliseconds(500),
+            PongDeadline = TimeSpan.FromSeconds(30),
             HandshakeTimeout = TimeSpan.FromSeconds(10),
             ReaperInterval = TimeSpan.FromHours(1),
         };
@@ -597,6 +605,28 @@ public sealed class TestAgent : IAsyncDisposable
             new AgentPong { Sequence = sequence },
             ProtocolJson.Default.AgentPong,
             ProtocolConstants.ChannelControl);
+
+    /// <summary>Behaves like a healthy agent until cancelled: answers every ping, drops the rest.</summary>
+    /// <remarks>
+    /// The open-ended form of <see cref="AnswerPingsAsync"/>, for a test that has to assert
+    /// something about a device <i>while</i> it is still answering. Pumping for a fixed
+    /// duration and asserting afterwards leaves the socket silent for however long the
+    /// assertion takes, and a silent socket is precisely what the server is built to hang up
+    /// on — so the assertion races the mechanism it is trying to prove benign.
+    /// </remarks>
+    public async Task AnswerPingsUntilAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            var envelope = await ReceiveAsync(TimeSpan.FromMilliseconds(100));
+            if (envelope is not null
+                && string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
+            {
+                var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
+                await PongAsync(ping?.Sequence ?? 0);
+            }
+        }
+    }
 
     /// <summary>
     /// Behaves like a healthy agent for a while: answers every ping and collects everything
