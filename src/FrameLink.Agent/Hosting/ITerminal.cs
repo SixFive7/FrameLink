@@ -16,6 +16,19 @@ public interface ITerminal : IDisposable
     /// <summary>Visible height in rows.</summary>
     int Rows { get; }
 
+    /// <summary>
+    /// Whether <see cref="Columns"/> and <see cref="Rows"/> were measured rather than assumed.
+    /// </summary>
+    /// <remarks>
+    /// Load-bearing, not diagnostic. The width decides the box drawing, the wrap points and the
+    /// bar lengths, so a layout composed against an invented 80×25 on a 1920-pixel panel is
+    /// wrong everywhere at once — and the agent used to report that guess in the affirmative
+    /// ("Console stage attached to /dev/tty1 at 80x25"), which is the same write-only optimism
+    /// §2.4 exists to refuse. A fallback is still used, because §2.7 bans blank screens, but it
+    /// is never again reported as a measurement.
+    /// </remarks>
+    bool SizeIsKnown { get; }
+
     /// <summary>Whether ANSI colour may be emitted.</summary>
     bool SupportsColour { get; }
 
@@ -51,11 +64,12 @@ public sealed partial class TtyTerminal : ITerminal
 
     private readonly FileStream _stream;
 
-    private TtyTerminal(FileStream stream, int columns, int rows)
+    private TtyTerminal(FileStream stream, int columns, int rows, bool measured)
     {
         _stream = stream;
         Columns = columns;
         Rows = rows;
+        SizeIsKnown = measured;
     }
 
     /// <inheritdoc/>
@@ -63,6 +77,9 @@ public sealed partial class TtyTerminal : ITerminal
 
     /// <inheritdoc/>
     public int Rows { get; }
+
+    /// <inheritdoc/>
+    public bool SizeIsKnown { get; }
 
     /// <inheritdoc/>
     public bool SupportsColour => true;
@@ -92,9 +109,27 @@ public sealed partial class TtyTerminal : ITerminal
                     Options = FileOptions.WriteThrough,
                 });
 
-            var (columns, rows) = MeasureWindow(stream);
-            log.Info(string.Create(CultureInfo.InvariantCulture, $"Console stage attached to {path} at {columns}x{rows}."));
-            return new TtyTerminal(stream, columns, rows);
+            var (columns, rows, measured) = MeasureWindow(stream);
+
+            if (measured)
+            {
+                log.Info(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Console stage attached to {path}; it reports {columns}x{rows}."));
+            }
+            else
+            {
+                // The old wording here was "attached to /dev/tty1 at 80x25", which reported a
+                // failure as a measurement. On the mule that line appeared on a machine with no
+                // framebuffer and no connected output at all, and an operator reading it
+                // concluded the screen was working.
+                log.Warn(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Console stage attached to {path}, but it would not say how big it is. "
+                    + $"Falling back to {columns}x{rows}, so the layout may be the wrong shape."));
+            }
+
+            return new TtyTerminal(stream, columns, rows, measured);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
         {
@@ -116,16 +151,16 @@ public sealed partial class TtyTerminal : ITerminal
     /// <inheritdoc/>
     public void Dispose() => _stream.Dispose();
 
-    private static (int Columns, int Rows) MeasureWindow(FileStream stream)
+    private static (int Columns, int Rows, bool Measured) MeasureWindow(FileStream stream)
     {
         if (TryReadEnvironmentSize(out var overridden))
         {
-            return overridden;
+            return (overridden.Columns, overridden.Rows, true);
         }
 
         if (!OperatingSystem.IsLinux())
         {
-            return (FallbackColumns, FallbackRows);
+            return (FallbackColumns, FallbackRows, false);
         }
 
         try
@@ -135,7 +170,7 @@ public sealed partial class TtyTerminal : ITerminal
                 && size.Columns > 0
                 && size.Rows > 0)
             {
-                return (size.Columns, size.Rows);
+                return (size.Columns, size.Rows, true);
             }
         }
         catch (Exception exception) when (exception is DllNotFoundException or EntryPointNotFoundException)
@@ -143,7 +178,7 @@ public sealed partial class TtyTerminal : ITerminal
             // No libc ioctl to ask; the fallback below is the answer.
         }
 
-        return (FallbackColumns, FallbackRows);
+        return (FallbackColumns, FallbackRows, false);
     }
 
     private static bool TryReadEnvironmentSize(out (int Columns, int Rows) size)
@@ -185,6 +220,10 @@ public sealed class StandardOutputTerminal : ITerminal
 
     /// <inheritdoc/>
     public int Rows { get; } = SafeHeight();
+
+    /// <inheritdoc/>
+    /// <remarks>A redirected stream has no size to report, so the 80×24 it uses is a guess.</remarks>
+    public bool SizeIsKnown { get; } = !Console.IsOutputRedirected;
 
     /// <inheritdoc/>
     public bool SupportsColour => !Console.IsOutputRedirected;

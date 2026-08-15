@@ -343,6 +343,8 @@ internal sealed class MemoryTerminal : ITerminal
 
     public int Rows { get; }
 
+    public bool SizeIsKnown { get; init; } = true;
+
     public bool SupportsColour { get; }
 
     public List<string> Frames { get; } = [];

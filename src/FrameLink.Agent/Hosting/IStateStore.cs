@@ -119,7 +119,20 @@ public sealed class FileStateStore : IStateStore
     }
 
     /// <inheritdoc/>
-    public void Delete(string name) => File.Delete(PathOf(name));
+    /// <remarks>
+    /// Absent file and absent directory are both nothing to do. <c>File.Delete</c> throws
+    /// <see cref="DirectoryNotFoundException"/> for the second case, which would make the very
+    /// first "clear the offline buffer" on a fresh frame fail for the reason that it was
+    /// already clear.
+    /// </remarks>
+    public void Delete(string name)
+    {
+        var path = PathOf(name);
+        if (File.Exists(path))
+        {
+            File.Delete(path);
+        }
+    }
 
     /// <inheritdoc/>
     public string PathOf(string name)
