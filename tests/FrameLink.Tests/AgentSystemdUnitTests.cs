@@ -72,6 +72,116 @@ public sealed class AgentSystemdUnitTests
         Assert.DoesNotContain("Requires=", directives, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void The_two_committed_copies_of_the_unit_are_one_text()
+    {
+        // The unit is committed twice: tools/harness/assets/fl-agent.service is what `fl.py deploy`
+        // puts on a bare frame, and src/FrameLink.Agent/Systemd/fl-agent.service is embedded in the
+        // binary and written by `fl-agent install`. Neither can read the other — the harness is
+        // Python reading the checkout, the agent is a Native AOT binary carrying a resource — so
+        // nothing but this assertion stops them drifting.
+        //
+        // They had already drifted, which is the point. The harness copy carried a start limit the
+        // embedded copy lacked, set TTYPath (and so gave the console stage a $TERM) where the
+        // embedded copy did not, and the embedded copy's Documentation= named a repository that no
+        // longer exists. A frame was running a different service depending on which tool installed
+        // it, and each copy's tests passed.
+        //
+        // Bytes, not text: a checkout that lands CRLF on one and LF on the other is a real defect,
+        // not a cosmetic one. `fl.py deploy` compares the remote file against a CRLF-normalised
+        // template, while the agent writes its resource verbatim, so the two would fight over the
+        // file forever — each rewriting it, reloading systemd and restarting the agent.
+        var harness = File.ReadAllBytes(
+            Path.Combine(RepositoryRoot(), "tools", "harness", "assets", "fl-agent.service"));
+        var embedded = EmbeddedUnitBytes();
+
+        Assert.True(
+            harness.AsSpan().SequenceEqual(embedded),
+            "The two committed copies of fl-agent.service differ.\n\n"
+            + $"  tools/harness/assets/fl-agent.service         {harness.Length} bytes\n"
+            + $"  src/FrameLink.Agent/Systemd/fl-agent.service  {embedded.Length} bytes\n"
+            + FirstDifference(harness, embedded)
+            + "\n\nThey are one text with two homes. Edit one, edit both, in the same commit.");
+    }
+
+    [Fact]
+    public void Every_directive_sits_in_a_section_that_accepts_it()
+    {
+        // The guard for the defect the mule found on 2026-08-15: StartLimitIntervalSec written under
+        // [Service], where systemd's parser does not register it. systemd logged
+        //
+        //   Unknown key 'StartLimitIntervalSec' in section [Service], ignoring.
+        //
+        // and then started the service, so `systemctl status` was green and the restart rate
+        // limiting was silently gone. Nothing in the build, the deploy or this suite noticed.
+        //
+        // `systemd-analyze verify` is the real check and build/verify-unit.sh runs it, but it needs
+        // Docker, the network and a Debian image. This runs everywhere, in 11 seconds with the rest
+        // of the suite, off nothing but the checkout — which is what makes it the one that will
+        // actually be red when somebody adds the next directive to the wrong section.
+        var offenders = new List<string>();
+        var seen = 0;
+
+        foreach (var (line, section, key, _) in ParsedDirectives())
+        {
+            seen++;
+
+            if (!AcceptingSection.TryGetValue(key, out var expected))
+            {
+                offenders.Add(
+                    $"  line {line}: '{key}' is not in this test's table. Look it up in "
+                    + "systemd.unit(5), systemd.service(5) or systemd.exec(5), then add it to "
+                    + "AcceptingSection with the section it belongs to.");
+            }
+            else if (!string.Equals(expected, section, StringComparison.Ordinal))
+            {
+                offenders.Add(
+                    $"  line {line}: '{key}' is a [{expected}] key but sits in [{section}]. "
+                    + "systemd will ignore it and start the unit anyway.");
+            }
+        }
+
+        // Without this the test passes when the parser below finds nothing at all — the same shape
+        // of failure as a gate whose command never ran. Bumped only when a directive is added.
+        Assert.True(
+            seen >= 19,
+            $"Only {seen} directives were parsed out of the unit; the parser in this test is broken, "
+            + "so its verdict means nothing.");
+
+        Assert.True(
+            offenders.Count == 0,
+            "fl-agent.service has directives in sections systemd does not accept them in:\n\n"
+            + string.Join('\n', offenders));
+    }
+
+    [Fact]
+    public void The_restart_loop_has_a_brake_and_it_is_switched_on()
+    {
+        // version2.md §2.4: "an unbounded retry cycle is more damaging than a stalled provision."
+        // With Restart=always and no working start limit, a crash-looping agent restarts forever on
+        // a 2 GB appliance. Two ways to lose the brake, so two assertions: the keys can go missing,
+        // and they can be present but disabled.
+        var directives = ParsedDirectives().ToList();
+
+        var interval = directives.SingleOrDefault(d => d.Key == "StartLimitIntervalSec");
+        var burst = directives.SingleOrDefault(d => d.Key == "StartLimitBurst");
+
+        Assert.True(
+            interval.Key is not null && burst.Key is not null,
+            "StartLimitIntervalSec= and StartLimitBurst= must both be set. Restart=always with no "
+            + "start limit is the unbounded retry cycle §2.4 exists to forbid.");
+
+        Assert.Equal("Unit", interval.Section);
+        Assert.Equal("Unit", burst.Section);
+
+        // StartLimitIntervalSec=0 disables rate limiting outright — it does not mean "use the
+        // default". Moving the old [Service] line to [Unit] unchanged would have swapped an
+        // accidentally absent brake for a deliberately absent one, which is strictly worse: the
+        // ignored key at least left DefaultStartLimitIntervalSec in force.
+        Assert.NotEqual("0", interval.Value);
+        Assert.NotEqual("0", burst.Value);
+    }
+
     /// <summary>The unit with its commentary stripped, so a rule reads directives not prose.</summary>
     private static string Directives() =>
         string.Join(
@@ -80,6 +190,137 @@ public sealed class AgentSystemdUnitTests
                 .Split('\n')
                 .Select(line => line.Trim())
                 .Where(line => line.Length > 0 && line[0] != '#'));
+
+    /// <summary>
+    /// The section systemd's parser accepts each directive this unit uses, and only those.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Transcribed from systemd 257's <c>src/core/load-fragment-gperf.gperf.in</c>, which is the
+    /// table the parser is generated from, cross-checked against <c>systemd-analyze verify</c> via
+    /// <c>build/verify-unit.sh</c>. A key absent from this table fails the test rather than passing
+    /// it: adding a directive to the unit is meant to cost one documentation lookup.
+    /// </para>
+    /// <para>
+    /// The start-limit keys are the reason the table exists. systemd moved them from [Service] to
+    /// [Unit] in v229 and kept <c>StartLimitInterval</c>, <c>StartLimitBurst</c> and
+    /// <c>StartLimitAction</c> working under [Service] as legacy aliases — but not the modern
+    /// <c>StartLimitIntervalSec</c> spelling, which exists under [Unit] alone. So three of the four
+    /// names appear to work in the wrong section and the fourth does not, and the one that does not
+    /// fails by being ignored. This table records where each key <i>belongs</i>, not everywhere
+    /// systemd will tolerate it, so the deprecated [Service] spellings are deliberately not listed.
+    /// </para>
+    /// </remarks>
+    private static readonly Dictionary<string, string> AcceptingSection = new(StringComparer.Ordinal)
+    {
+        // [Unit] — systemd.unit(5).
+        ["Description"] = "Unit",
+        ["Documentation"] = "Unit",
+        ["Wants"] = "Unit",
+        ["After"] = "Unit",
+        ["StartLimitIntervalSec"] = "Unit",
+        ["StartLimitBurst"] = "Unit",
+
+        // [Service] — systemd.service(5).
+        ["Type"] = "Service",
+        ["ExecStart"] = "Service",
+        ["Restart"] = "Service",
+        ["RestartSec"] = "Service",
+        ["TimeoutStopSec"] = "Service",
+
+        // [Service] too, but documented in systemd.exec(5): these come from the parser's
+        // EXEC_CONTEXT_CONFIG_ITEMS block, which every unit type that forks a process shares.
+        ["User"] = "Service",
+        ["StateDirectory"] = "Service",
+        ["StateDirectoryMode"] = "Service",
+        ["TTYPath"] = "Service",
+        ["StandardOutput"] = "Service",
+        ["StandardError"] = "Service",
+        ["SyslogIdentifier"] = "Service",
+
+        // [Install] — systemd.unit(5).
+        ["WantedBy"] = "Install",
+    };
+
+    /// <summary>Every <c>Key=Value</c> in the unit, with the section it was written under.</summary>
+    private static List<(int Line, string Section, string Key, string Value)> ParsedDirectives()
+    {
+        var directives = new List<(int, string, string, string)>();
+        var section = string.Empty;
+        var number = 0;
+
+        foreach (var raw in UnitInstaller.ReadUnit().Split('\n'))
+        {
+            number++;
+            var line = raw.Trim();
+
+            // systemd treats both '#' and ';' as comment introducers.
+            if (line.Length == 0 || line[0] is '#' or ';')
+            {
+                continue;
+            }
+
+            if (line[0] == '[' && line[^1] == ']')
+            {
+                section = line[1..^1];
+                continue;
+            }
+
+            var split = line.IndexOf('=');
+            if (split > 0)
+            {
+                directives.Add((number, section, line[..split].Trim(), line[(split + 1)..].Trim()));
+            }
+        }
+
+        return directives;
+    }
+
+    /// <summary>The embedded unit as bytes, so line endings and a stray BOM are both visible.</summary>
+    private static byte[] EmbeddedUnitBytes()
+    {
+        using var stream = typeof(UnitInstaller).Assembly
+            .GetManifestResourceStream(UnitInstaller.ResourceName)
+            ?? throw new InvalidOperationException(
+                $"The embedded resource '{UnitInstaller.ResourceName}' is missing from this build.");
+
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>Where two copies of the unit part company, named in a way a human can act on.</summary>
+    private static string FirstDifference(byte[] harness, byte[] embedded)
+    {
+        var shared = Math.Min(harness.Length, embedded.Length);
+        for (var i = 0; i < shared; i++)
+        {
+            if (harness[i] != embedded[i])
+            {
+                var line = harness.AsSpan(0, i).Count((byte)'\n') + 1;
+                return $"\n  first difference at byte {i} (line {line}): "
+                    + $"0x{harness[i]:x2} in the harness copy, 0x{embedded[i]:x2} in the embedded one.";
+            }
+        }
+
+        return $"\n  identical for the first {shared} bytes, then one copy continues.";
+    }
+
+    /// <summary>Walks up from the test binary to the directory holding the solution.</summary>
+    private static string RepositoryRoot()
+    {
+        var probe = new DirectoryInfo(AppContext.BaseDirectory);
+        for (var depth = 0; depth < 10 && probe is not null; depth++, probe = probe.Parent)
+        {
+            if (File.Exists(Path.Combine(probe.FullName, "FrameLink.slnx")))
+            {
+                return probe.FullName;
+            }
+        }
+
+        throw new DirectoryNotFoundException(
+            $"No FrameLink.slnx above {AppContext.BaseDirectory}; this test reads the repository, not the build output.");
+    }
 
     [Fact]
     public async Task Installing_writes_the_unit_and_enables_it()

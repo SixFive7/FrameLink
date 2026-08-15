@@ -1,58 +1,112 @@
-# FrameLink Agent - systemd unit, installed by tools/harness/fl.py deploy.
+# FrameLink Agent - systemd unit.
 #
-# The harness owns this file for M0. Once the agent provisions itself (M2 onwards) the
-# unit becomes an ordinary reconciled resource owned by the agent, and this copy becomes
-# the bootstrap that puts the first one on a bare frame.
+# ONE TEXT, TWO HOMES. This file is committed twice, byte for byte identical:
 #
-# Deploy rewrites it only when the content differs, so a repeat deploy performs no
-# daemon-reload and no restart (CLAUDE.md section 0.1).
+#   tools/harness/assets/fl-agent.service         installed by `fl.py deploy` onto a bare frame
+#   src/FrameLink.Agent/Systemd/fl-agent.service  embedded in the AOT binary, installed by
+#                                                 `fl-agent install`
+#
+# The duplication is structural and cannot be removed: the harness is Python reading a file from
+# the checkout, the agent is a Native AOT binary carrying an embedded resource (2.1 - "no
+# supplemental program files, ever"), and no build step hands one artifact to both. So the two are
+# held together by test instead of by construction. AgentSystemdUnitTests compares them byte for
+# byte and fails the suite the moment they drift. Edit one, edit both, in the same commit.
+#
+# That equality is not tidiness. While the two copies were free to differ they did: one carried a
+# start limit the other lacked, one exported $TERM to the console stage and the other did not, and
+# one pointed Documentation= at a repository that no longer exists. A frame provisioned by the
+# harness was not running the same service as a frame provisioned by the agent.
+#
+# Deploy rewrites the file only when the content differs, so a repeat deploy performs no
+# daemon-reload and no restart (CLAUDE.md 0.1).
 
 [Unit]
 Description=FrameLink Agent
 Documentation=https://github.com/SixFive7/FrameLink
-# The agent dials out to its Fleet Manager over TLS (version2.md section 4.1) and must not race
-# DHCP on a cold boot. It is designed to run with the server unreachable (section 1.2.2), so this
-# orders the start, it does not gate it.
+
+# The agent dials out to its Fleet Manager over TLS (version2.md 4.1) and must not race DHCP on a
+# cold boot. It is designed to run with the server unreachable (1.2.2) and to reconcile, verify,
+# retry and escalate with no server present (4.1), so this orders the start, it does not gate it.
+# Wanted, never Required: a household with a dead router still gets a narrated screen rather than a
+# service that never starts.
 Wants=network-online.target
 After=network-online.target
 
+# Start rate limiting. These are [Unit] keys, not [Service] keys, and that is not a formatting
+# preference. systemd registers StartLimitIntervalSec under [Unit] only - systemd.unit(5), and
+# src/core/load-fragment-gperf.gperf.in, which is the parser table itself. Written under [Service]
+# it produces
+#
+#   systemd[1]: /etc/systemd/system/fl-agent.service:39: Unknown key 'StartLimitIntervalSec' in section [Service], ignoring.
+#
+# and the service then starts perfectly with no rate limit at all. That is exactly what the mule
+# did on 2026-08-15. The trap is that the three neighbouring spellings - StartLimitInterval,
+# StartLimitBurst, StartLimitAction - DO still have legacy [Service] aliases, left behind when
+# systemd v229 moved these settings to [Unit]. Three of the four keys appear to work in the wrong
+# section and the fourth does not, so getting it wrong looks like a typo rather than a category
+# error. `systemd-analyze verify` reports it; `systemctl start` does not, and neither does the
+# exit code. build/verify-unit.sh runs the former.
+#
+# The values are the brake 2.4 asks for: "an unbounded retry cycle is more damaging than a stalled
+# provision". Ten starts in five minutes is generous next to RestartSec below - a healthy frame,
+# including one restarting to apply an update, never comes near it - while a real crash loop
+# exhausts it in under a minute and the unit stops rather than thrashing a 2 GB appliance forever.
+# It then sits in `failed` with "start request repeated too quickly" in the journal, which is 2.5's
+# "the loop must be willing to give up" and is a far better diagnosis than a silent loop.
+#
+# Note that StartLimitIntervalSec=0 is not a synonym for "leave it at the default" - it disables
+# rate limiting outright. Relocating that value to [Unit] unchanged would have replaced an
+# accidentally absent brake with a deliberately absent one.
+StartLimitIntervalSec=5min
+StartLimitBurst=10
+
 [Service]
 Type=exec
-ExecStart=/usr/local/bin/fl-agent
+ExecStart=/usr/local/bin/fl-agent run
 
-# Root, deliberately. The agent owns the device's entire system state (section 1.1): boot config,
-# mixer values, unit files, packages, firmware. Dropping privileges would only mean adding
-# them back through sudo for nearly every resource.
+# Root, deliberately. The agent owns the device's entire system state (1.1, 2.1): boot config,
+# mixer values, unit files, packages, firmware. Dropping privileges would only mean adding them
+# back through sudo for nearly every resource.
 User=root
 
-# /var/lib/fl-agent - device keypair, last-known desired values, progress journal,
-# telemetry buffer (section 2.1). systemd creates it 0700 root and never touches it on update,
-# which is exactly the "persisted state is data, not program files" rule.
+# Reconnect discipline is the agent's own job - capped exponential backoff, retry forever (4.1).
+# systemd's restart exists for the process dying, not for the socket dropping, so RestartSec stays
+# short and the start limit above is what stops a dying process from looping.
+Restart=always
+RestartSec=5s
+TimeoutStopSec=15s
+
+# /var/lib/fl-agent - device keypair, issued tokens, last-known desired values, progress journal,
+# telemetry buffer (2.1, 2.9). systemd creates it 0700 root before ExecStart, so first boot has no
+# window in which the key could be written under a wider mode, and an update swaps the binary
+# without ever touching it: persisted state is data, not program files.
 StateDirectory=fl-agent
 StateDirectoryMode=0700
 
-# Reconnect discipline is the agent's own job (capped exponential backoff, retry forever -
-# section 4.1). systemd's restart exists for the process dying, not for the socket dropping, so
-# RestartSec is short and the burst limiter is generous rather than clever.
-Restart=always
-RestartSec=5s
-StartLimitIntervalSec=0
+# Self-update is fetch -> verify SHA-256 -> write fl-agent.new -> atomic rename -> restart (2.8),
+# performed in-process. Note what is NOT set here: KillMode. Velopack was dropped for the agent
+# precisely because it applies updates from a child process, which lands in this cgroup and dies to
+# the default KillMode=control-group the instant the daemon exits - i.e. exactly while the update is
+# being applied (6.2). An in-process updater has no helper to kill, so the default is correct, and
+# neither KillMode=process nor systemd-run --scope may be added back as cargo cult.
 
-# Self-update is fetch -> verify SHA-256 -> write fl-agent.new -> atomic rename -> restart
-# (section 2.8), performed in-process. Note what is NOT set here: KillMode. Velopack was dropped
-# for the agent precisely because it spawns an update helper as a child, which lands in
-# this cgroup and dies to the default KillMode=control-group the moment the daemon exits
-# (section 6.2). An in-process updater has no helper to kill, so the default is correct and
-# KillMode=process must not be added back as cargo cult.
-
-# The console stage writes directly to /dev/tty1, the DSI panel's default (section 2.7), before
-# any graphical stack exists. TTYPath tells systemd which terminal that is; the agent opens
-# it itself. Logs go to the journal, which guide 12 step 5 already made persistent and
-# capped at 64 MB.
+# The console stage writes directly to /dev/tty1, the DSI panel's default (2.7), before any
+# graphical stack exists. It opens the device itself rather than inheriting it, because under
+# systemd stdout is the journal, not the panel - so TTYPath is not what hands the stage its
+# terminal. It is still load-bearing: exec_context_has_tty() in systemd's execute.h is true as soon
+# as tty_path is set, and that is what makes systemd derive and export $TERM for the service. Drop
+# the line and the stage renders ANSI with no $TERM at all, which is precisely the difference the
+# two copies of this file used to carry. Journal output is the second honesty surface, never the
+# first; guide 12 step 5 already made the journal persistent and capped it at 64 MB.
 TTYPath=/dev/tty1
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fl-agent
+
+# NOT set, and worth saying why: Conflicts=getty@tty1.service. It would give the console stage the
+# panel to itself, but it also removes the physical login that is the recovery path when a frame
+# will not come up. Turning the console getty off belongs in the resource catalog as a reconciled,
+# centrally visible setting (M2/M3), not as a side effect of installing the agent.
 
 [Install]
 WantedBy=multi-user.target
