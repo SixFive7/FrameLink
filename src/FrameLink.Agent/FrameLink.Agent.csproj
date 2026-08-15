@@ -1,0 +1,49 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FrameLink.Agent</RootNamespace>
+    <!-- System register (§1.1): the binary, the unit and every route are `fl-agent`. -->
+    <AssemblyName>fl-agent</AssemblyName>
+    <Version>0.1.0</Version>
+
+    <!--
+      The version this binary reports is a wire value (§2.8: the updater matches it against the
+      served version, never compares). IncludeSourceRevisionInInformationalVersion=false is what
+      stops the SDK decorating it, and it is set in Directory.Build.props rather than here —
+      deliberately, because build.sh passes -p:InformationalVersion as a global property that
+      reaches every referenced project, and a project still carrying the decorated string gets it
+      linked into this same AOT binary. build.sh fails the build (exit 7) if any version string in
+      the ELF is decorated; AgentVersionIsExactlyWhatTheBuildAskedFor in AgentUpdateTests is the
+      guard on the value this program actually reports.
+    -->
+
+    <!-- §2.1 "One single Native AOT binary. No supplemental program files, ever."
+         Publishing is done from the emulated linux-arm64 container (§5.2); this
+         property is what makes that publish AOT, and what keeps the trim/AOT
+         analysers honest about the code in between. -->
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- Deliberately NOT set: UseSystemResourceKeys. It would shrink the binary by
+         replacing framework exception messages with bare resource ids — directly
+         against the transparency principle (§1.2.3), since those messages are what
+         the journal and the console stage have to render when something breaks. -->
+
+    <!-- The console stage measures the real panel through ioctl(TIOCGWINSZ); the
+         LibraryImport source generator emits unsafe marshalling code for it. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- §2.1 again: the unit file is not a supplemental program file shipped beside
+         the binary, it lives *inside* it and is written out by `fl-agent install`. -->
+    <EmbeddedResource Include="Systemd\fl-agent.service" LogicalName="fl-agent.service" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FrameLink.Protocol\FrameLink.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

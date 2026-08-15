@@ -1,0 +1,46 @@
+[Unit]
+Description=FrameLink Agent
+Documentation=https://github.com/jorihuisman/framelink
+# The agent must come up on a frame with no network at all — it reconciles, verifies, retries
+# and escalates with no server present (version2.md 4.1). network-online is Wanted, never
+# Required, so a household with a dead router still gets a narrated screen instead of a
+# service that never starts.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/fl-agent run
+Restart=always
+RestartSec=2s
+User=root
+
+# 2.9 — the device keypair and issued tokens live here, root-only. systemd creates the
+# directory with this mode before ExecStart, so first boot has no window in which the key
+# could be written under a wider mode. 2.1 — an update swaps the binary and never touches
+# this directory.
+StateDirectory=fl-agent
+StateDirectoryMode=0700
+
+# 6.2 — KillMode is left at the default control-group DELIBERATELY. Velopack was dropped for
+# this agent precisely because it applies updates from a child process, which lands in the
+# service cgroup and is killed the instant the daemon exits, i.e. exactly while the update is
+# being applied. The custom updater (2.8) fetches, verifies, writes fl-agent.new and renames
+# it entirely in-process, and only then exits. Nothing survives this unit's shutdown by
+# design, so weakening KillMode to process or reaching for systemd-run would buy nothing and
+# would put the fleet's update path on the road 6.2 rejected.
+TimeoutStopSec=15s
+
+# 2.7 — the console stage opens /dev/tty1 directly rather than inheriting it, because under
+# systemd stdout is the journal, not the panel. Journal output below is the second honesty
+# surface, never the first.
+StandardOutput=journal
+StandardError=journal
+
+# NOT set, and worth saying why: Conflicts=getty@tty1.service. It would give the console stage
+# the panel to itself, but it also removes the physical login that is the recovery path when a
+# frame will not come up. Turning the console getty off belongs in the resource catalog as a
+# reconciled, centrally visible setting (M2/M3), not as a side effect of installing the agent.
+
+[Install]
+WantedBy=multi-user.target
