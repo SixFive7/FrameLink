@@ -137,10 +137,12 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        // Nine from M2, the catalog's fifteen-resource package block, and the sixteen of the
-        // session and kiosk stack (guides 5 and 10, plus the running-command-line check the
-        // catalog files under guide 6 and schedules in this phase).
-        Assert.Equal(40, graph.Count);
+        // Nine from M2, the catalog's fifteen-resource package block, the sixteen of the session
+        // and kiosk stack (guides 5 and 10, plus the running-command-line check the catalog files
+        // under guide 6 and schedules in this phase), and eleven of guide 4's thirteen — the two
+        // it does not add are `pkg.dfu-util`, already in the package block, and `pkg.git`, which
+        // open question 3's adopted reading deletes.
+        Assert.Equal(51, graph.Count);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],

@@ -141,6 +141,12 @@ public static class DeviceCatalog
 
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 
+            // Guide 4 step 1, which the catalog schedules here rather than with the rest of the
+            // audio block: it is a modprobe option, it takes effect only when the module loads,
+            // and everything downstream — every `amixer -c 0`, `alsactl store`, the app's capture
+            // device — is written against the array being card 0.
+            new SndUsbAudioIndexResource(context.Files),
+
             // The three-level chain that makes Blocked(dependency) and the escalation ladder
             // reachable against real system state: the unit file, its enablement, and the
             // governor value the unit is supposed to produce at boot.
@@ -153,6 +159,17 @@ public static class DeviceCatalog
             // Chromium unit lives in the login user's session.
             new BashProfileLabwcResource(context.Files, context.Processes, context.Session),
             .. KioskStack(context),
+
+            // Positions 54–61: the array firmware and then the audio state it validates. After
+            // the session, deliberately — WirePlumber is the mixer's second owner and applies its
+            // own stored device volume once the session starts, so a reading taken before that is
+            // a reading of a value something else may still change (see SessionAudio).
+            .. AudioCatalog.Build(context),
+
+            // Position 77, in §5.5's last phase with the other brick-capable boot-partition
+            // writes. It is guide 4's, and it is here rather than beside its siblings because a
+            // `/boot/firmware` write is scheduled by risk rather than by subject.
+            new HdmiAudioOffResource(context.Files, guard, context.Log),
         ];
     }
 

@@ -219,6 +219,176 @@ public static class BootConfigText
         return BootFileVerdict.Ok;
     }
 
+    /// <summary>
+    /// The first <c>dtoverlay=</c> line for <paramref name="overlay"/>, with its parameter list
+    /// intact, or null.
+    /// </summary>
+    /// <remarks>
+    /// An overlay line is <c>dtoverlay=&lt;name&gt;</c> optionally followed by
+    /// <c>,&lt;parameter&gt;</c> repeated, so the name has to be matched against the whole first
+    /// comma-separated field rather than by prefix — otherwise <c>vc4-kms-v3d</c> would also
+    /// match a hypothetical <c>vc4-kms-v3d-pi5</c> and the edit would land on the wrong line.
+    /// </remarks>
+    public static string? FindOverlayLine(string? content, string overlay)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(overlay);
+
+        const string Prefix = "dtoverlay=";
+
+        foreach (var raw in Lines(content))
+        {
+            var line = raw.Trim();
+            if (!line.StartsWith(Prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = line[Prefix.Length..];
+            var comma = value.IndexOf(',', StringComparison.Ordinal);
+            var name = comma < 0 ? value : value[..comma];
+
+            if (string.Equals(name, overlay, StringComparison.Ordinal))
+            {
+                return line;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether an overlay line already carries <paramref name="parameter"/>.</summary>
+    public static bool OverlayHasParameter(string line, string parameter)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        ArgumentException.ThrowIfNullOrWhiteSpace(parameter);
+
+        var fields = line.Split(',');
+        for (var index = 1; index < fields.Length; index++)
+        {
+            // A parameter may be `key=value`; the name is what is compared.
+            var field = fields[index].Trim();
+            var equals = field.IndexOf('=', StringComparison.Ordinal);
+            if (string.Equals(equals < 0 ? field : field[..equals], parameter, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Rewrites the one line equal to <paramref name="original"/>.</summary>
+    /// <remarks>
+    /// The counterpart of <see cref="AppendLine"/> for the resources that must change a line
+    /// rather than add one. Both go through <see cref="Normalise"/> so the result of an edit
+    /// never depends on whether the file happened to end in a newline.
+    /// </remarks>
+    public static string ReplaceLine(string? content, string original, string replacement)
+    {
+        ArgumentNullException.ThrowIfNull(original);
+        ArgumentNullException.ThrowIfNull(replacement);
+
+        var lines = Lines(content);
+        for (var index = 0; index < lines.Count; index++)
+        {
+            if (string.Equals(lines[index].Trim(), original, StringComparison.Ordinal))
+            {
+                lines[index] = replacement;
+                break;
+            }
+        }
+
+        var builder = new StringBuilder();
+        foreach (var line in lines)
+        {
+            builder.Append(line).Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// Checks that <paramref name="updated"/> differs from <paramref name="original"/> by exactly
+    /// one line, that the line changed is the intended one, and that the result still parses.
+    /// </summary>
+    /// <remarks>
+    /// The same contract as <see cref="ValidateConfig"/>, for a replacement instead of an
+    /// addition: §5.5's "validate before writing" applies to every brick-capable write, and a
+    /// rewrite is the one shape where a careless edit can silently drop a line rather than merely
+    /// add a wrong one.
+    /// </remarks>
+    public static BootFileVerdict ValidateReplacement(
+        string? original,
+        string updated,
+        string before,
+        string after)
+    {
+        ArgumentNullException.ThrowIfNull(updated);
+        ArgumentNullException.ThrowIfNull(before);
+        ArgumentNullException.ThrowIfNull(after);
+
+        var from = Lines(original);
+        var to = Lines(updated);
+
+        if (from.Count != to.Count)
+        {
+            return BootFileVerdict.Refuse(
+                $"the edit would change the file by {to.Count - from.Count} lines instead of rewriting one");
+        }
+
+        var changed = -1;
+        for (var index = 0; index < from.Count; index++)
+        {
+            if (string.Equals(from[index], to[index], StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (changed >= 0)
+            {
+                return BootFileVerdict.Refuse($"the edit would change line {changed + 1} and line {index + 1}");
+            }
+
+            changed = index;
+        }
+
+        if (changed < 0)
+        {
+            return BootFileVerdict.Refuse("the edit would change nothing");
+        }
+
+        if (!string.Equals(from[changed].Trim(), before, StringComparison.Ordinal))
+        {
+            return BootFileVerdict.Refuse($"the line it would rewrite is '{from[changed].Trim()}', not '{before}'");
+        }
+
+        if (!string.Equals(to[changed].Trim(), after, StringComparison.Ordinal))
+        {
+            return BootFileVerdict.Refuse("the rewritten line is not the one that was intended");
+        }
+
+        foreach (var raw in to)
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] == '#')
+            {
+                continue;
+            }
+
+            if (line[0] == '[' && line[^1] == ']')
+            {
+                continue;
+            }
+
+            if (!line.Contains('=', StringComparison.Ordinal))
+            {
+                return BootFileVerdict.Refuse($"'{line}' is neither a section, a comment nor a key=value setting");
+            }
+        }
+
+        return BootFileVerdict.Ok;
+    }
+
     private static List<string> Lines(string? content) =>
         string.IsNullOrEmpty(content)
             ? []
