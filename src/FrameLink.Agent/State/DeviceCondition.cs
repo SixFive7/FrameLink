@@ -84,6 +84,9 @@ public static class DeviceStateLadder
     /// <summary>Cause value for the state before the first connection attempt completes.</summary>
     public const string StartingCause = "starting";
 
+    /// <summary>Cause value for a green condition recovered from disk after a restart.</summary>
+    public const string RememberedCause = "remembered";
+
     /// <summary>The condition the agent holds before it has spoken to anything.</summary>
     public static DeviceCondition Starting { get; } = new()
     {
@@ -93,6 +96,39 @@ public static class DeviceStateLadder
         Detail = "Looking for the Fleet Manager this frame belongs to.",
         ProductRuns = false,
         IsAuthoritative = false,
+    };
+
+    /// <summary>
+    /// The green condition a restarted agent carries over from <see cref="AgentMemory"/> (§2.6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The whole of "a power cut during an outage must not blank a green frame". Without it,
+    /// <see cref="NoContact"/> is handed a null last-authoritative on every boot, concludes the
+    /// frame was never green, and puts a repair screen in a living room because a server in
+    /// somebody else's house is down — which is the outcome §2.6 forbids in as many words.
+    /// </para>
+    /// <para>
+    /// It is a separate cause from <see cref="Protocol.HandshakeStatus.Ok"/> on purpose. Nothing
+    /// on this frame has spoken to a Fleet Manager yet, so telemetry, the screen and a later
+    /// reader of the console can all tell a live green from a remembered one — and
+    /// <see cref="AgentMemory"/> uses the same distinction to refuse to record its own output as
+    /// though it were a fresh answer.
+    /// </para>
+    /// <para>
+    /// <see cref="DeviceCondition.IsAuthoritative"/> stays true: what is being carried over <i>is</i>
+    /// an answer the Fleet Manager gave, and the moment a real one arrives it replaces this
+    /// wholesale — in either direction, including "you are no longer adopted".
+    /// </para>
+    /// </remarks>
+    public static DeviceCondition Remembered { get; } = new()
+    {
+        State = DeviceState.InSync,
+        Cause = RememberedCause,
+        Headline = "Everything was working when this frame last had contact",
+        Detail = "It is carrying on with the settings its Fleet Manager gave it, and will check in again shortly.",
+        ProductRuns = true,
+        IsAuthoritative = true,
     };
 
     /// <summary>Resolves the ladder rung for a completed handshake.</summary>
