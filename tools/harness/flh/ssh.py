@@ -38,6 +38,15 @@ first user is in the ``sudo`` group, ``/etc/sudoers.d`` holds no NOPASSWD drop-i
 ``sudo -n true`` answers ``sudo: a password is required``. This is a harness concern only -
 ``assets/fl-agent.service`` sets ``User=root``, so systemd starts the agent as root and it
 never invokes sudo at all.
+
+Report, never suppress
+----------------------
+sudo also writes complaints to stderr that are *not* elevation failures - the command runs, the
+exit status is 0, and something is nonetheless wrong with the unit. Those are named in
+:data:`SUDO_NON_ELEVATION_STDERR` and surfaced once per connection by
+:meth:`Mule.report_diagnostics`. A previous version filtered them out as "benign", which is
+precisely how the stale-``/etc/hosts`` defect stayed invisible: the only signal the unit gave
+was the line being discarded.
 """
 
 from __future__ import annotations
@@ -67,10 +76,34 @@ SUDO_WITH_PASSWORD = "sudo -S -k -p ''"
 #: Prefix for a privileged command on a unit with a NOPASSWD rule.
 SUDO_PASSWORDLESS = "sudo"
 
-#: sudo prints this on stderr whenever ``/etc/hosts`` does not resolve the machine's own
-#: hostname - routine on a freshly flashed Pi that has just been renamed, and harmless: the
-#: command still runs and still exits 0. It must never be read as an elevation failure.
-SUDO_BENIGN_STDERR = ("unable to resolve host",)
+#: sudo complaints that do **not** mean elevation failed - mapped to what each one actually
+#: means, because the command succeeding is not the same as nothing being wrong.
+#:
+#: This used to be a tuple named ``SUDO_BENIGN_STDERR`` whose comment called the hostname
+#: warning "routine on a freshly renamed Pi". Half of that was right and the expensive half was
+#: wrong. Measured on the mule 2026-08-15: after ``hostnamectl set-hostname framelink-mule``,
+#: ``/etc/hosts`` still mapped ``127.0.1.1`` to ``raspberrypi``, because **hostnamectl does not
+#: maintain /etc/hosts**. With no local entry, resolution fell through to DNS and the search
+#: domain answered ``getent hosts framelink-mule`` with ``217.61.253.65
+#: framelink-mule.huisman.io`` - the frame resolved *its own hostname to a public internet
+#: address*. Anything that resolves its own name (a service bind, a certificate, an advertised
+#: media address) would have been pointed at a machine that is not this one. Writing the
+#: ``127.0.1.1 framelink-mule`` line restores ``127.0.1.1`` and sudo goes quiet.
+#:
+#: So sudo really does still work and the exit status really is 0 - and the warning is the only
+#: signal that a real defect is present. Suppressing it swallowed the signal. These are now
+#: reported once per connection (:meth:`Mule.report_diagnostics`) and still never read as an
+#: elevation failure.
+SUDO_NON_ELEVATION_STDERR: dict[str, str] = {
+    "unable to resolve host": (
+        "the mule cannot resolve its own hostname; /etc/hosts is stale. hostnamectl does not "
+        "maintain /etc/hosts, so 127.0.1.1 still names the hostname the image shipped with. "
+        "Resolution then falls through to DNS, and a search domain can answer with a public "
+        "internet address - measured 2026-08-15, this frame resolved its own name to "
+        "217.61.253.65. Anything that resolves its own name is pointed at the wrong machine. "
+        "Fix: put '127.0.1.1 <hostname>' in /etc/hosts. sudo itself is unaffected."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -108,6 +141,11 @@ class Mule:
         # connection: the answer is a property of /etc/sudoers, which nothing the harness
         # does changes, and probing once per command would triple the round trips.
         self._sudo_needs_password: bool | None = None
+        # Which SUDO_NON_ELEVATION_STDERR conditions have already been reported on this
+        # connection. Once, not per command: the condition is a property of the unit, and a
+        # deploy that elevates a dozen times would otherwise print the same paragraph twelve
+        # times and teach the reader to skip it.
+        self._reported: set[str] = set()
 
     def run(self, command: str, *, timeout: float = 120.0) -> Result:
         """Run a command and capture its stdout and stderr as text.
@@ -222,6 +260,7 @@ class Mule:
         err = stderr.read().decode("utf-8", errors="replace")
         status = stdout.channel.recv_exit_status()
         result = Result(command=wrapped, exit_status=status, stdout=out, stderr=err)
+        self.report_diagnostics(err)
         self._raise_if_elevation_failed(result)
         return result
 
@@ -231,10 +270,25 @@ class Mule:
         data = stdout.read()
         err = stderr.read().decode("utf-8", errors="replace")
         status = stdout.channel.recv_exit_status()
+        self.report_diagnostics(err)
         self._raise_if_elevation_failed(
             Result(command=wrapped, exit_status=status, stdout="", stderr=err)
         )
         return status, data, err
+
+    def report_diagnostics(self, stderr: str) -> None:
+        """Say once what sudo's non-elevation complaints on this unit actually mean.
+
+        Called on **every** privileged command, not only the failing ones, because the whole
+        point is that these appear while the command exits 0. A condition nobody is told about
+        is indistinguishable from a healthy unit, and the previous behaviour - silently
+        skipping the line - made a real defect look like a healthy unit for exactly that
+        reason.
+        """
+        for marker, diagnosis in SUDO_NON_ELEVATION_STDERR.items():
+            if marker in stderr and marker not in self._reported:
+                self._reported.add(marker)
+                ui.warn(diagnosis)
 
     def _raise_if_elevation_failed(self, result: Result) -> None:
         """Separate "sudo refused" from "the command ran as root and failed".
@@ -250,7 +304,8 @@ class Mule:
             text = line.strip()
             if not text.startswith("sudo:"):
                 continue
-            if any(benign in text for benign in SUDO_BENIGN_STDERR):
+            if any(marker in text for marker in SUDO_NON_ELEVATION_STDERR):
+                # Not an elevation failure - report_diagnostics has already named it.
                 continue
             raise ElevationError(
                 f"sudo refused on {self.user}@{self.host}: {text}",
