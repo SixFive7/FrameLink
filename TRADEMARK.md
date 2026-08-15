@@ -1,6 +1,6 @@
 # Trademark and name usage
 
-**"FrameLink"** is the name of this project. The name, any associated logo or branding, and the distinctive visual style of the build guides are **not** covered by the [repository license](LICENSE) (EUPL-1.2) and are **not** licensed for reuse.
+**"FrameLink"** is the name of this project. The name, any associated logo or branding, and the distinctive visual style of the build guides are **not** covered by the [repository license](LICENSE) and are **not** licensed for reuse.
 
 This document exists so that readers, forkers, and contributors understand what they may and may not do with the name.
 
@@ -8,7 +8,7 @@ This document exists so that readers, forkers, and contributors understand what 
 
 - **Nominative reference.** You may use the name "FrameLink" to truthfully describe or refer to this project — for example, *"This device runs FrameLink"*, *"Fork of FrameLink"*, *"Based on the FrameLink build guides"*. That kind of descriptive use is fine and expected.
 - **Personal use.** You may build FrameLink units for yourself, your family, friends, or anyone you are helping. You may share photos, write-ups, or videos of your build and call it "my FrameLink".
-- **Forks under a different name.** You may fork the repository and develop it further under a **different project name** of your own choosing.
+- **Forks under a different name.** You may fork the repository and develop it further under a **different project name** of your own choosing. Renaming is all this document asks of you; what the fork may then be *used* for is a separate question, answered by the [repository license](LICENSE) rather than here.
 
 ## What is not permitted
 
@@ -28,7 +28,9 @@ The name and visual identity are the trust signal. Keeping them reserved for thi
 
 The name "FrameLink" is currently claimed as an **unregistered trademark** of the project maintainer (Jori Huisman). It is not yet registered with BOIP, EUIPO, or any other trademark authority. Rights may be registered in the future as the project grows.
 
-Unregistered or not, the EUPL does **not** grant trademark rights. See [EUPL-1.2 Article 5, "Legal Protection"](LICENSE): *"This Licence does not grant permission to use the trade names, trademarks, service marks, or names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the copyright notice."* The permissions in [LICENSE](LICENSE) apply to the contents of this repository, not to the name.
+Unregistered or not, no license this project has ever used grants trademark rights. The current [FrameLink License](LICENSE) — a five-year variant of the Functional Source License 1.1 (MIT Future License) — reserves them explicitly under its "Trademarks" heading: *"Except for displaying the License Details and identifying us as the origin of the Software, you have no right under these Terms and Conditions to use our trademarks, trade names, service marks or product names."*
+
+The same held under the EUPL-1.2, which covered every version published before the relicense and still covers those versions today. Its Article 5 "Legal Protection" clause reserved the name in the same way: *"This Licence does not grant permission to use the trade names, trademarks, service marks, or names of the Licensor, except as required for reasonable and customary use in describing the origin of the Work and reproducing the content of the copyright notice."* So whichever version of FrameLink you hold, and under whichever license you received it, the permissions apply to the contents of this repository — not to the name.
 
 ## Questions
 
