@@ -1,3 +1,5 @@
+using FrameLink.Agent;
+using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Stage;
 using FrameLink.Agent.State;
@@ -366,5 +368,346 @@ public sealed class AgentConsoleStageTests
         }
 
         return count;
+    }
+}
+
+/// <summary>
+/// A console that stops taking bytes — the crash the mule caught on 2026-08-15.
+/// </summary>
+/// <remarks>
+/// <para>
+/// The journal, verbatim: <c>Unhandled exception. System.IO.IOException: Input/output error :
+/// '/dev/tty1'</c>, thrown from a buffered flush inside <c>TtyTerminal.Dispose()</c>, out through
+/// the <c>using</c> in <c>AgentHost.RunAsync</c>, and recorded by systemd as
+/// <c>code=killed, status=6/ABRT</c>. The frame had no framebuffer, no connected DRM output and
+/// no backlight — which is what <i>every</i> frame looks like from first boot until the panel
+/// overlay is applied, so this is the crash path of the exact condition the console stage exists
+/// to narrate through.
+/// </para>
+/// <para>
+/// The assertions are on the host's exit code rather than on "no exception was thrown", because
+/// the outcome that mattered was a process. With <c>Restart=always</c> and a restart limiter that
+/// is now honoured, a repeated abort here leaves the unit <c>failed</c> and stopped: a frame that
+/// can reach neither its Fleet Manager nor a screen, silently.
+/// </para>
+/// </remarks>
+public sealed class AgentConsoleFailureTests
+{
+    private const string Eio = "Input/output error : '/dev/tty1'";
+
+    [Fact]
+    public async Task A_console_that_refuses_every_write_still_lets_the_host_finish()
+    {
+        var terminal = new FailingTerminal { FailWrites = true };
+        var log = new RecordingLog();
+
+        var exit = await HostShapedRunAsync(terminal, log);
+
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal(1, terminal.DisposeCount);
+    }
+
+    [Fact]
+    public async Task A_console_that_throws_while_being_closed_still_lets_the_host_finish()
+    {
+        // The mule's stack exactly: the writes were taken, and the flush that dispose does on the
+        // way out was the one that answered EIO — after the host's own try/catch had gone out of
+        // scope, which is why nothing caught it.
+        var terminal = new FailingTerminal { FailDispose = true };
+        var log = new RecordingLog();
+
+        var exit = await HostShapedRunAsync(terminal, log);
+
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.Equal(1, terminal.DisposeCount);
+        Assert.True(terminal.WriteAttempts > 1, "the frames themselves were taken; only the close failed");
+        Assert.Contains("failed while being closed", log.Transcript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_console_that_fails_on_both_write_and_close_still_lets_the_host_finish()
+    {
+        var terminal = new FailingTerminal { FailWrites = true, FailDispose = true };
+
+        Assert.Equal(ExitCodes.Success, await HostShapedRunAsync(terminal, new RecordingLog()));
+        Assert.Equal(1, terminal.DisposeCount);
+    }
+
+    [Fact]
+    public void The_condition_is_journalled_once_rather_than_once_per_frame()
+    {
+        // At a 120 ms tick a per-frame version of this line is eight journal entries a second,
+        // forever, on a fleet of frames that are all in this state until the overlay lands. Both
+        // repaint triggers are exercised — the paint the tick makes, and the one a status change
+        // makes — because both go through the same write.
+        var log = new RecordingLog();
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        using var stage = new ConsoleStage(
+            new FailingTerminal { FailWrites = true },
+            hub,
+            new ManualClock(),
+            StaticDisplayProbe.Visible,
+            log);
+
+        for (var frame = 0; frame < 40; frame++)
+        {
+            stage.Paint();
+            hub.Publish(status => status with { Attempt = frame });
+        }
+
+        Assert.Single(log.Lines, line => line.Contains("no longer write to the console", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_failed_write_demotes_the_stage_and_says_so_where_the_no_display_warning_goes()
+    {
+        // The same two surfaces the no-display warning uses: the journal, and ConsoleVisibility on
+        // the hub — which is what reaches the Fleet Manager. On a frame whose own screen is the
+        // broken thing, that is the only surface left.
+        var log = new RecordingLog();
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        using var stage = new ConsoleStage(
+            new FailingTerminal { FailWrites = true },
+            hub,
+            new ManualClock(),
+            StaticDisplayProbe.Visible,
+            log);
+
+        Assert.True(stage.CanWrite);
+        Assert.True(hub.Current.ConsoleVisibility!.Value.Visible);
+
+        stage.Paint();
+
+        Assert.False(stage.CanWrite);
+        Assert.False(stage.Visibility.Visible);
+        Assert.False(hub.Current.ConsoleVisibility!.Value.Visible);
+        Assert.Contains(Eio, hub.Current.ConsoleVisibility!.Value.Reason, StringComparison.Ordinal);
+        Assert.Contains("write=failed", hub.Current.ConsoleVisibility!.Value.Evidence, StringComparison.Ordinal);
+        Assert.Single(log.Lines, line => line.StartsWith("Warn:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_console_that_has_already_refused_is_not_written_to_again()
+    {
+        var terminal = new FailingTerminal { FailWrites = true };
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        var stage = new ConsoleStage(terminal, hub, new ManualClock(), StaticDisplayProbe.Visible, new RecordingLog());
+
+        stage.Paint();
+        stage.Paint();
+        stage.Paint();
+        hub.Publish(status => status with { Attempt = 7 });
+        stage.Dispose();
+
+        // One attempt, and nothing since — including the cursor-restoring write dispose would
+        // otherwise make.
+        Assert.Equal(1, terminal.WriteAttempts);
+        Assert.Equal(0, stage.PaintedFrames);
+        Assert.Null(stage.LastFrame);
+    }
+
+    [Fact]
+    public void A_stage_whose_console_fails_is_still_disposable_twice()
+    {
+        var terminal = new FailingTerminal { FailWrites = true, FailDispose = true };
+        var stage = new ConsoleStage(
+            terminal,
+            new AgentStatusHub(AgentStatusFactory.Starting()),
+            new ManualClock(),
+            StaticDisplayProbe.Visible,
+            new RecordingLog());
+
+        stage.Paint();
+        stage.Dispose();
+        stage.Dispose();
+
+        Assert.Equal(1, terminal.DisposeCount);
+    }
+
+    [Fact]
+    public void A_tty_over_a_device_that_answers_EIO_closes_without_taking_the_process_with_it()
+    {
+        // TtyTerminal.Dispose is the frame at the top of the mule's stack. The write still reports
+        // the truth to its caller — the stage is what decides the agent survives it — but closing
+        // the device must not be able to fail out of a `using`.
+        var device = new ThrowingStream { FailWrites = true, FailFlush = true };
+        var terminal = TtyTerminal.Over(device, 80, 25);
+
+        Assert.Throws<IOException>(() => terminal.Write("frame"));
+        terminal.Dispose();
+        terminal.Dispose();
+
+        Assert.True(device.DisposeAttempted);
+    }
+
+    [Fact]
+    public async Task A_device_that_takes_the_bytes_and_fails_the_flush_is_the_same_condition()
+    {
+        // The whole path, unfaked apart from the device: ConsoleStage over a real TtyTerminal over
+        // a stream that accepts every byte and then refuses to flush it. EIO can arrive at either
+        // half, and the agent must not be able to tell the difference.
+        var device = new ThrowingStream { FailFlush = true, FailDispose = true };
+        var log = new RecordingLog();
+
+        var exit = await HostShapedRunAsync(TtyTerminal.Over(device, 80, 25), log, frames: 20);
+
+        Assert.Equal(ExitCodes.Success, exit);
+        Assert.True(device.DisposeAttempted);
+        Assert.Single(log.Lines, line => line.Contains("no longer write to the console", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Runs a console stage the way <c>AgentHost.RunAsync</c> does, and answers with the exit code
+    /// the process would have had.
+    /// </summary>
+    /// <remarks>
+    /// The shape is load-bearing. The host's <c>try/catch</c> wraps the <c>Task.WhenAll</c> over
+    /// its four loops, while the stage is a <c>using</c> whose disposal runs <i>after</i> that
+    /// catch is out of scope — so an exception from dispose has nothing above it but the runtime.
+    /// Reproducing that here is what makes this a regression test rather than a mood.
+    /// </remarks>
+    private static async Task<int> HostShapedRunAsync(ITerminal terminal, RecordingLog log, int frames = 5)
+    {
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        var clock = new ManualClock();
+        using var stop = new CancellationTokenSource();
+        clock.OnDelay = ticking =>
+        {
+            if (ticking.Delays.Count >= frames)
+            {
+                stop.Cancel();
+            }
+        };
+
+        try
+        {
+            using var stage = new ConsoleStage(terminal, hub, clock, StaticDisplayProbe.Visible, log)
+            {
+                TickInterval = TimeSpan.FromMilliseconds(1),
+            };
+
+            try
+            {
+                await Task.WhenAll(stage.RunAsync(stop.Token));
+            }
+            catch (OperationCanceledException)
+            {
+                // Asked to stop.
+            }
+            catch (Exception loopFailure) when (loopFailure is not OutOfMemoryException and not StackOverflowException)
+            {
+                return ExitCodes.Unrecoverable;
+            }
+
+            return ExitCodes.Success;
+        }
+        catch (Exception disposeFailure) when (disposeFailure is not OutOfMemoryException and not StackOverflowException)
+        {
+            // Nothing in the host catches this. In the real process it was SIGABRT.
+            return ExitCodes.Unrecoverable;
+        }
+    }
+
+    /// <summary>A console that answers <c>EIO</c> wherever it is told to.</summary>
+    private sealed class FailingTerminal : ITerminal
+    {
+        public int Columns => 80;
+
+        public int Rows => 25;
+
+        public bool SizeIsKnown => true;
+
+        public bool SupportsColour => false;
+
+        public bool FailWrites { get; init; }
+
+        public bool FailDispose { get; init; }
+
+        public int WriteAttempts { get; private set; }
+
+        public int DisposeCount { get; private set; }
+
+        public void Write(string text)
+        {
+            WriteAttempts++;
+            if (FailWrites)
+            {
+                throw new IOException(Eio);
+            }
+        }
+
+        public void Dispose()
+        {
+            DisposeCount++;
+            if (FailDispose)
+            {
+                throw new IOException(Eio);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A write-only device that fails where a virtual console does.
+    /// </summary>
+    /// <remarks>
+    /// <c>Dispose</c> flushes, because that is what <c>BufferedFileStreamStrategy</c> does and it
+    /// is the only reason the mule's exception was thrown from a dispose at all.
+    /// </remarks>
+    private sealed class ThrowingStream : Stream
+    {
+        public bool FailWrites { get; init; }
+
+        public bool FailFlush { get; init; }
+
+        public bool FailDispose { get; init; }
+
+        public bool DisposeAttempted { get; private set; }
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush()
+        {
+            if (FailFlush)
+            {
+                throw new IOException(Eio);
+            }
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (FailWrites)
+            {
+                throw new IOException(Eio);
+            }
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            DisposeAttempted = true;
+            base.Dispose(disposing);
+
+            if (disposing && (FailDispose || FailFlush))
+            {
+                throw new IOException(Eio);
+            }
+        }
     }
 }

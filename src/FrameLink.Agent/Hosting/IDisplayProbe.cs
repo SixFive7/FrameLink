@@ -18,12 +18,15 @@ public readonly record struct DisplayVisibility(bool Visible, string Reason, str
 /// sizes</c>, <c>/dev/fb0</c> does not exist and <c>/sys/class/backlight/</c> is empty.
 /// </para>
 /// <para>
-/// <b>The write still succeeds.</b> <c>tty1</c> is an active console — <c>console=tty1</c> is on
-/// the kernel command line and <c>/sys/class/tty/console/active</c> reads
-/// <c>ttyAMA10 tty1</c> — so opening <c>/dev/tty1</c> and writing a whole designed frame to it
-/// returns without error and produces nothing. That is exactly the shape of failure §2.4 exists
-/// to catch: a successful write is not evidence of an applied state. The console stage cannot
-/// self-verify by writing, so it asks something else instead.
+/// <b>The write is no evidence either way.</b> <c>tty1</c> is an active console —
+/// <c>console=tty1</c> is on the kernel command line and <c>/sys/class/tty/console/active</c>
+/// reads <c>ttyAMA10 tty1</c> — so opening <c>/dev/tty1</c> and writing a whole designed frame to
+/// it usually returns without error and produces nothing. Usually, not always: the same frame,
+/// same darkness, has also answered <c>EIO</c> and taken the process down with it (see
+/// <see cref="TerminalFailure"/>). That is exactly the shape of failure §2.4 exists to catch — a
+/// successful write is not evidence of an applied state, and a failed one says nothing about the
+/// picture either. The console stage cannot self-verify by writing, so it asks something else
+/// instead.
 /// </para>
 /// <para>
 /// This probe does not fix the darkness and is not meant to. It makes the darkness a
@@ -123,8 +126,8 @@ public sealed class SysfsDisplayProbe : IDisplayProbe
         return new DisplayVisibility(
             false,
             "Nothing on this frame can show a picture yet: there is no framebuffer and no DRM "
-            + "connector reports a display. Writes to the console succeed and produce no pixels. "
-            + "The panel overlay has not been applied.",
+            + "connector reports a display. Writes to the console produce no pixels whether they "
+            + "succeed or fail. The panel overlay has not been applied.",
             evidence);
     }
 }

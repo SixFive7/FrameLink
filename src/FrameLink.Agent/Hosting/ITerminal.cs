@@ -33,7 +33,40 @@ public interface ITerminal : IDisposable
     bool SupportsColour { get; }
 
     /// <summary>Writes <paramref name="text"/> verbatim, including escape sequences.</summary>
+    /// <remarks>
+    /// May throw: a console device is allowed to stop taking bytes at any moment, and an
+    /// implementation that swallowed that would be reporting a picture it did not draw. The
+    /// caller decides what to do about it — see <see cref="Stage.ConsoleStage"/>, which demotes
+    /// the terminal and keeps the agent running. What must never happen is the failure reaching
+    /// the process (§1.2.2).
+    /// </remarks>
     void Write(string text);
+}
+
+/// <summary>
+/// Classifies the exceptions a console device is allowed to fail with.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Measured on the mule, 2026-08-15.</b> Writing a frame to <c>/dev/tty1</c> on a machine with
+/// no framebuffer and no connected DRM output answered <c>EIO</c>, which .NET surfaces as
+/// <c>System.IO.IOException: Input/output error : '/dev/tty1'</c>. It arrived on the buffered
+/// stream's flush during <see cref="IDisposable.Dispose"/>, went unhandled, and systemd recorded
+/// the agent as <c>code=killed, status=6/ABRT</c>.
+/// </para>
+/// <para>
+/// The list is wider than <see cref="IOException"/> because a console can go away in more ways
+/// than one: a revoked or re-owned tty answers <see cref="UnauthorizedAccessException"/>, a
+/// handle closed underneath the stream answers <see cref="ObjectDisposedException"/>, and a
+/// device that will not take the operation at all answers
+/// <see cref="NotSupportedException"/>. None of them is a reason to stop reconciling.
+/// </para>
+/// </remarks>
+public static class TerminalFailure
+{
+    /// <summary>Whether <paramref name="exception"/> is the console failing rather than a bug.</summary>
+    public static bool IsDeviceFailure(Exception? exception) =>
+        exception is IOException or UnauthorizedAccessException or ObjectDisposedException or NotSupportedException;
 }
 
 /// <summary>
@@ -62,9 +95,10 @@ public sealed partial class TtyTerminal : ITerminal
     private const int FallbackRows = 24;
     private const ulong RequestGetWindowSize = 0x5413;
 
-    private readonly FileStream _stream;
+    private readonly Stream _stream;
+    private bool _disposed;
 
-    private TtyTerminal(FileStream stream, int columns, int rows, bool measured)
+    private TtyTerminal(Stream stream, int columns, int rows, bool measured)
     {
         _stream = stream;
         Columns = columns;
@@ -107,6 +141,15 @@ public sealed partial class TtyTerminal : ITerminal
                     Access = FileAccess.Write,
                     Share = FileShare.ReadWrite,
                     Options = FileOptions.WriteThrough,
+
+                    // Unbuffered, and that is the fix for a crash rather than a micro-optimisation.
+                    // At the default 4096 the stream is a BufferedFileStreamStrategy, whose
+                    // FlushWrite does not clear _writePos when the underlying write throws — so a
+                    // frame that failed with EIO stayed in the buffer and was retried by the flush
+                    // inside Dispose, where nothing was catching. That is the mule's SIGABRT.
+                    // A console has no use for buffering anyway: every frame is one write followed
+                    // by one flush, and WriteThrough already refuses the OS page cache.
+                    BufferSize = 0,
                 });
 
             var (columns, rows, measured) = MeasureWindow(stream);
@@ -138,6 +181,20 @@ public sealed partial class TtyTerminal : ITerminal
         }
     }
 
+    /// <summary>
+    /// Wraps an already-open write stream at a known size.
+    /// </summary>
+    /// <remarks>
+    /// The seam behind <see cref="Open"/>. It exists so the device-failure path — a console that
+    /// answers <c>EIO</c> on write and again on the flush inside dispose — can be exercised
+    /// without a tty, which is what nothing did before the mule aborted on it.
+    /// </remarks>
+    public static ITerminal Over(Stream stream, int columns, int rows, bool sizeIsKnown = true)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        return new TtyTerminal(stream, columns, rows, sizeIsKnown);
+    }
+
     /// <inheritdoc/>
     public void Write(string text)
     {
@@ -149,7 +206,30 @@ public sealed partial class TtyTerminal : ITerminal
     }
 
     /// <inheritdoc/>
-    public void Dispose() => _stream.Dispose();
+    /// <remarks>
+    /// Swallows a failing close, because disposal is cleanup and cleanup that throws takes the
+    /// process with it — <see cref="TerminalFailure"/> records the abort this cost. Idempotent,
+    /// so a second dispose cannot resurrect the same failure.
+    /// </remarks>
+    public void Dispose()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        _disposed = true;
+
+        try
+        {
+            _stream.Dispose();
+        }
+        catch (Exception exception) when (TerminalFailure.IsDeviceFailure(exception))
+        {
+            // The descriptor is closed regardless: FileStream closes its handle in a finally,
+            // so the only thing lost here is bytes that were never going to reach a screen.
+        }
+    }
 
     private static (int Columns, int Rows, bool Measured) MeasureWindow(FileStream stream)
     {
@@ -232,7 +312,22 @@ public sealed class StandardOutputTerminal : ITerminal
     public void Write(string text) => Console.Out.Write(text);
 
     /// <inheritdoc/>
-    public void Dispose() => Console.Out.Flush();
+    /// <remarks>
+    /// Guarded for the same reason <see cref="TtyTerminal.Dispose"/> is. This surface is a pipe
+    /// into the journal, and a pipe whose reader went away — journald being restarted mid-shutdown
+    /// — fails the final flush with <see cref="IOException"/>.
+    /// </remarks>
+    public void Dispose()
+    {
+        try
+        {
+            Console.Out.Flush();
+        }
+        catch (Exception exception) when (TerminalFailure.IsDeviceFailure(exception))
+        {
+            // Nothing to say and nowhere left to say it.
+        }
+    }
 
     private static int SafeWidth()
     {

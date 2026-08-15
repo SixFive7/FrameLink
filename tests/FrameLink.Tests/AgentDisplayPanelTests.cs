@@ -361,6 +361,21 @@ public sealed class AgentDisplayProbeTests
     }
 
     [Fact]
+    public void The_dark_verdict_does_not_promise_that_a_write_will_succeed()
+    {
+        // It used to say "Writes to the console succeed and produce no pixels", and the mule
+        // disproved the first half on 2026-08-15: the same dark frame answered EIO on /dev/tty1
+        // and aborted the agent. Producing no pixels is the part that is always true.
+        using var files = new TemporaryFiles();
+        files.Seed(SysfsDisplayProbe.DrmPath + "/card1-HDMI-A-1/status", "disconnected\n");
+
+        var reason = new SysfsDisplayProbe(files.Files).Probe().Reason;
+
+        Assert.DoesNotContain("Writes to the console succeed", reason, StringComparison.Ordinal);
+        Assert.Contains("produce no pixels whether they succeed or fail", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void A_connected_dsi_panel_is_reported_visible_and_named()
     {
         using var files = new TemporaryFiles();
