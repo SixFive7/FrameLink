@@ -649,6 +649,12 @@ Not blockers for starting; each has a recorded default that applies unless overr
 
 1. **Resource catalog** — the enumeration of every atomic setting extracted from guides 3–12.
    This is the first task of M3, not a design question.
+   - ⚠ **Known trap, observed on the mule 2026-08-15:** the hostname is **cloud-init managed**
+     on this image. `hostnamectl set-hostname` appears to succeed and is silently reverted at
+     the next boot, even with a `preserve_hostname: true` drop-in. The hostname resource must
+     therefore act on cloud-init's configuration, not on `hostnamectl` — and this is a textbook
+     illustration of decision 26 (every resource reboots to prove it stuck): a write-only check
+     would have marked this `InSync` while it was quietly wrong.
 2. **Cross-household connectivity** — advertised IP, TURN and TLS for frames outside the
    operator's LAN. Deferred within v2; LAN calling is validated first.
 3. **Design system specifics** — palette, typography and motion language, to be defined and
