@@ -193,7 +193,12 @@ file → fleet default → per-device override. Development runs use 0.
 1. **Console stage.** Before any graphical stack exists, the agent writes directly to
    `/dev/tty1` (the DSI panel's default) — a designed terminal interface with colour, box
    drawing and animated progress, not log spew. No login session, no dependencies, works from
-   the first second of the first boot.
+   the first second of the first boot. **The panel has to exist first.** On a stock image there
+   is no DSI connector, no `/dev/fb0` and no backlight, and a write to `/dev/tty1` succeeds
+   while producing no pixels — a stage that trusted its own write would report success and show
+   nothing. The display overlay and the console rotation are therefore reconciled **first**,
+   right after the agent-version root and ahead of adoption: a deliberate carve-out from §5.5's
+   brick-capable-last ordering, decided in favour of this section (decision 46).
 2. **Browser stage.** As soon as the reconciler has brought up the kiosk stack, that same
    browser renders the agent's page. Bringing the stack up is therefore front-loaded in the DAG.
 3. **Fallback rule.** After starting the GUI the agent requires the page to check in over the
@@ -456,6 +461,11 @@ Supplied in-session, never written to any file (repo rule §1.2):
   DFU can produce a device nothing remote can reach. Mitigations: validate before writing, keep
   and restore backups, boot-count self-repair, and schedule brick-capable resources last.
   Residual risk is covered by pre-flashed spare cards — a swap, not a flashing session.
+  **One carve-out from the ordering clause (decision 46):** the display overlay and the console
+  rotation are scheduled *first*, because §2.7's narration cannot exist without a lit panel and a
+  write to `/dev/tty1` on a dark frame succeeds silently. They keep every other mitigation in this
+  bullet, and an early brick is the cheaper one — the card swap costs three reboot cycles of work
+  rather than a whole provision. The ordering is narrowed by two resources; nothing else changes.
 - **Physical assembly, wiring and card swaps** are always human steps.
 - **Long runs lose context**, so progress is written to disk continuously and any session can
   resume mid-milestone.
@@ -642,6 +652,7 @@ The record of *what was decided and why*, in the order decided.
 | 43 | Fleet Manager auth | Single operator, one long password from an environment variable |
 | 44 | Call rooms | Single room, fleet-controlled |
 | 45 | First run | Unconfigured server explains itself on every surface |
+| 46 | Display ordering | Overlay + console rotation go **first**, ahead of adoption — §2.7 outranks §5.5's brick-capable-last for this one group; every §5.5 mitigation kept, brick risk accepted |
 
 ## Appendix B — Open items
 

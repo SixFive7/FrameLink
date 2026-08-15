@@ -37,9 +37,11 @@ verification is only meaningful after a runtime event (a call, a touch, a button
 field says so explicitly and names what makes it different.
 
 **Format.** One block per resource. `dependsOn` lists resource ids that must be `InSync` first;
-`—` means it depends only on the agent roots. Value source is either *fixed by the catalog* or a
-named Fleet Manager setting per [§3.4](../version2.md) (every setting is a fleet default with a
-per-device override).
+`—` means it depends only on the agent roots. Two resources — the display group under Guide 3 —
+name `agent.version` explicitly and nothing else, which is *fewer* dependencies than `—` denotes
+and is deliberate; see the carve-out at the head of that section. Value source is either *fixed by
+the catalog* or a named Fleet Manager setting per [§3.4](../version2.md) (every setting is a fleet
+default with a per-device override).
 
 **Counts.** 71 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
 are listed in their own section. Total **79**.
@@ -64,16 +66,52 @@ are listed in their own section. Total **79**.
 
 ## Guide 3 — Hardware configuration
 
-**`boot.config.dtoverlay-waveshare-panel`**
+**These two resources are scheduled first, by operator decision (2026-08-15).**
+[§5.5](../version2.md) schedules brick-capable resources last; [§2.7](../version2.md) requires the
+agent to narrate on `/dev/tty1` "from the first second of the first boot" and forbids blank
+screens. Open question 1 recorded the collision and left it to the operator. It is now decided in
+favour of §2.7: on-screen narration is the product's primary honesty mechanism and it is worth
+nothing if there is no screen. The brick risk was raised explicitly and accepted, and the decision
+is recorded as [decision 46](../version2.md), with §2.7 and §5.5 both pointing at it.
 
-- **From** — [guide 3 step 1](../docs/3-hardware-configuration.md#1-enable-the-dsi-touch-display-and-rotate-the-console-to-landscape)
-- **Sets** — the exact line `dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a` present once under `[all]` in `/boot/firmware/config.txt`.
-- **Observe** — `grep -cxF 'dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a' /boot/firmware/config.txt` (must be exactly `1`).
-- **Verify** — identical.
-- **dependsOn** — —
-- **Value source** — fixed by the catalog (panel model is a hardware fact). The `,dsi0` suffix variant applies only if the ribbon is on the LAN-side DSI port.
-- **Risk** — **brick-capable** (`config.txt`).
-- **Notes** — Checkpoint assertion, separately observable post-boot: `/sys/class/drm/card*-DSI-*/status` reads `connected`. Kept out of Observe because a present line with a disconnected panel is a *hardware* diagnosis (ribbon/5 V), not a drift the agent can act on. Duplicate-line detection matters: `grep -c` rather than `grep -q`, because a non-idempotent write history is the failure this guards.
+**This is a carve-out for one resource group, not a repeal of §5.5.** Every other brick-capable
+resource keeps its late slot — `boot.config.dtoverlay-vc4-kms-v3d-noaudio`,
+`boot.config.camera-auto-detect`, `boot.cmdline.wifi-regdom`, `eeprom.config`, and the DFU flash in
+its own hand-recoverable position — and the two display resources keep every mitigation §5.5
+attaches to the rule. §5.5's *ordering* clause is narrowed by exactly two resources; its
+*mitigations* are not weakened at all.
+
+**Measured on the mule 2026-08-15, which is what makes the carve-out necessary rather than tidy.**
+On a stock Trixie image `config.txt` carries only `dtoverlay=vc4-kms-v3d`, both HDMI connectors
+report `disconnected`, **there is no DSI connector at all**, `dmesg` repeats
+`vc4-drm axi:gpu: [drm] Cannot find any crtc or sizes`, `/dev/fb0` does not exist and
+`/sys/class/backlight/` is empty. `console=tty1` is on the kernel command line and
+`/sys/class/tty/console/active` reads `ttyAMA10 tty1`, so **opening `/dev/tty1` and writing a whole
+designed frame returns without error and produces no pixels.** A console stage that trusted its own
+write would report success while showing nothing — the same shape of failure
+[§2.4](../version2.md) exists to catch.
+
+**The write discipline this group runs behind.** These are the three mitigations that make an early
+slot affordable rather than reckless, and they are part of both entries below rather than advice
+attached to them:
+
+1. **Validate before writing.** Parse the whole file, apply the change to the parsed form, and
+   re-serialise; reject a result that is not exactly one line (`cmdline.txt`) or that has lost a
+   section header or gained a duplicate `dtoverlay` (`config.txt`). Never append blind, and never
+   re-serialise from a copy read before another resource's write.
+2. **Back up first.** Copy `config.txt` and `cmdline.txt` to a fixed backup path **on the boot
+   partition itself** before the provision's first write, and keep them there. A backup on the root
+   filesystem is useless to a bootloader that never gets that far.
+3. **Boot-count self-repair.** Record the attempt before rebooting and clear it once the agent is
+   back up and the resource has verified; a device that does not come back must land on the
+   known-good file with nobody touching it. Two mechanisms can deliver that and **neither has been
+   tested on this hardware**: an agent-written counter on the boot partition, whose restore runs on
+   the *next* successful boot and therefore does nothing for a device that never boots again; or the
+   Pi bootloader's own `tryboot` one-shot, where the candidate goes to `tryboot.txt`, the reboot
+   requests it once, and any later boot falls back to the untouched `config.txt` — which
+   [§5.1](../version2.md)'s smart-plug power-cycle harness can supply unattended. The second is the
+   only one that survives a frame that never boots again. Choosing and proving one is the
+   outstanding half of this decision (open question 1).
 
 **`boot.cmdline.fbcon-rotate`**
 
@@ -81,10 +119,21 @@ are listed in their own section. Total **79**.
 - **Sets** — `fbcon=rotate:1` appended to the single line of `/boot/firmware/cmdline.txt`; exactly one `fbcon=rotate:` token.
 - **Observe** — `grep -o 'fbcon=rotate:[0-9]*' /boot/firmware/cmdline.txt` **and** `grep -o 'fbcon=rotate:[0-9]*' /proc/cmdline`.
 - **Verify** — identical. Both halves are deliberate: the file is the desired state, `/proc/cmdline` proves the bootloader actually handed it to the kernel. [§2.4](../version2.md) records the governor case where `/proc/cmdline` agreed and the effect still did not land, so `/proc/cmdline` alone is not sufficient evidence either — it is necessary, not sufficient.
-- **dependsOn** — —
-- **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy).
-- **Risk** — **brick-capable** (`cmdline.txt`; a malformed single line is unbootable).
-- **Notes** — `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL` and `ds=nocloud;i=rpi-imager-…`; see `boot.cmdline.wifi-regdom` and `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods`.
+- **dependsOn** — `agent.version`
+- **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy). Applied from the catalog default when no fleet value has been issued, which is the normal case at position 2 — the frame is not adopted yet. A later fleet override is ordinary drift and reconciles like any other.
+- **Risk** — **brick-capable** (`cmdline.txt`; a malformed single line is unbootable). The riskier of the two display writes and the one the write discipline above exists for: `config.txt` tolerates an unknown overlay line, a broken `cmdline.txt` does not boot.
+- **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL` and `ds=nocloud;i=rpi-imager-…`; see `boot.cmdline.wifi-regdom` and `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 78, so one line-aware editor must serve both ends of the order.
+
+**`boot.config.dtoverlay-waveshare-panel`**
+
+- **From** — [guide 3 step 1](../docs/3-hardware-configuration.md#1-enable-the-dsi-touch-display-and-rotate-the-console-to-landscape)
+- **Sets** — the exact line `dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a` present once under `[all]` in `/boot/firmware/config.txt`.
+- **Observe** — `grep -cxF 'dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a' /boot/firmware/config.txt` (must be exactly `1`).
+- **Verify** — **differs from Observe.** The line check, **plus** the display probe: a connector under `/sys/class/drm/card*-DSI-*/status` reading `connected`, with the presence of `/dev/fb0` and of a `/sys/class/backlight/` entry recorded as supporting evidence. At position 3 that is no longer an optional checkpoint — every resource after this one narrates onto this panel, so "the line is present" cannot be allowed to stand in for "the screen exists". A failing probe with a correct line is a **hardware** diagnosis (ribbon seating, 5 V) and must be reported as `Degraded` carrying the probe's evidence verbatim; it must **not** trigger another `config.txt` write. Repeated boot-partition writes are the risk this carve-out is spending, not a repair.
+- **dependsOn** — `agent.version`
+- **Value source** — fixed by the catalog (panel model is a hardware fact). The `,dsi0` suffix variant applies only if the ribbon is on the LAN-side DSI port.
+- **Risk** — **brick-capable** (`config.txt`), scheduled **3rd** by operator decision — see the carve-out at the head of this section.
+- **Notes** — Duplicate-line detection matters: `grep -c` rather than `grep -q`, because a non-idempotent write history is the failure this guards. **This resource is what the console stage costs.** Until it is `InSync` the agent narrates into the dark and the Fleet Manager is the only surface left, which is exactly the state [§1.2](../version2.md) principle 3 says must be named rather than silent. It also gates diagnostics: the screenshot path allowlisted by [§3.6](../version2.md) reads `/dev/fb0`, so a frame that has not reached this resource cannot be looked at remotely either. `boot.config.camera-auto-detect` and `boot.config.dtoverlay-vc4-kms-v3d-noaudio` write the same file from positions 76 and 77 — different lines, same file, opposite ends of the order.
 
 ---
 
@@ -929,12 +978,28 @@ Each line names the guide content excluded and what supersedes it.
 
 ## Proposed dependency ordering
 
-Topological, with brick-capable resources scheduled last per [§5.5](../version2.md). Phase boundaries
-are for reading; the DAG is what the loop actually orders.
+Topological, with brick-capable resources scheduled last per [§5.5](../version2.md) — subject to the
+two named exceptions below. Phase boundaries are for reading; the DAG is what the loop actually
+orders.
 
-**One deliberate refinement of §5.5.** The brick-capable set is split by *recovery cost*, not by
-category. `firmware.xvf3800.version` is a DFU flash that can brick the **mic array** — the Pi still
-boots, the frame is still reachable, and recovery is a physical Safe-Mode reflash at the device. The
+**Exception 1 — the display group is scheduled first (operator decision, 2026-08-15).**
+`boot.cmdline.fbcon-rotate` and `boot.config.dtoverlay-waveshare-panel` sit at positions **2 and 3**,
+immediately after `agent.version` and **ahead of `agent.keypair` and `agent.adoption`**.
+[§2.7](../version2.md)'s console narration and its ban on blank screens are the product's primary
+honesty mechanism, and they are worth nothing without a lit panel: on a stock image there is no DSI
+connector, no `/dev/fb0` and no backlight, and a write to `/dev/tty1` succeeds while producing no
+pixels. Placing them ahead of adoption is deliberate rather than incidental —
+[§2.6](../version2.md) renders `NotAdopted`, `ControlNotConfigured` and `NoContact` *on the frame*,
+and an unadopted or unreachable frame is precisely the one whose screen has to work. **This narrows
+§5.5's ordering clause by two resources; it does not repeal the rule.** Every other brick-capable
+resource keeps its last slot, and the display group keeps every mitigation §5.5 attaches to the
+rule — validate before writing, back up both boot files, boot-count self-repair — spelled out as the
+write discipline at the head of the Guide 3 section. See open question 1 for the decision and for
+the one part of it still outstanding.
+
+**Exception 2 — the brick-capable set is split by *recovery cost*, not by category.**
+`firmware.xvf3800.version` is a DFU flash that can brick the **mic array** — the Pi still boots, the
+frame is still reachable, and recovery is a physical Safe-Mode reflash at the device. The
 boot-partition and EEPROM writes can produce a device nothing remote can reach, which is the specific
 risk §5.5 names. Ordering DFU ahead of the boot writes honours §5.5's intent while resolving a real
 dependency: guide 4 states the mixer levels are validated against firmware 2.0.10, so
@@ -942,15 +1007,43 @@ dependency: guide 4 states the mixer levels are validated against firmware 2.0.1
 
 | # | Phase | Resources (in order) |
 | ---: | --- | --- |
-| 1–3 | **Agent roots** | `agent.version` · `agent.keypair` · `agent.adoption` |
-| 4–20 | **Package set** | `pkg.labwc` · `pkg.chromium` · `pkg.wireplumber` · `pkg.pipewire-alsa` · `pkg.wlr-randr` · `pkg.xdg-desktop-portal` · `pkg.xdg-desktop-portal-gtk` · `pkg.gstreamer1.0-tools` · `pkg.gstreamer1.0-plugins-base` · `pkg.gstreamer1.0-libcamera` · `pkg.gstreamer1.0-pipewire` · `pkg.libspa-0.2-libcamera.absent` · `pkg.dfu-util` · `pkg.git` · `pkg.grim` · `pkg.unattended-upgrades` · `tool.xvf-host.installed` |
-| 21–34 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` |
-| 35–44 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
-| 45–50 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
-| 51 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
-| 52–58 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
-| 59–72 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
-| 73–79 | **Brick-capable, unbootable risk — last** | `identity.hostname` · `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.config.dtoverlay-waveshare-panel` · `boot.cmdline.fbcon-rotate` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+| 1 | **Agent root** | `agent.version` |
+| 2–3 | **Display — §5.5 carve-out, earliest possible slot** | `boot.cmdline.fbcon-rotate` · `boot.config.dtoverlay-waveshare-panel` |
+| 4–5 | **Agent roots — identity and adoption** | `agent.keypair` · `agent.adoption` |
+| 6–22 | **Package set** | `pkg.labwc` · `pkg.chromium` · `pkg.wireplumber` · `pkg.pipewire-alsa` · `pkg.wlr-randr` · `pkg.xdg-desktop-portal` · `pkg.xdg-desktop-portal-gtk` · `pkg.gstreamer1.0-tools` · `pkg.gstreamer1.0-plugins-base` · `pkg.gstreamer1.0-libcamera` · `pkg.gstreamer1.0-pipewire` · `pkg.libspa-0.2-libcamera.absent` · `pkg.dfu-util` · `pkg.git` · `pkg.grim` · `pkg.unattended-upgrades` · `tool.xvf-host.installed` |
+| 23–36 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` |
+| 37–46 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
+| 47–52 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
+| 53 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
+| 54–60 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
+| 61–74 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
+| 75–79 | **Brick-capable, unbootable risk — last** | `identity.hostname` · `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+
+**What moving the display early costs elsewhere.** Three things get worse, and they are worth naming
+rather than smoothing over.
+
+1. **Both boot files now have writers at opposite ends of the order.** `boot.cmdline.fbcon-rotate`
+   runs 2nd and `boot.cmdline.wifi-regdom` 78th, editing the *same single line* of `cmdline.txt`;
+   `boot.config.dtoverlay-waveshare-panel` runs 3rd while `boot.config.camera-auto-detect` and
+   `boot.config.dtoverlay-vc4-kms-v3d-noaudio` run 76th and 77th in `config.txt`. The catalog already
+   asked for one line-aware editor shared by every boot-partition resource; that is now a hard
+   requirement rather than good practice, because the late writer must merge into a file the early
+   writer has already changed and neither may re-serialise from a stale read.
+2. **The display lines are now upstream of every apt operation in the provision.** They land at
+   positions 2–3, while `pkg.*` runs 6–22 and `apt.auto-upgrades-enabled` at 31. `raspi-firmware`,
+   `raspberrypi-sys-mods` and the kernel packages carry postinst hooks that regenerate `config.txt`
+   and `cmdline.txt`, so the display group is exposed to a clobber for the whole remaining provision
+   instead of being written after everything that could rewrite it. Level-triggered convergence
+   handles that correctly — it is drift, and the loop repairs it — but the display resources can
+   therefore reconcile more than once per provision, each repair costing another reboot, and this is
+   the one respect in which the literal §5.5 ordering was genuinely safer. It is the same interaction
+   already listed as suspected-revert item 7, now with a much longer exposure window.
+3. **The riskiest write happens before persistent logging exists.** `journal.storage-persistent` sits
+   at position 28, so the boot-partition writes at 2–3 run while the journal is still volatile and a
+   failed boot takes its own evidence with it. What makes that acceptable is the agent's own progress
+   journal under `/var/lib/fl-agent` ([§2.1](../version2.md)), which is on disk and survives — but for
+   these two resources it is the *only* post-mortem, so it has to be flushed before the reboot rather
+   than at the end of the cycle.
 
 **Reboot cost, stated plainly.** [§2.4](../version2.md) mandates a reboot per resource with no
 exceptions. At 79 resources and roughly 40–60 s per boot-and-verify cycle, a bare-metal provision
@@ -958,6 +1051,17 @@ carries **75–80 minutes of reboot overhead alone**, before apt download time (
 package steps). That is the deliberate cost of the rule, but it is worth having the number: a first
 provision is a one-to-two-hour operation, and the console-stage narration in
 [§2.7](../version2.md) is what makes it legible while it happens.
+
+**The carve-out does not change that total — it changes who can watch it.** The resource count and
+the per-cycle cost are untouched, so 75–80 minutes still stands. What moves is the dark window: under
+the literal §5.5 ordering the panel lit at position 76, so roughly 75 of the 79 cycles — over an hour
+— ran with nothing on screen and §2.7's narration became real only in the last few minutes. Under the
+carve-out the dark window is **three cycles** — `agent.version` plus the two display resources
+themselves, the panel lighting on the overlay's own verifying reboot. That is the floor: nothing can
+be shown before the overlay lands. The one thing the figure still does not include is item 2 above —
+a mid-provision clobber of the boot files adds reboots that were not possible when the display lines
+were written last. Second-order and worth having: **an early brick is cheaper than a late one.** The
+card swap §5.5 falls back on now costs three cycles of work rather than seventy-five.
 
 ---
 
@@ -1006,7 +1110,11 @@ being wrong if Observe reads what was written instead of what is in force after 
    files. Turning on `apt.auto-upgrades-enabled` (guide 12 step 6) points an unattended writer
    straight at the brick-capable resources. This is a **new interaction between two guide steps that
    neither guide mentions**, and it is the most likely source of surprise drift on a long-running
-   fleet.
+   fleet. **Sharpened by the display carve-out:** the two lines that make the screen work are now
+   written at positions 2–3, ahead of the package set and ahead of auto-upgrades being enabled, so
+   they are exposed to both writers for the rest of the provision and for the life of the fleet.
+   A clobber here is not cosmetic drift — it is the frame going dark, and the reconciler notices with
+   no screen left to say so. Treat this as the highest-consequence entry in this list.
 8. **`eeprom.config` — `rpi-eeprom-update.service` is enabled.** An autonomous owner that can flash a
    newer bootloader at boot and change EEPROM configuration with nobody asking.
 
@@ -1053,17 +1161,35 @@ be confirmed rather than assumed, because `machine-id` is the path component of 
 ## Open questions
 
 Genuine ambiguities in the specification. Each carries the reading this catalog adopted; none is
-settled by the guides.
+settled by the guides. Item 1 has since been settled by an operator decision and is kept here with
+its resolution rather than removed, so the reasoning is not re-derived later.
 
 1. **The display overlay is brick-capable but is also the precondition for any visible output.**
+   **— DECIDED 2026-08-15, in favour of [§2.7](../version2.md).**
    [§5.5](../version2.md) schedules brick-capable resources last; [§2.7](../version2.md) requires
    console narration on `/dev/tty1` "from the first second of the first boot" and forbids blank
-   screens. With `boot.config.dtoverlay-waveshare-panel` scheduled 76th, the frame provisions almost
-   entirely with a dark panel and the operator sees nothing until the end.
-   *Reading adopted:* keep the literal §5.5 ordering in the table above and flag the conflict. The
-   recommended resolution is a narrow carve-out — schedule the two display resources first among the
-   boot-partition writes, behind config validation, a backup of both files, and boot-count
-   self-repair — which is a change to §5.5 and therefore an operator decision, not a catalog one.
+   screens. With `boot.config.dtoverlay-waveshare-panel` scheduled 76th, the frame provisioned almost
+   entirely with a dark panel and the operator saw nothing until the end.
+   *Reading previously adopted:* keep the literal §5.5 ordering in the table above and flag the
+   conflict, because changing it is an operator decision rather than a catalog one.
+   *Decided:* the operator took the recommended carve-out. On-screen narration is the product's
+   primary honesty mechanism and is worth nothing if there is no screen; the brick risk was raised
+   explicitly and accepted. Hardware measurement on the stock mule settled it — no DSI connector, no
+   `/dev/fb0`, no backlight device, `vc4-drm: [drm] Cannot find any crtc or sizes`, and writes to
+   `/dev/tty1` that succeed while producing no pixels, so a naive console stage would have reported
+   success while showing nothing. `boot.cmdline.fbcon-rotate` and
+   `boot.config.dtoverlay-waveshare-panel` now sit at positions 2 and 3, depend on `agent.version`
+   alone, run ahead of adoption, and keep validate-before-write, a boot-partition backup of both
+   files, and boot-count self-repair. Every other brick-capable resource keeps its last slot: the
+   ordering clause of §5.5 is narrowed by two resources and none of its mitigations is weakened.
+   Recorded as [decision 46](../version2.md), with §2.7 and §5.5 both pointing at the resolution so
+   the conflict is not re-derived.
+   *Still open, and it is the half the carve-out rests on:* **which boot-count self-repair
+   mechanism.** An agent-written counter on the boot partition only repairs on a subsequent
+   successful boot, which is no help when none happens; the bootloader's `tryboot` one-shot survives
+   a frame that never boots again but has not been tested on this hardware. See the write discipline
+   at the head of the Guide 3 section, and prove one before the first unattended bare-metal
+   provision.
 
 2. **DFU firmware ordering versus the mixer values it validates.** Guide 4 states the volume settings
    are validated against firmware 2.0.10 and that 2.0.6-era firmware exposes the DAC volume path
