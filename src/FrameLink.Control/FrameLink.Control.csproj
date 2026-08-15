@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FrameLink.Control</RootNamespace>
+    <!-- §1.1: the "system" naming register. Binaries, units and routes are `fl-control`. -->
+    <AssemblyName>fl-control</AssemblyName>
+
+    <!--
+      Native AOT is the delivery format (§3.1). Setting this in the project rather than
+      only on the publish command line means the AOT/trim analysers AND the minimal-API
+      request delegate generator run on every ordinary `dotnet build`, so an
+      AOT-incompatible endpoint fails at desk-time instead of at container-build time.
+    -->
+    <PublishAot>true</PublishAot>
+
+    <!-- The slim builder omits the pieces this server does not use; §6.2's static-file
+         trap (MapStaticAssets serving empty 200s) is avoided in ControlApp by using
+         UseStaticFiles instead. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- §7.1 "Everything floats, the build freezes it". Nothing is pinned; the artifact
+       freezes whatever restore resolved. -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\FrameLink.Protocol\FrameLink.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>
