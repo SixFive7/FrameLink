@@ -668,13 +668,13 @@ The resources below are the v2 shape of what guide 9's Compose file configured.
 **`kiosk.listen-address`**
 
 - **From** — [guide 9 step 2](../docs/9-immich-kiosk.md#2-create-the-immich-kiosk-configuration) (`ports: "127.0.0.1:3000:3000"`)
-- **Sets** — the kiosk child listening on `127.0.0.1:3000` and nowhere else.
-- **Observe** — `ss -tlnp` shows a LISTEN socket on `127.0.0.1:3000` owned by the kiosk process, and no `0.0.0.0`/`::` binding.
+- **Sets** — the kiosk child listening on port `3000` and answering on `127.0.0.1`, where `app.config.immich-kiosk-url` sends the browser. **Not the bind address** — see the notes.
+- **Observe** — `ss -tlnp` shows a LISTEN socket on port `3000` owned by the kiosk process, and `http://127.0.0.1:3000/` answers `200`. **The addresses that socket is actually bound to are written into the observation verbatim on every pass, in sync or not**, so a wildcard binding is reported rather than passed over in silence.
 - **Verify** — identical.
 - **dependsOn** — `kiosk.binary.pinned-release`
 - **Value source** — fixed (must agree with `app.config.immich-kiosk-url`).
-- **Risk** — —
-- **Notes** — Loopback-only is a security property, not a convenience: the slideshow must be reachable by the frame's own browser and by nothing on the network.
+- **Risk** — not brick-capable. The slideshow endpoint is reachable from the LAN and this resource cannot change that; the exposure is accepted by [decision 56](../version2.md).
+- **Notes** — **This entry used to say "on `127.0.0.1:3000` and nowhere else", and that is a property the software cannot provide.** Immich Kiosk v0.42.0 starts its server with `Address: fmt.Sprintf(":%v", baseConfig.Kiosk.Port)` and its configuration struct carries a `port` field with no host or bind field at all, so the process binds every interface. The loopback restriction v1 had was **Docker's port publishing performing it from outside the process**, and [decisions 40 and 41](../version2.md) took Docker off the frame. What is inside this resource's reach is the port and the reachability, and both are asserted; the bind is not, and the Act — restart the child with `KIOSK_PORT=3000` — cannot narrow it. Reporting the observed bind set on every pass is what stands in for the assertion it cannot make: a wildcard binding reaches the screen and the Fleet Manager's history as a fact rather than being assumed away. Closing it needs something outside Kiosk — a packet filter, or an upstream bind setting — and [decision 56](../version2.md) chose acceptance over the filter, pending [Appendix B item 6](../version2.md).
 
 **`kiosk.process.supervised`**
 
