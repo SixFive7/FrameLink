@@ -29,6 +29,9 @@ namespace FrameLink.Protocol;
 [JsonSerializable(typeof(HandshakeProof))]
 [JsonSerializable(typeof(HandshakeResult))]
 [JsonSerializable(typeof(AgentRelease))]
+[JsonSerializable(typeof(AgentPing))]
+[JsonSerializable(typeof(AgentPong))]
+[JsonSerializable(typeof(SettingsPush))]
 public sealed partial class ProtocolJson : JsonSerializerContext;
 
 /// <summary>Envelope construction and payload extraction, shared by both programs.</summary>

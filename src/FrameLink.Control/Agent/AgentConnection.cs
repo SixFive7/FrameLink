@@ -168,7 +168,7 @@ public sealed class AgentConnection(
             await SendAsync(
                     ControlWire.KindPing,
                     ping,
-                    ControlJson.Default.AgentPing,
+                    ProtocolJson.Default.AgentPing,
                     ProtocolConstants.ChannelControl,
                     cancellationToken)
                 .ConfigureAwait(false);

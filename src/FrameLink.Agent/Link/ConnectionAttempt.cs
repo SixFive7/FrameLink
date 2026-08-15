@@ -1,4 +1,3 @@
-using System.Text.Json;
 using FrameLink.Agent.Identity;
 using FrameLink.Agent.State;
 using FrameLink.Protocol;
@@ -338,7 +337,7 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                     break;
                 }
 
-                if (string.Equals(envelope.Kind, ControlChannel.KindPing, StringComparison.Ordinal))
+                if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
                 {
                     await PongAsync(transport, envelope, cancellationToken).ConfigureAwait(false);
                     continue;
@@ -378,31 +377,23 @@ public sealed class ConnectionAttempt : IAsyncDisposable
 
     /// <summary>Answers one liveness probe on the channel it arrived on.</summary>
     /// <remarks>
-    /// The sequence is read out of the raw payload rather than through a mirrored record, so a
-    /// server that adds a field to its ping still gets an answer. A ping whose sequence cannot be
-    /// read is still answered — the server's deadline is refreshed by any inbound traffic, and
-    /// staying silent over an unreadable field would drop a working connection.
+    /// Both the kind and the shape of the answer come from <c>FrameLink.Protocol</c>, so the
+    /// question this method used to raise — does the agent's idea of a pong still match the
+    /// server's — is now answered by the compiler rather than by an integration test.
+    /// <see cref="ControlWire.SequenceOf"/> is deliberately lenient about the ping it is
+    /// reading; the reasoning is on that method.
     /// </remarks>
     private static async Task PongAsync(
         IControlTransport transport,
         WireEnvelope ping,
-        CancellationToken cancellationToken)
-    {
-        var sequence =
-            ping.Payload.ValueKind is JsonValueKind.Object
-            && ping.Payload.TryGetProperty(ControlChannel.SequenceProperty, out var value)
-            && value.TryGetInt64(out var parsed)
-                ? parsed
-                : 0;
-
+        CancellationToken cancellationToken) =>
         await transport.SendAsync(
             WireMessage.Encode(
-                ControlChannel.KindPong,
-                new ControlPong { Sequence = sequence },
-                AgentWireJson.Default.ControlPong,
+                ControlWire.KindPong,
+                new AgentPong { Sequence = ControlWire.SequenceOf(ping) },
+                ProtocolJson.Default.AgentPong,
                 ProtocolConstants.ChannelControl),
             cancellationToken).ConfigureAwait(false);
-    }
 
     private static void Publish(AttemptContext context, HandshakeResult verdict, bool connected)
     {

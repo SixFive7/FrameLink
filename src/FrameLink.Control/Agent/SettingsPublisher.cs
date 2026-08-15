@@ -63,7 +63,7 @@ public sealed class SettingsPublisher(
             await connection.SendAsync(
                     ControlWire.KindSettings,
                     push,
-                    ControlJson.Default.SettingsPush,
+                    ProtocolJson.Default.SettingsPush,
                     ProtocolConstants.ChannelControl,
                     cancellationToken)
                 .ConfigureAwait(false);
