@@ -137,7 +137,9 @@ public sealed class AgentHost
         var outbox = new TelemetryOutbox(uplink, store, _log);
         var boot = new KernelBootIdentity(HostTextFileReader.Instance);
 
-        var (countdownFlag, development) = CountdownDuration.ReadFlags(_arguments);
+        // A local debugging switch, not a configuration channel (decision 48). Read once, because
+        // the command line cannot change under a running process.
+        var development = CountdownDuration.IsDevelopmentRun(_arguments);
 
         var loop = new ReconcileLoop(new ReconcileServices
         {
@@ -165,11 +167,13 @@ public sealed class AgentHost
             Log = _log,
             Options = new ReconcileOptions
             {
-                Countdown = CountdownDuration.Resolve(
-                    countdownFlag ?? Environment.GetEnvironmentVariable(CountdownDuration.Variable),
-                    development,
-                    bootFile: null,
-                    fleetValue: Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey)),
+                // Read at each reboot, not here. The settings map is empty until the Fleet
+                // Manager has answered, and decision 48 leaves it as the only configuration
+                // source there is — so resolving once at startup would pin every frame to the
+                // built-in 60 s and quietly discard the operator's setting.
+                CountdownSource = () => CountdownDuration.Resolve(
+                    Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey),
+                    development),
             },
         })
         {

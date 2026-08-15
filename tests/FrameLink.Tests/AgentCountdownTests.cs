@@ -1,3 +1,4 @@
+using System.Reflection;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Stage;
 using FrameLink.Agent.State;
@@ -5,61 +6,132 @@ using FrameLink.Agent.State;
 namespace FrameLink.Tests;
 
 /// <summary>
-/// §2.7 item 4's countdown before the verifying reboot, and decision 25's resolution order.
+/// §2.7 item 4's countdown before the verifying reboot, and decision 48's resolution order.
 /// </summary>
+/// <remarks>
+/// Decision 48 replaced decision 25's chain with <b>per-device override → fleet default →
+/// 60 s</b>, deleting the install flag and the boot-partition file that sat above them. The top
+/// two levels are resolved by the Fleet Manager before a frame ever sees them — that ordering is
+/// asserted where it happens, in <c>ControlSettingsTests</c> — so what is asserted here is the
+/// agent's half: the effective value it was pushed, against the built-in default.
+/// </remarks>
 public sealed class AgentCountdownTests
 {
     [Fact]
-    public void The_built_in_default_is_twenty_five_seconds()
+    public void The_built_in_default_is_sixty_seconds()
     {
-        Assert.Equal(TimeSpan.FromSeconds(25), CountdownDuration.Resolve());
-        Assert.Equal(TimeSpan.FromSeconds(25), CountdownDuration.Default);
+        Assert.Equal(TimeSpan.FromSeconds(60), CountdownDuration.Resolve());
+        Assert.Equal(TimeSpan.FromSeconds(60), CountdownDuration.Default);
     }
 
     [Fact]
-    public void Development_runs_use_zero()
+    public void The_fleet_value_wins_over_the_built_in_default()
     {
-        // Decision 25, verbatim. Not a fast countdown — no countdown, because at 79 resources a
-        // 25 s pause each is half an hour of waiting nobody is watching.
+        // The whole configured chain, from the frame's side. Which of the two configured levels
+        // produced this string is the Fleet Manager's business (§3.4) and deliberately invisible
+        // here: the agent is told one effective value and has nothing to arbitrate.
+        Assert.Equal(TimeSpan.FromSeconds(10), CountdownDuration.Resolve(fleetValue: "10"));
+        Assert.Equal(TimeSpan.Zero, CountdownDuration.Resolve(fleetValue: "0"));
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: null));
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: "   "));
+    }
+
+    [Fact]
+    public void There_is_no_configuration_source_left_outside_the_fleet_manager()
+    {
+        // Decision 48 removed the install flag and, with it, the boot-partition file that existed
+        // only as its local pre-adoption sibling. Asserted as an absence on the type itself,
+        // because the failure this guards against is somebody re-adding a "small" local override
+        // and reintroducing exactly the channel the operator deleted.
+        var members = typeof(CountdownDuration)
+            .GetMembers(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+            .Select(member => member.Name)
+            .ToList();
+
+        Assert.DoesNotContain("Flag", members);
+        Assert.DoesNotContain("Variable", members);
+        Assert.DoesNotContain("BootFileKey", members);
+        Assert.Contains("SettingKey", members);
+    }
+
+    [Fact]
+    public void The_setting_key_is_the_one_the_fleet_manager_gui_offers()
+    {
+        // A key the agent reads but nobody can type is not a setting, and with the flag gone it
+        // would leave the countdown permanently un-configurable. The GUI catalog is the only
+        // place a human ever writes this string.
+        Assert.Equal("repair.countdownSeconds", CountdownDuration.SettingKey);
+
+        var catalog = File.ReadAllText(Path.Combine(
+            GuiFreshnessTests.RepositoryRoot(),
+            "src",
+            "FrameLink.Control",
+            "gui",
+            "src",
+            "lib",
+            "settings-catalog.ts"));
+
+        Assert.Contains($"'{CountdownDuration.SettingKey}'", catalog, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_unadopted_frame_can_only_ever_get_the_built_in_default()
+    {
+        // §3.3: a pending device receives nothing — no configuration at all. Both remaining
+        // levels are Fleet Manager settings, so this is not a case to handle but the shape of the
+        // decision: with no server answer there is nothing above the default.
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: null));
+    }
+
+    [Fact]
+    public void The_development_switch_forces_zero_and_outranks_the_fleet_value()
+    {
+        // Kept deliberately (decision 48). §2.7's "development runs use 0" is otherwise
+        // unreachable, because a mule being provisioned from scratch is unadopted and §3.3 gives
+        // it nothing. An argument to the binary is not a setting: nothing writes it, nothing
+        // persists it, and no operator can push it.
         Assert.Equal(TimeSpan.Zero, CountdownDuration.Resolve(development: true));
-        Assert.Equal(TimeSpan.Zero, CountdownDuration.Resolve(installFlag: "25", development: true));
+        Assert.Equal(TimeSpan.Zero, CountdownDuration.Resolve(fleetValue: "60", development: true));
     }
 
     [Fact]
-    public void The_install_flag_wins_over_the_boot_file_and_over_the_fleet_settings()
+    public void An_unparseable_or_negative_value_falls_back_to_the_default_rather_than_zero()
     {
-        // The reading taken: §2.7's "install-flag/boot file → fleet default → per-device
-        // override" is strongest-first, matching §4.3's identically shaped discovery sentence.
-        // The alternative reading makes the flag useless on an adopted development frame, which
-        // is exactly what a mule is.
-        Assert.Equal(
-            TimeSpan.FromSeconds(3),
-            CountdownDuration.Resolve(installFlag: "3", bootFile: "10", fleetValue: "25"));
-
-        Assert.Equal(
-            TimeSpan.FromSeconds(10),
-            CountdownDuration.Resolve(bootFile: "10", fleetValue: "25"));
-
-        Assert.Equal(
-            TimeSpan.FromSeconds(25),
-            CountdownDuration.Resolve(fleetValue: "25"));
+        // A typo must not silently remove the one pause a person has to read the screen — and it
+        // is now the only way to reach this path, since the fleet setting is the only input.
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: "twenty"));
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: "-5"));
+        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(fleetValue: "999999"));
     }
 
     [Fact]
-    public void An_unparseable_or_negative_value_falls_through_rather_than_becoming_zero()
+    public void The_development_switch_is_read_from_the_command_line()
     {
-        // A typo must not silently remove the one pause a person has to read the screen.
-        Assert.Equal(TimeSpan.FromSeconds(9), CountdownDuration.Resolve(installFlag: "twenty", bootFile: "9"));
-        Assert.Equal(TimeSpan.FromSeconds(9), CountdownDuration.Resolve(installFlag: "-5", bootFile: "9"));
-        Assert.Equal(CountdownDuration.Default, CountdownDuration.Resolve(installFlag: "999999"));
+        Assert.True(CountdownDuration.IsDevelopmentRun(["run", "--development"]));
+        Assert.False(CountdownDuration.IsDevelopmentRun(["run"]));
+        Assert.False(CountdownDuration.IsDevelopmentRun(["run", "--development-mode"]));
     }
 
     [Fact]
-    public void Both_flag_spellings_are_read_from_the_command_line()
+    public void The_countdown_is_read_at_each_reboot_rather_than_once_at_startup()
     {
-        Assert.Equal(("7", false), CountdownDuration.ReadFlags(["run", "--countdown-seconds", "7"]));
-        Assert.Equal(("7", false), CountdownDuration.ReadFlags(["run", "--countdown-seconds=7"]));
-        Assert.Equal((null, true), CountdownDuration.ReadFlags(["run", "--development"]));
+        // The frame's settings arrive after it starts and can change while it runs, and with the
+        // flag gone they are the only source there is. A value captured at construction would
+        // read an empty map and pin every frame to 60 s for the life of the process.
+        var settings = new Dictionary<string, string>(StringComparer.Ordinal);
+        var options = new ReconcileOptions
+        {
+            CountdownSource = () => CountdownDuration.Resolve(
+                settings.GetValueOrDefault(CountdownDuration.SettingKey)),
+        };
+
+        Assert.Equal(CountdownDuration.Default, options.CurrentCountdown());
+
+        settings[CountdownDuration.SettingKey] = "5";
+        Assert.Equal(TimeSpan.FromSeconds(5), options.CurrentCountdown());
+
+        settings[CountdownDuration.SettingKey] = "12";
+        Assert.Equal(TimeSpan.FromSeconds(12), options.CurrentCountdown());
     }
 
     [Fact]
@@ -106,7 +178,7 @@ public sealed class AgentCountdownTests
 
         countdown.SkipNow();
         var skipped = await countdown.RunAsync(
-            TimeSpan.FromSeconds(25),
+            CountdownDuration.Default,
             _ => { },
             TestContext.Current.CancellationToken);
 
@@ -120,7 +192,7 @@ public sealed class AgentCountdownTests
     {
         var resource = new ScriptedResource("spy", "want", "have-not");
         using var harness = new ReconcileHarness(
-            new ReconcileOptions { Countdown = TimeSpan.FromSeconds(25) },
+            new ReconcileOptions { Countdown = CountdownDuration.Default },
             resource);
 
         var frames = new List<string>();

@@ -48,7 +48,27 @@ public sealed record ReconcileOptions
     public TimeSpan BackoffCap { get; init; } = TimeSpan.FromMinutes(30);
 
     /// <summary>How long the pre-reboot countdown runs (§2.7 item 4).</summary>
+    /// <remarks>
+    /// The fixed value, used when <see cref="CountdownSource"/> is not set. Tests set this
+    /// directly; the agent sets the source instead, because on a frame the value moves.
+    /// </remarks>
     public TimeSpan Countdown { get; init; } = CountdownDuration.Default;
+
+    /// <summary>
+    /// The countdown as the Fleet Manager currently has it, read at the moment of each reboot.
+    /// </summary>
+    /// <remarks>
+    /// A delegate rather than a captured value, for the same reason <see cref="Resources.FleetValues"/>
+    /// is one: the only configuration source left in the chain (decision 48) is the Fleet
+    /// Manager, and its settings arrive <i>after</i> the agent has started and can change again
+    /// while it runs. A duration resolved once at construction would read an empty settings map
+    /// every time and pin every frame to <see cref="CountdownDuration.Default"/> for the life of
+    /// the process, which would make the fleet setting dead configuration.
+    /// </remarks>
+    public Func<TimeSpan>? CountdownSource { get; init; }
+
+    /// <summary>The countdown to run right now (§2.7 item 4).</summary>
+    public TimeSpan CurrentCountdown() => CountdownSource is null ? Countdown : CountdownSource();
 
     /// <summary>How long the loop sleeps between passes when nothing needs doing.</summary>
     /// <remarks>
@@ -62,97 +82,91 @@ public sealed record ReconcileOptions
 }
 
 /// <summary>
-/// Resolution of the countdown duration — §2.7 and decision 25.
+/// Resolution of the countdown duration — §2.7, decision 48 (which supersedes decision 25).
 /// </summary>
 /// <remarks>
 /// <para>
-/// §2.7 gives three levels, "most specific winning: install-flag/boot file → fleet default →
-/// per-device override", and decision 25 repeats the same list. Read literally the two halves
-/// disagree, because a per-device override is more specific than a fleet default while an
-/// install flag is more specific than either — so the list cannot be both least-specific-first
-/// and most-specific-wins.
+/// <b>The chain, highest priority first: per-device override → fleet default → 60 s.</b> Both
+/// configured levels are Fleet Manager settings, and both are resolved <i>on the server</i> by
+/// <c>ISettingsStore.ResolveAsync</c>, which overlays a device's overrides onto the fleet
+/// defaults before the values are pushed. So a frame receives one already-effective value, and
+/// what this class resolves is that value against the built-in default.
 /// </para>
 /// <para>
-/// <b>The reading taken here is strongest-first</b>, matching §4.3's identically shaped
-/// sentence about discovery ("in order: an install flag, a boot-partition file, then mDNS"),
-/// where the install flag is unambiguously the strongest. It is also the only reading under
-/// which the flag does its stated job: "development runs use 0" is worthless if a fleet default
-/// of 25 overrides the flag on an adopted development frame, and an adopted development frame
-/// is exactly what a mule is.
+/// <b>The install flag and the boot-partition file are gone.</b> Decision 25 put an install flag
+/// above everything and a boot-partition file beside it; the operator considered that channel
+/// and decided against it. The boot file went with it rather than surviving on its own — it
+/// existed only as the local, pre-adoption sibling of the flag, so keeping it would have
+/// preserved exactly the channel that was just removed. Configuration now has one source, which
+/// is the plain reading of §3.4's "every setting is fleet-managed".
 /// </para>
 /// <para>
-/// So: <b>install flag → boot file → per-device override → fleet default → 25 s</b>.
+/// <b>The consequence, stated rather than hidden.</b> §3.3 gives a pending device nothing at
+/// all, so an unadopted frame can only ever have the built-in 60 s. §2.7's "development runs
+/// use 0" is therefore unreachable through configuration, and
+/// <see cref="DevelopmentFlag"/> is what serves it instead — see its own remarks.
 /// </para>
 /// </remarks>
 public static class CountdownDuration
 {
-    /// <summary>The built-in default of §2.7 item 4.</summary>
-    public static readonly TimeSpan Default = TimeSpan.FromSeconds(25);
+    /// <summary>The built-in default of §2.7 item 4 — 60 s by decision 48.</summary>
+    /// <remarks>
+    /// This is the whole floor of the chain, and on an unadopted frame it is the entire chain
+    /// (§3.3), so it has to be a duration that reads well with nothing else set: long enough for
+    /// somebody who has just walked up to the frame to read what it is about to do.
+    /// </remarks>
+    public static readonly TimeSpan Default = TimeSpan.FromSeconds(60);
 
-    /// <summary>Command-line flag carrying the countdown, in seconds.</summary>
-    public const string Flag = "--countdown-seconds";
-
-    /// <summary>Command-line flag that forces the countdown to zero.</summary>
+    /// <summary>Command-line switch that forces the countdown to zero.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A local debugging switch, not a configuration channel.</b> It is an argument to the
+    /// binary — chosen by whoever starts the process on the machine they are sitting at — so it
+    /// carries none of what made the install flag a configuration channel: nothing writes it,
+    /// nothing persists it, no operator sets it from the Fleet Manager, and it survives no
+    /// restart the person did not perform themselves. That is why removing the flag (decision 48)
+    /// and keeping this are not in tension.
+    /// </para>
+    /// <para>
+    /// It exists because §2.7's "development runs use 0" is otherwise unreachable: both remaining
+    /// levels are Fleet Manager settings and a pending frame receives none of them, so a mule
+    /// being provisioned from scratch would sit through 60 s per resource with nobody watching.
+    /// </para>
+    /// </remarks>
     public const string DevelopmentFlag = "--development";
 
-    /// <summary>Environment variable equivalent of <see cref="Flag"/>.</summary>
-    public const string Variable = "FL_COUNTDOWN_SECONDS";
-
-    /// <summary>Key read from the boot-partition file.</summary>
-    public const string BootFileKey = "countdown-seconds";
-
-    /// <summary>Fleet setting key carrying the same value (§3.4).</summary>
-    public const string SettingKey = "display.countdownSeconds";
+    /// <summary>The fleet setting key carrying the countdown, in seconds (§3.4).</summary>
+    /// <remarks>
+    /// Matches the operator-facing catalog in the Fleet Manager GUI
+    /// (<c>gui/src/lib/settings-catalog.ts</c>), which is the only place a human ever types this
+    /// string. A key the agent reads but nobody can set is not a setting.
+    /// </remarks>
+    public const string SettingKey = "repair.countdownSeconds";
 
     /// <summary>Resolves the duration from the levels above, strongest first.</summary>
-    /// <param name="installFlag">Value from the command line or environment.</param>
-    /// <param name="development">Whether the development flag was passed.</param>
-    /// <param name="bootFile">Value from the boot-partition file.</param>
-    /// <param name="fleetValue">Effective value from the Fleet Manager, override already applied.</param>
-    public static TimeSpan Resolve(
-        string? installFlag = null,
-        bool development = false,
-        string? bootFile = null,
-        string? fleetValue = null)
-    {
-        if (development)
-        {
-            return TimeSpan.Zero;
-        }
+    /// <param name="fleetValue">
+    /// The effective value from the Fleet Manager — the device's override if it has one,
+    /// otherwise the fleet default, resolved server-side; null when the frame is unadopted or
+    /// has never been told.
+    /// </param>
+    /// <param name="development">Whether <see cref="DevelopmentFlag"/> was passed.</param>
+    public static TimeSpan Resolve(string? fleetValue = null, bool development = false) =>
+        development ? TimeSpan.Zero : TryParse(fleetValue) ?? Default;
 
-        return TryParse(installFlag)
-            ?? TryParse(bootFile)
-            ?? TryParse(fleetValue)
-            ?? Default;
-    }
-
-    /// <summary>Reads the flag out of a command line, honouring both spellings.</summary>
-    public static (string? Seconds, bool Development) ReadFlags(IReadOnlyList<string> arguments)
+    /// <summary>Whether <see cref="DevelopmentFlag"/> appears in a command line.</summary>
+    public static bool IsDevelopmentRun(IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        string? seconds = null;
-        var development = false;
-
-        for (var index = 0; index < arguments.Count; index++)
+        foreach (var argument in arguments)
         {
-            var argument = arguments[index];
-
             if (string.Equals(argument, DevelopmentFlag, StringComparison.Ordinal))
             {
-                development = true;
-            }
-            else if (string.Equals(argument, Flag, StringComparison.Ordinal))
-            {
-                seconds = index + 1 < arguments.Count ? arguments[index + 1] : null;
-            }
-            else if (argument.StartsWith(Flag + "=", StringComparison.Ordinal))
-            {
-                seconds = argument[(Flag.Length + 1)..];
+                return true;
             }
         }
 
-        return (seconds, development);
+        return false;
     }
 
     private static TimeSpan? TryParse(string? value)
@@ -162,8 +176,10 @@ public static class CountdownDuration
             return null;
         }
 
-        // Negative and unparseable both fall through to the next level rather than becoming
-        // zero. A typo must not silently remove the one pause a person has to read the screen.
+        // Negative and unparseable both fall through to the built-in default rather than
+        // becoming zero. A typo must not silently remove the one pause a person has to read the
+        // screen — and with the flag gone, a mistyped fleet setting is the only way this can be
+        // reached, so falling through to 60 s is the whole safety net.
         return double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
             && seconds >= 0
             && seconds <= 3600

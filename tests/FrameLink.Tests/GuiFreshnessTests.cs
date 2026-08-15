@@ -187,7 +187,7 @@ public sealed class GuiFreshnessTests
     }
 
     /// <summary>Walks up from the test binary to the directory holding the solution.</summary>
-    private static string RepositoryRoot()
+    internal static string RepositoryRoot()
     {
         var probe = new DirectoryInfo(AppContext.BaseDirectory);
         for (var depth = 0; depth < 10 && probe is not null; depth++, probe = probe.Parent)

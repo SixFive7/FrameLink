@@ -243,4 +243,7 @@ internal sealed class ScriptedResource : IResource
             _observed = "reverted-by-someone-else";
         }
     }
+
+    /// <summary>Puts this resource out of sync from outside the loop — ordinary drift.</summary>
+    public void Drift() => _observed = "drifted-again";
 }

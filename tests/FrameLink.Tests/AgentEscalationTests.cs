@@ -165,6 +165,47 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
+    public async Task A_device_that_is_already_halted_touches_nothing_ordered_ahead_of_the_halted_resource()
+    {
+        // The other half of "Halted for that device", and the half a per-resource check misses:
+        // a halt is inherited from an earlier process, and the walk reaches the halted entry only
+        // after everything ordered before it. Anything drifting there would be observed, acted on
+        // and rebooted for on every boot — §2.4's unbounded reboot loop, wearing the same hardware
+        // under a different resource's name, on a frame an administrator has already been told
+        // about twice.
+        var first = new ScriptedResource("first", "want", "want");
+        var broken = Broken();
+        using var harness = new ReconcileHarness(Options, first, broken) { Telemetry = { Connected = true } };
+
+        await harness.ConvergeAsync();
+        harness.Loop.ResetBudget("broken");
+        Assert.Equal(PassResult.Halted, (await harness.ConvergeAsync()).Result);
+
+        // Now something ordered ahead of the halted resource drifts: a mixer value reset, a
+        // hostname cloud-init put back.
+        first.Drift();
+        var observations = first.Observations;
+        var acts = first.Acts;
+        var crossings = harness.Boundary.Crossings.Count;
+
+        harness.Clock.UtcNow += TimeSpan.FromHours(1);
+        var outcome = await harness.PassAsync();
+
+        Assert.Equal(PassResult.Halted, outcome.Result);
+        Assert.Equal(observations, first.Observations);
+        Assert.Equal(acts, first.Acts);
+        Assert.Equal(crossings, harness.Boundary.Crossings.Count);
+
+        // The drift is real and still there, so nothing above is passing because there was
+        // nothing to do — the loop declined work it could have done.
+        Assert.False((await first.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        // And the pass still says which resource stopped the device, because a halt that reported
+        // nothing would be indistinguishable from a frame that had simply stopped.
+        Assert.Equal(ResourceStatusKind.Halted, ReconcileHarness.StatusOf(outcome, "broken").Kind);
+    }
+
+    [Fact]
     public async Task The_attempt_count_survives_the_reboots_it_is_counting()
     {
         // Without a durable ledger the counter resets on every boot, the budget never exhausts,

@@ -232,6 +232,20 @@ public sealed class ReconcileLoop
 
         await AnnounceBootAsync(cancellationToken).ConfigureAwait(false);
 
+        // Before anything is observed, resumed or acted on. §2.5 rung 4 halts the *device*, so a
+        // halt inherited from an earlier process has to stop this pass at its very first
+        // instruction — a per-resource check inside the walk would let every resource ordered
+        // ahead of the halted one be acted on and rebooted for, on every boot, forever.
+        if (HaltedDevice() is { } halted)
+        {
+            return await FinishAsync(
+                PassResult.Halted,
+                halted.Statuses,
+                null,
+                halted.Detail,
+                cancellationToken).ConfigureAwait(false);
+        }
+
         var resumed = await ResumePendingAsync(cancellationToken).ConfigureAwait(false);
         if (resumed is not null)
         {
@@ -239,6 +253,32 @@ public sealed class ReconcileLoop
         }
 
         return await WalkAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The device-level halt of §2.5 rung 4, as a pass outcome — or null if this device is still
+    /// allowed to reconcile.
+    /// </summary>
+    /// <remarks>
+    /// Every halted resource is reported, not merely the first. An operator deciding whether to
+    /// press <b>retry</b> needs to know how many settings gave up, and clearing one halt while
+    /// another remains would otherwise look like it had done nothing.
+    /// </remarks>
+    private (IReadOnlyList<ResourceStatus> Statuses, string Detail)? HaltedDevice()
+    {
+        List<ResourceStatus>? statuses = null;
+
+        foreach (var entry in _services.Journal.Read().Ledger)
+        {
+            if (entry.Halted)
+            {
+                (statuses ??= []).Add(Terminal(entry.Resource, ResourceStatusKind.Halted, entry));
+            }
+        }
+
+        return statuses is null
+            ? null
+            : (statuses, $"'{string.Join("', '", statuses.Select(status => status.Name))}' has been given up on.");
     }
 
     /// <summary>
@@ -323,8 +363,21 @@ public sealed class ReconcileLoop
         else
         {
             _services.Log.Warn($"{resource.Name}: did not survive the reboot — {observation.Delta}.");
-            await RecordFailureAsync(resource, pending.Attempt, observation.Delta, pending.Change, cancellationToken)
+            var failed = await RecordFailureAsync(resource, pending.Attempt, observation.Delta, pending.Change, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (failed.Kind is ResourceStatusKind.Halted)
+            {
+                // The verify that halted the device is the last thing this pass does. Walking on
+                // would act on whatever is ordered ahead of the halted resource, which is the
+                // resource-level reading §2.5 rung 4 rejects.
+                return await FinishAsync(
+                    PassResult.Halted,
+                    [failed],
+                    null,
+                    $"'{resource.Name}' has been given up on.",
+                    cancellationToken).ConfigureAwait(false);
+            }
         }
 
         return null;
@@ -360,14 +413,6 @@ public sealed class ReconcileLoop
 
                 result = Worst(result, PassResult.Pending);
                 continue;
-            }
-
-            if (entry.Halted)
-            {
-                Record(Terminal(resource.Name, ResourceStatusKind.Halted, entry));
-                result = PassResult.Halted;
-                detail = $"'{resource.Name}' has been given up on.";
-                break;
             }
 
             if (entry.Escalations > 0 && entry.Attempts >= _services.Options.AttemptBudget)
@@ -569,7 +614,7 @@ public sealed class ReconcileLoop
 
         var skipped = await _services.Countdown
             .RunAsync(
-                _services.Options.Countdown,
+                _services.Options.CurrentCountdown(),
                 state => PublishNarration(resource, "reboot", attempt, entry, change, gloss, state),
                 cancellationToken)
             .ConfigureAwait(false);

@@ -196,6 +196,69 @@ public sealed class AgentDisplayPanelTests
     }
 
     [Fact]
+    public async Task A_rotation_that_never_takes_cannot_stop_the_panel_lighting()
+    {
+        // The display is deliberately two resources, and this is what the split buys: a dark
+        // panel and a sideways one are different failures, so the cosmetic one must never be able
+        // to hold the panel back. The dependency runs one way only — rotation depends on the
+        // overlay, never the reverse — so a rotation that escalates forever leaves the overlay
+        // InSync, and a sideways console is a strictly better state than a dark one.
+        using var files = new TemporaryFiles();
+        files.Seed(BootConfigText.ConfigPath, StockConfig);
+        files.Seed(BootConfigText.CmdlinePath, StockCmdline);
+        files.Seed(ConsoleRotationResource.ProcCmdlinePath, StockCmdline);
+
+        var boot = new MutableBootIdentity();
+        var log = new RecordingLog();
+        var guard = Guard(files, boot, log);
+        var display = new SwitchableDisplay();
+        using var harness = new ReconcileHarness(
+            Fast,
+            boot,
+            new DisplayPanelOverlayResource(files.Files, guard, display, log),
+            new ConsoleRotationResource(files.Files, guard, log));
+
+        harness.Boundary.OnBoot = (_, _) =>
+        {
+            // The overlay takes. The rotation never reaches the running kernel — the firmware
+            // ignoring the parameter, which is exactly the failure /proc/cmdline exists to catch.
+            display.Visible = files.Read(BootConfigText.ConfigPath)!
+                .Contains(DisplayPanelOverlayResource.OverlayLine, StringComparison.Ordinal);
+            return Task.CompletedTask;
+        };
+
+        var outcome = await harness.ConvergeAsync();
+        var overlay = ReconcileHarness.StatusOf(outcome, DisplayPanelOverlayResource.ResourceName);
+        var rotation = ReconcileHarness.StatusOf(outcome, ConsoleRotationResource.ResourceName);
+
+        Assert.Equal(ResourceStatusKind.InSync, overlay.Kind);
+        Assert.Contains(DisplayPanelOverlayResource.OverlayLine, files.Read(BootConfigText.ConfigPath)!, StringComparison.Ordinal);
+
+        // The rotation gave up on its own account, and never as Blocked — nothing it depends on
+        // is broken.
+        Assert.NotEqual(ResourceStatusKind.Blocked, rotation.Kind);
+        Assert.NotEqual(ResourceStatusKind.InSync, rotation.Kind);
+        Assert.Null(rotation.BlockedBy);
+    }
+
+    [Fact]
+    public void The_dependency_between_the_two_display_resources_runs_one_way_only()
+    {
+        // Stated as a property of the resources rather than of one scenario: the overlay depends
+        // on nothing at all, so there is no state of the rotation — drifted, degraded, halted —
+        // that can put the panel into Blocked.
+        using var files = new TemporaryFiles();
+        var guard = Guard(files, new MutableBootIdentity(), new RecordingLog());
+
+        IResource overlay = new DisplayPanelOverlayResource(files.Files, guard, new SwitchableDisplay(), new RecordingLog());
+        IResource rotation = new ConsoleRotationResource(files.Files, guard, new RecordingLog());
+
+        Assert.Empty(overlay.DependsOn);
+        Assert.Equal([DisplayPanelOverlayResource.ResourceName], rotation.DependsOn);
+        Assert.NotEqual(overlay.Name, rotation.Name);
+    }
+
+    [Fact]
     public void A_command_line_edit_that_would_lose_root_is_refused()
     {
         // §5.5's "validate before writing", applied to the parameter without which the machine
