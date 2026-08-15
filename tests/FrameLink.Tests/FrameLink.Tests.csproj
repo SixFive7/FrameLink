@@ -6,7 +6,8 @@
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
     <!--
-      Run the suite with `dotnet run --project tests/FrameLink.Tests`, not `dotnet test`.
+      Run the suite by executing this project directly (`dotnet run` pointed at
+      tests/FrameLink.Tests), not with `dotnet test`.
 
       xunit v3 test projects are executables whose entry point IS the runner, so `dotnet run`
       is the documented path and it reports proper exit codes (0 pass, non-zero fail). As of
@@ -40,6 +41,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\FrameLink.Protocol\FrameLink.Protocol.csproj" />
+    <ProjectReference Include="..\..\src\FrameLink.Control\FrameLink.Control.csproj" />
+    <ProjectReference Include="..\..\src\FrameLink.Agent\FrameLink.Agent.csproj" />
   </ItemGroup>
 
 </Project>

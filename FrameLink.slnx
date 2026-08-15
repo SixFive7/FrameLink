@@ -1,6 +1,8 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/FrameLink.Protocol/FrameLink.Protocol.csproj" />
+    <Project Path="src/FrameLink.Agent/FrameLink.Agent.csproj" />
+    <Project Path="src/FrameLink.Control/FrameLink.Control.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/FrameLink.Tests/FrameLink.Tests.csproj" />
