@@ -594,6 +594,18 @@ E2E testing begins.
 - **Fleet Manager credential management and single sign-on** (multi-user, roles, SSO).
 - **On-device Wi-Fi configuration** (rescue hotspot or setup screen) for households that change
   routers. ⚠ Until then, a router or password change strands a frame until someone is on site.
+- **Platform independence across the whole product** — software, operator tooling and guides.
+  Nothing *shipped* is Windows-bound: the agent is a Linux ELF, the Fleet Manager a Linux
+  container, both built inside Linux containers. The gap is the operator's workstation.
+  [Guide 2](docs/2-sd-flash-first-boot.md) is built around thirteen Raspberry Pi Imager captures
+  with Windows title bars, one showing the card `Mounted as F:\` — the tool is cross-platform,
+  the screenshots are not, and re-shooting them is the expensive part — and guides
+  [7](docs/7-livekit-server.md) and [8](docs/8-webrtc-validation.md) install the LiveKit CLI with
+  the same `winget` line, the only Windows-only command in any guide. The harness under
+  `tools/harness/` is already portable and no operator runs it, so it is the smallest part of
+  this. **SD image generation** above (decision 32) may deliver most of the rest on its own: hand
+  someone a ready-to-flash file and their workstation's OS stops mattering. ⚠ Until then, a
+  household with no Windows machine has no supported path through the guides.
 
 **Guide fate at parity:** after deep, triple-checked verification the guides shrink to hardware
 assembly, Raspberry Pi OS install, agent install, and Fleet Manager container setup. Everything
