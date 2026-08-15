@@ -918,7 +918,7 @@ public sealed class ReconcileLoop
         var notified = await EmitAsync(
             DeviceEventKinds.Escalation,
             resource.Name,
-            $"{resource.Detected} It has been tried {attempt} times and is still wrong.",
+            EscalationSummary(resource, attempt, change),
             delta,
             attempt,
             cancellationToken).ConfigureAwait(false);
@@ -966,6 +966,39 @@ public sealed class ReconcileLoop
     }
 
     /// <summary>
+    /// The escalation notification's one sentence — the symptom <b>and</b> the cause (§2.5).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The cause is the half that decides what the operator does.</b> Rung 3 offers exactly two
+    /// actions, <i>retry</i> and <i>open a remote shell</i>, and which one is right turns on
+    /// something the symptom cannot express. "labwc is missing" is equally true when the Debian
+    /// archive could not be reached — where retrying is the entire fix — and when the package name
+    /// is wrong, where retrying forever is the wrong answer and somebody has to look. A
+    /// notification carrying only <see cref="ResourceObservation.Delta"/> cannot tell them apart,
+    /// so it asks for a decision while withholding what the decision depends on.
+    /// </para>
+    /// <para>
+    /// The resource's own <see cref="ResourceAction.Change"/> already draws that distinction
+    /// verbatim — it is where a refused Act records what it tried and why it was refused — and
+    /// before this it reached the device row in the GUI and stopped there, which is the one place
+    /// an operator reading an alert on their phone is not.
+    /// </para>
+    /// <para>
+    /// It travels in <see cref="DeviceEvent.Summary"/> rather than in a field of its own because
+    /// <see cref="DeviceEvent"/> is frozen, and because the summary is the part a notification is
+    /// guaranteed to carry: §2.5's channel is Home Assistant or SMTP, neither of which renders a
+    /// record. Both escalation emissions share this method so the two spellings cannot drift —
+    /// <see cref="RefreshEscalationAsync"/> rebuilds the same event for a frame that gave up while
+    /// its server was unreachable, and that frame's operator needs the cause just as much.
+    /// </para>
+    /// </remarks>
+    private static string EscalationSummary(IResource resource, int attempts, string? change) =>
+        string.IsNullOrWhiteSpace(change)
+            ? $"{resource.Detected} It has been tried {attempts} times and is still wrong."
+            : $"{resource.Detected} It has been tried {attempts} times and is still wrong. The last attempt was: {change}";
+
+    /// <summary>
     /// Re-offers an escalation the Fleet Manager never received.
     /// </summary>
     /// <remarks>
@@ -986,7 +1019,7 @@ public sealed class ReconcileLoop
             notified = await EmitAsync(
                 DeviceEventKinds.Escalation,
                 resource.Name,
-                $"{resource.Detected} It has been tried {entry.Attempts} times and is still wrong.",
+                EscalationSummary(resource, entry.Attempts, entry.Change),
                 entry.Delta,
                 entry.Attempts,
                 cancellationToken).ConfigureAwait(false);

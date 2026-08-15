@@ -37,11 +37,36 @@ verification is only meaningful after a runtime event (a call, a touch, a button
 field says so explicitly and names what makes it different.
 
 **Format.** One block per resource. `dependsOn` lists resource ids that must be `InSync` first;
-`—` means it depends only on the agent roots. Two resources — the display group under Guide 3 —
-name `agent.version` explicitly and nothing else, which is *fewer* dependencies than `—` denotes
-and is deliberate; see the carve-out at the head of that section. Value source is either *fixed by
-the catalog* or a named Fleet Manager setting per [§3.4](../version2.md) (every setting is a fleet
-default with a per-device override).
+**`—` means `agent.version` and nothing else**, and on `agent.version` itself it means nothing
+precedes it at all. Value source is either *fixed by the catalog* or a named Fleet Manager setting
+per [§3.4](../version2.md) (every setting is a fleet default with a per-device override).
+
+**`—` does not imply an adoption edge.** The rule for when one is required, stated once and applied
+to every entry below: a resource declares `agent.adoption` **when its desired value is issued by the
+Fleet Manager and the catalog holds no default that is correct without it** — the frame would
+otherwise have to guess. A resource whose value is *fixed by the catalog* never declares it, and
+neither does one whose fleet setting has a catalog default that is right on an unadopted frame: it
+applies the default now, and a later fleet override is ordinary drift that reconciles like any other
+change. The test is not "is there a fleet setting" but "**would this resource have to guess**".
+`boot.cmdline.fbcon-rotate` is the worked example and states the mechanism in full.
+
+**Why the definition had to be narrowed.** `—` previously read as "depends only on the agent roots",
+which was understood to include `agent.adoption`, and the literal consequence was that
+`pkg.chromium` and `pkg.labwc` were gated on adoption. [§2.7](../version2.md)'s **browser stage**
+needs exactly those two packages to render the repair screen that a **pending, unadopted** frame is
+required to be showing — including the short fingerprint and hardware serial
+[§3.3](../version2.md) wants so the operator can tell which row is which frame on the bench. The
+literal reading therefore withheld the product's primary honesty mechanism precisely when it is most
+needed. What §3.3 actually withholds from a pending device is **configuration** — no settings, no
+token, no commands — and a catalog-fixed package set is none of those: it is identical on every
+frame and contains nothing an operator chose. The package block is implemented with **zero** edges
+on exactly this reasoning; the definition above is the catalog agreeing with the code rather than
+the other way round.
+
+The display group under Guide 3 and `app.http.local-origin` spell `agent.version` out instead of
+writing `—`. Under this definition that is the same thing, and it is kept rather than collapsed
+because their whole point is running ahead of adoption; see the carve-out at the head of that
+section.
 
 **Counts.** 71 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
 are listed in their own section. Total **79**.
@@ -123,7 +148,7 @@ attached to them:
 - **Observe** — `grep -o 'fbcon=rotate:[0-9]*' /boot/firmware/cmdline.txt` **and** `grep -o 'fbcon=rotate:[0-9]*' /proc/cmdline`.
 - **Verify** — identical. Both halves are deliberate: the file is the desired state, `/proc/cmdline` proves the bootloader actually handed it to the kernel. [§2.4](../version2.md) records the governor case where `/proc/cmdline` agreed and the effect still did not land, so `/proc/cmdline` alone is not sufficient evidence either — it is necessary, not sufficient.
 - **dependsOn** — `agent.version`
-- **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy). Applied from the catalog default when no fleet value has been issued, which is the normal case at position 2 — the frame is not adopted yet. A later fleet override is ordinary drift and reconciles like any other.
+- **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy). Applied from the catalog default when no fleet value has been issued, which is the normal case at position 2 — the frame is not adopted yet. A later fleet override is ordinary drift and reconciles like any other. This is the worked example the `dependsOn` rule at the head of this document points at: a fleet setting with a catalog default that is correct before adoption declares no adoption edge.
 - **Risk** — **brick-capable** (`cmdline.txt`; a malformed single line is unbootable). The riskier of the two display writes and the one the write discipline above exists for: `config.txt` tolerates an unknown overlay line, a broken `cmdline.txt` does not boot.
 - **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL`, which is its own resource (`boot.cmdline.wifi-regdom`), and `ds=nocloud;i=rpi-imager-…`, which is **not** owned by any resource: it is Raspberry Pi Imager's datasource pin, present because the v1 card was Imager-flashed and absent on the raw-flashed mule. No resource writes it, and it is worth leaving alone rather than normalising, because it is the one piece of evidence distinguishing an Imager-provisioned card from a raw-written one — see the hypothesis under `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 78, so one line-aware editor must serve both ends of the order.
 
@@ -168,7 +193,7 @@ attached to them:
 
 - **From** — [guide 4 step 2](../docs/4-audio-configuration.md#2-install-and-verify-the-xvf3800-host-control-tool); re-installed in [guide 10 step 1](../docs/10-spa.md#1-clone-the-framelink-app-onto-the-pi) (same resource, not counted twice).
 - **Sets** — apt package `git` installed.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' git`.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' git`.
 - **Verify** — identical.
 - **dependsOn** — —
 - **Value source** — fixed.
@@ -190,7 +215,7 @@ attached to them:
 
 - **From** — [guide 4 step 3](../docs/4-audio-configuration.md#3-pin-the-array-firmware-to-v2-0-10)
 - **Sets** — apt package `dfu-util` installed.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' dfu-util`.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' dfu-util`.
 - **Verify** — identical.
 - **dependsOn** — —
 - **Value source** — fixed.
@@ -225,7 +250,7 @@ attached to them:
 - **Observe** — `amixer -c 0 sget PCM,0` → `Front Left`/`Front Right: Playback 60 [100%] [0.00dB]`.
 - **Verify** — identical. Guide 4 step 6 *is* this Verify, run after a reboot.
 - **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `firmware.xvf3800.version`, `audio.mixer.pcm0-playback-switch`
-- **Value source** — fleet setting `audio.playbackVolume` ([§3.4](../version2.md) names audio volume explicitly). Do not permit values above 0 dB anywhere in the chain.
+- **Value source** — fleet setting `audio.playbackVolume` ([§3.4](../version2.md) names audio volume explicitly), catalog default `60` = 0.00 dB. Do not permit values above 0 dB anywhere in the chain. The default is correct on an unadopted frame, so this resource does **not** declare `agent.adoption` — a fleet override arriving later is ordinary drift, per the `dependsOn` rule at the head of this document. Its two siblings below read the same way.
 - **Risk** — —
 - **Notes** — See the WirePlumber revert warning under `audio.alsa.stored-state`.
 
@@ -298,7 +323,7 @@ attached to them:
 - **Risk** — —
 - **Notes** — Assert-only in practice; there is no Act beyond ensuring `rpi-swap` is installed and the generator's config is untouched. Distinct from `swap.no-file-backed`, which is the negative assertion with a real Act.
 
-**`pkg.labwc`** · **`pkg.chromium`** · **`pkg.pipewire-alsa`** · **`pkg.wireplumber`** · **`pkg.wlr-randr`**
+**`pkg.labwc`** · **`pkg.chromium`** · **`pkg.wireplumber`** · **`pkg.pipewire-alsa`** · **`pkg.wlr-randr`**
 
 - **From** — [guide 5 step 2](../docs/5-kiosk-base.md#2-install-the-kiosk-packages) (five resources, one per package)
 - **Sets** — each apt package installed.
@@ -307,7 +332,7 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fixed. Versions float and are frozen by the build per [§7.1](../version2.md); the catalog pins the *presence*, not the version.
 - **Risk** — —
-- **Notes** — One package = one resource is explicit in [§2.2](../version2.md). ~215 dependencies, ~256 MB download, ~750 MB on disk; apt resolves the transitive set, which is not enumerated here. On Trixie the browser package is `chromium`, not `chromium-browser`, and the binary is `/usr/bin/chromium`. `pkg.chromium` also drags in `rpi-chromium-mods`, which injects flags from `/etc/chromium.d/` — relevant to `unit.chromium-kiosk.running-matches-content`.
+- **Notes** — **The `dpkg-query` format string above is the one every package resource in this document uses**, `pkg.` and `pkg.*.absent` alike. It carries `${Version}` because the version costs nothing to read and a delta that names it is worth more; nothing compares it, which is §7.1 and the presence-not-version rule immediately above. The catalog previously gave two spellings, with and without `${Version}`, and left an implementer to pick — they are now one. One package = one resource is explicit in [§2.2](../version2.md). ~215 dependencies, ~256 MB download, ~750 MB on disk; apt resolves the transitive set, which is not enumerated here. On Trixie the browser package is `chromium`, not `chromium-browser`, and the binary is `/usr/bin/chromium`. `pkg.chromium` also drags in `rpi-chromium-mods`, which injects flags from `/etc/chromium.d/` — relevant to `unit.chromium-kiosk.running-matches-content`. The order above is the dependency ordering's, which is the order the reconciler converges them in; guide 5's own single `apt install` line names them `labwc chromium pipewire-alsa wireplumber wlr-randr`, and the two do not have to agree because apt installs its five arguments as one transaction while the reconciler applies five resources one reboot at a time. The heading used to carry the guide's order and the ordering table the reconciler's, which read as a contradiction rather than as two different things.
 
 **`boot.autologin.getty-tty1`**
 
@@ -316,7 +341,7 @@ attached to them:
 - **Observe** — `cat /etc/systemd/system/getty@tty1.service.d/autologin.conf` **and** `systemctl show getty@tty1.service -p ExecStart` **and** `who` showing `framelink` on `tty1`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fleet setting `device.user` (the username; `framelink` in the running example).
+- **Value source** — fleet setting `device.user` (the username; `framelink` in the running example), defaulting to the account the image was flashed with, which the frame can read off itself. **It therefore does not gate on adoption**, and that is load-bearing rather than a technicality: this file is the root of the whole user-unit layer, so an adoption edge here would block the session, labwc and the browser — and [§2.7](../version2.md)'s browser stage would then be unavailable to exactly the pending frame that is supposed to be rendering its own fingerprint on it.
 - **Risk** — not brick-capable, but a wrong username means no user session, and every user unit below is then `Blocked`.
 - **Notes** — Written by `raspi-config nonint do_boot_behaviour B2`, which is a **competing owner**: any later `raspi-config` boot-behaviour call rewrites or removes this file. The empty first `ExecStart=` is required by systemd to clear the inherited value; a drop-in missing that line does not override. **The whole user-unit layer hangs off this one file** — there is no `loginctl enable-linger` anywhere in the v1 build (see open question 6).
 
@@ -404,7 +429,7 @@ attached to them:
 
 - **From** — [guide 6 step 1](../docs/6-camera.md#1-install-the-camera-packages) (six resources, one per package)
 - **Sets** — each apt package installed.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' <pkg>`.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' <pkg>`.
 - **Verify** — identical.
 - **dependsOn** — —
 - **Value source** — fixed.
@@ -415,12 +440,13 @@ attached to them:
 
 - **From** — [guide 6 step 1](../docs/6-camera.md#1-install-the-camera-packages) ("just as important is what is *not* installed") and [step 4](../docs/6-camera.md#4-route-the-camera-through-a-dedicated-pipewire-node)
 - **Sets** — apt package `libspa-0.2-libcamera` **not installed**.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' libspa-0.2-libcamera` → absent/not-installed.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' libspa-0.2-libcamera` → absent/not-installed.
 - **Verify** — identical.
 - **dependsOn** — —
 - **Value source** — fixed.
 - **Risk** — —
 - **Notes** — Confirmed absent in the v1 reference (the inventory carries `libspa-0.2-modules`, which is a different package). The measured failure it causes: a camera node hard-capped near 30 fps that advertises no framerates, rejects sizes outside its own menu, and that Chromium cannot acquire above 720p. Absence is a real, actionable, independently verifiable state — hence a resource, not a note. `wireplumber.conf.camera-monitors-disabled` is the belt to this braces, for the case where a future dependency drags the plugin back in.
+  **Its slot in the package block is decided rather than incidental: 12th, immediately after the camera chain, not last.** The question is real — an install ordered *after* this one that pulled the plugin back in would leave the block converging on a state it had already asserted, and the repair would cost an extra reboot. It is decided on what actually follows it. The three installs after it are `dfu-util` (libusb), `grim` (wayland, pixman) and `unattended-upgrades` (python3-apt); none of them can pull a PipeWire SPA plugin, so the claim "after everything in this block that might drag it in" holds as the block stands. Against that, keeping it beside the camera chain it exists for is worth something to a reader, and if Debian ever re-cuts a dependency so that one of those three *can* pull it in, the result is ordinary drift and level-triggered convergence repairs it — for the price of one reboot, through the same mechanism the whole design already leans on rather than through a special case. Moving it last was the alternative and would have been free; it was declined because the exposure it removes does not exist today and the grouping it breaks is read by every person who opens this section. This is also the order the implementation declares.
 
 **`unit.xdg-desktop-portal.dropin-desktop`**
 
@@ -536,7 +562,7 @@ API secret, room, per-frame token) survive as fleet settings consumed by `app.co
 
 - **From** — [guide 8 step 7](../docs/8-webrtc-validation.md#7-run-the-four-hour-soak-test) (offered as optional there); promoted to required by [§3.6](../version2.md), which allowlists **screenshot** as one of exactly two remote diagnostics
 - **Sets** — apt package `grim` installed.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' grim`.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' grim`.
 - **Verify** — identical.
 - **dependsOn** — —
 - **Value source** — fixed.
@@ -579,9 +605,10 @@ The resources below are the v2 shape of what guide 9's Compose file configured.
 - **Sets** — the Immich server URL passed to the kiosk child process.
 - **Observe** — the agent's persisted desired-value store under `/var/lib/fl-agent`, cross-checked against the running child's `/proc/<pid>/environ`.
 - **Verify** — identical.
-- **dependsOn** — `kiosk.binary.pinned-release`
+- **dependsOn** — `kiosk.binary.pinned-release`, `agent.adoption`
 - **Value source** — fleet setting `immich.serverUrl` (collected at Fleet Manager first run, [§3.2](../version2.md)).
 - **Risk** — —
+- **Notes** — Adoption is declared because there is no catalog default and none is possible: the address of somebody's photo server is not a value this document can hold, so an unadopted frame would have to guess. That is the `dependsOn` rule at the head of this document doing its work — the `pkg.*` block above needs nothing from the Fleet Manager and declares nothing, while this one cannot be applied at all until the frame has been adopted.
 
 **`kiosk.config.immich-api-key`**
 
@@ -589,10 +616,10 @@ The resources below are the v2 shape of what guide 9's Compose file configured.
 - **Sets** — the Immich read-only API key passed to the kiosk child process.
 - **Observe** — presence and fingerprint (never the value) in the agent's root-only store; liveness confirmed by the kiosk answering `200` rather than `401`/`403`.
 - **Verify** — identical.
-- **dependsOn** — `kiosk.binary.pinned-release`
+- **dependsOn** — `kiosk.binary.pinned-release`, `agent.adoption`
 - **Value source** — fleet setting `immich.apiKey`. **Secret** — root-only file per [§2.9](../version2.md), never in logs, never in telemetry.
 - **Risk** — —
-- **Notes** — Its own resource because a wrong key and a wrong URL produce the *same* visible symptom (no photos) with different fixes — the textbook case for the granularity rule.
+- **Notes** — Its own resource because a wrong key and a wrong URL produce the *same* visible symptom (no photos) with different fixes — the textbook case for the granularity rule. Adoption is declared for the same reason as the URL above, and here it is also what [§3.3](../version2.md) means literally: a pending device receives no token, and this is one.
 
 **`kiosk.config.offline-mode-enabled`**
 
@@ -781,12 +808,12 @@ itself and the group membership that reaches it.
 
 - **From** — [guide 12 step 6](../docs/12-systemd-and-reliability.md#6-turn-on-unattended-security-updates)
 - **Sets** — apt package `unattended-upgrades` installed.
-- **Observe** — `dpkg-query -W -f='${db:Status-Status}\n' unattended-upgrades`.
+- **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' unattended-upgrades`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed; on/off is a fleet setting per [Appendix B item 4](../version2.md).
+- **Value source** — **fixed: this package is installed on every frame, always.** The on/off fleet setting that [Appendix B item 4](../version2.md) calls for is `updates.osSecurityAuto`, and it is attached to `apt.auto-upgrades-enabled`, not to this resource.
 - **Risk** — —
-- **Notes** — **Not present in the v1 reference.** Guide 12 step 6 was never applied to the frame that defines parity, so this resource has no v1 counterpart to diff against. See open question 9.
+- **Notes** — **Turning the feature off therefore leaves the package installed with the two `APT::Periodic` switches at `0`.** That is the intended shape and it is stated here because it was previously only implicit: the package is inert with the switches off, `unattended-upgrades` is a dependency of nothing else the frame needs, and making the *package* the on/off resource would mean a purge-and-reinstall cycle every time an operator toggled the setting — an apt transaction, and under [§2.4](../version2.md) a reboot, to change two characters in a config file. It also keeps one diagnosis per resource: "the machinery is missing" and "the machinery is switched off" are different faults with different fixes, and the second is the one an operator chose. **Not present in the v1 reference.** Guide 12 step 6 was never applied to the frame that defines parity, so this resource has no v1 counterpart to diff against. See open question 9.
 
 **`apt.auto-upgrades-enabled`**
 
@@ -924,10 +951,10 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 - **Sets** — the 802.11 regulatory domain kernel parameter in `/boot/firmware/cmdline.txt`.
 - **Observe** — `grep -o 'cfg80211.ieee80211_regdom=[A-Z]*' /boot/firmware/cmdline.txt` **and** `/proc/cmdline`; `iw reg get`.
 - **Verify** — identical.
-- **dependsOn** — —
-- **Value source** — fleet setting `locale.wifiCountry`.
+- **dependsOn** — `agent.adoption`
+- **Value source** — fleet setting `locale.wifiCountry`. No catalog default: a regulatory domain is a property of the country the frame is standing in, `NL` is the operator's own and not a universal, and the only value that would be safe everywhere (`00`) is the most restrictive one rather than a correct one.
 - **Risk** — **brick-capable** (`cmdline.txt`).
-- **Notes** — Low operational importance on a wired frame, high parity importance: it is part of the single `cmdline.txt` line that `boot.cmdline.fbcon-rotate` also edits, so both resources write the same file and must not fight. Any `cmdline.txt` writer must be a single line-aware editor, not two independent appenders.
+- **Notes** — Low operational importance on a wired frame, high parity importance: it is part of the single `cmdline.txt` line that `boot.cmdline.fbcon-rotate` also edits, so both resources write the same file and must not fight. Any `cmdline.txt` writer must be a single line-aware editor, not two independent appenders. **The adoption edge is new**, and it is the `locale.*` family being made consistent: `system.timezone` and `system.locale` both declare it, this is the third member and the only one with legal consequences. It costs nothing in the ordering — adoption is position 5 and this resource is 78th — and the two writers of that one line are unaffected, since the early one is the display carve-out and needs no fleet value at all.
 
 **`eeprom.config`**
 

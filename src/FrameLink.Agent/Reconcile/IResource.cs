@@ -226,9 +226,26 @@ public interface IResource
     /// Ids that must be <see cref="ResourceStatusKind.InSync"/> before this is attempted (§2.2).
     /// </summary>
     /// <remarks>
-    /// Empty means the resource depends only on the agent roots. Dependents of a resource that
-    /// is not in sync are marked <see cref="ResourceStatusKind.Blocked"/> rather than being let
-    /// loose to fail confusingly on their own.
+    /// <para>
+    /// Empty is the catalog's <c>—</c>: the agent-version root and nothing else. It does
+    /// <b>not</b> imply adoption. A resource names <c>agent.adoption</c> when its desired value is
+    /// issued by the Fleet Manager and the catalog holds no default that is correct without it —
+    /// when the frame would otherwise have to guess. A value the catalog fixes never names it, and
+    /// neither does a fleet setting whose catalog default is right on an unadopted frame: it
+    /// applies the default, and a later override is ordinary drift.
+    /// </para>
+    /// <para>
+    /// The distinction is not pedantry. Read the other way it gates the package set on adoption,
+    /// and §2.7's browser stage needs <c>chromium</c> and <c>labwc</c> to render the repair screen
+    /// that a <i>pending</i> frame is required to be showing — fingerprint and serial included, so
+    /// §3.3's operator can match a row to a frame on the bench. §3.3 withholds configuration from a
+    /// pending device; a package set the catalog fixes is not configuration.
+    /// </para>
+    /// <para>
+    /// Dependents of a resource that is not in sync are marked
+    /// <see cref="ResourceStatusKind.Blocked"/> rather than being let loose to fail confusingly on
+    /// their own.
+    /// </para>
     /// </remarks>
     IReadOnlyList<string> DependsOn => [];
 

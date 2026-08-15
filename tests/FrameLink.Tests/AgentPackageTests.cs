@@ -471,6 +471,28 @@ public sealed class AgentPackageTests
     }
 
     [Fact]
+    public async Task The_notification_names_the_archive_and_not_only_the_missing_package()
+    {
+        // The device row above is not what reaches a person. §2.5 rung 3 is a Home Assistant or
+        // SMTP notification offering retry or a remote shell, and it is built from the escalation
+        // event — which said "labwc is missing" for an unreachable archive and for a package name
+        // the catalog got wrong alike, while those two want opposite answers.
+        var debian = FakeDebian.StockImage();
+        debian.ArchiveReachable = false;
+
+        using var harness = new ReconcileHarness(Fast, Resource(debian, "labwc"));
+        harness.Telemetry.Connected = true;
+
+        await harness.ConvergeAsync();
+        var escalation = harness.Telemetry.OfKind(DeviceEventKinds.Escalation).First();
+
+        // Symptom and cause, in that order, in the one sentence the notification carries.
+        Assert.Contains("is missing", escalation.Summary, StringComparison.Ordinal);
+        Assert.Contains("the package archive could not be reached", escalation.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("does not offer this package", escalation.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_transient_outage_is_repaired_by_the_retry_rather_than_by_a_person()
     {
         // §2.5's exponential backoff is the mechanism a network blip is supposed to survive, and

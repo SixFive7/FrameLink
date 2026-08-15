@@ -126,6 +126,49 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
+    public async Task The_escalation_event_carries_the_cause_and_not_only_the_symptom()
+    {
+        // §2.5 rung 3 offers the operator exactly two actions — retry, or open a remote shell —
+        // and which one is right turns on why the resource failed, not on what is wrong with it.
+        // "labwc is missing" is equally true of an unreachable archive, where retrying is the
+        // whole fix, and of a package name the catalog got wrong, where retrying is the wrong
+        // answer forever. The reason lives in the action the resource returned, so an event built
+        // from the summary and delta alone asks for a decision while withholding what it turns on.
+        var resource = Broken();
+        using var harness = new ReconcileHarness(Options, resource) { Telemetry = { Connected = true } };
+
+        await harness.ConvergeAsync();
+        var escalation = harness.Telemetry.OfKind(DeviceEventKinds.Escalation).First();
+
+        Assert.Contains(resource.Detected, escalation.Summary, StringComparison.Ordinal);
+        Assert.Contains("set broken to want", escalation.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_frame_that_gave_up_while_offline_names_the_cause_too()
+    {
+        // The escalation event is built on two paths: the one that gives up, and the one that
+        // re-offers it when a frame that gave up with no server reachable gets its server back.
+        // An operator reading the second one needs the cause exactly as much as the first.
+        var resource = Broken();
+        using var harness = new ReconcileHarness(Options, resource);
+        harness.Telemetry.Connected = false;
+
+        await harness.ConvergeAsync();
+
+        harness.Telemetry.Connected = true;
+        harness.Clock.UtcNow += TimeSpan.FromMinutes(10);
+        await harness.PassAsync();
+
+        var escalations = harness.Telemetry.OfKind(DeviceEventKinds.Escalation).ToList();
+
+        Assert.True(escalations.Count >= 2, $"expected both paths to have emitted, saw {escalations.Count}");
+        Assert.All(
+            escalations,
+            escalation => Assert.Contains("set broken to want", escalation.Summary, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_second_exhaustion_after_the_operator_retries_halts_the_device()
     {
         // §2.5 rung 4. Halted is only reachable through rung 3's retry, and that is deliberate:
