@@ -150,15 +150,17 @@ public sealed class Supervisor
 
     /// <summary>The resources a camera recycle transiently disturbs.</summary>
     /// <remarks>
-    /// Named ahead of the camera block landing, so that when those resources are compiled into the
-    /// catalog the interlock is already correct for them. An id that is not in the catalog costs
-    /// nothing here — the interlock is asked about resource names, never about resource objects.
+    /// These were named here before the camera block existed, as strings; now that it does they are
+    /// the catalog's own constants, so a renamed resource cannot leave the interlock quietly
+    /// pointing at nothing. Both are needed and neither is enough: the node assertion is the one
+    /// that observes a camera which is briefly gone during a recycle, and the unit content is what
+    /// the reconciler holds while it rewrites the unit this restarts.
     /// </remarks>
     public static IReadOnlyList<string> CameraResources { get; } =
-        ["camera.pipewire-node.framelink-cam", "unit.framelink-camera.content"];
+        [CameraNodeResource.ResourceName, CameraUnitResource.ResourceName];
 
     /// <summary>The camera node's user unit.</summary>
-    public const string CameraUnitName = "framelink-camera.service";
+    public const string CameraUnitName = CameraUnitResource.UnitName;
 
     /// <summary>Where the daily restart's last local date is stamped (§2.1's persisted state).</summary>
     public const string DailyRestartStampFile = "supervision-daily-restart";

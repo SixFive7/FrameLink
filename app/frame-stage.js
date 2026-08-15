@@ -76,6 +76,17 @@ function connect() {
   socket.onmessage = (event) => {
     let stage;
     try { stage = JSON.parse(event.data); } catch (_) { return; }
+
+    // A frame carrying a command is the call button, not narration: version2.md's catalog retires
+    // the GPIO daemon's WebSocket server on 127.0.0.1:8889 ("with both inside one binary there is
+    // no port"), so a press arrives here and is re-broadcast for the app to act on. The frame is
+    // still a complete, current stage frame, so rendering it as well would be correct — it is
+    // skipped only because a command never changes what is on screen by itself.
+    if (stage.command) {
+      window.dispatchEvent(new CustomEvent('framelink-command', { detail: stage.command }));
+      return;
+    }
+
     render(stage);
   };
 

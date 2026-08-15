@@ -1,6 +1,5 @@
 import { LitElement, html, css } from './vendor/lit-all.min.js';
 import { CallClient } from './livekit.js';
-import { connectControl } from './control.js';
 import './frame-grid.js';
 import './frame-setup.js';
 
@@ -90,7 +89,6 @@ class FrameApp extends LitElement {
     this._probeBackoff = PROBE_BACKOFF_MIN_MS;
     this._byId = new Map();
     this.call = null;
-    this._control = null;
   }
 
   async connectedCallback() {
@@ -98,8 +96,10 @@ class FrameApp extends LitElement {
     await this._loadConfig();
     this._startSlideshowWatch();
     window.addEventListener('keydown', this._onKey);
-    // GPIO button daemon (Phase C). The dev keyboard 'c' remains a fallback.
-    this._control = connectControl({ onCommand: (cmd) => this._onCommand(cmd) });
+    // The call button. It used to be a WebSocket to a GPIO daemon on 127.0.0.1:8889; the daemon
+    // is inside the agent now, so a press arrives on the same channel frame-stage.js already
+    // holds and is re-broadcast as this event. The dev keyboard 'c' remains a fallback.
+    window.addEventListener('framelink-command', this._onControl);
     if (!this.config.token) { this.needsToken = true; return; }
     this._startCall();
   }
@@ -107,9 +107,9 @@ class FrameApp extends LitElement {
   disconnectedCallback() {
     super.disconnectedCallback();
     window.removeEventListener('keydown', this._onKey);
+    window.removeEventListener('framelink-command', this._onControl);
     clearTimeout(this._iframeTimer);
     clearTimeout(this._probeTimer);
-    if (this._control) this._control.close();
   }
 
   async _loadConfig() {
@@ -206,6 +206,8 @@ class FrameApp extends LitElement {
   }
 
   // ---- Control channel (GPIO button) ----------------------------------------
+
+  _onControl = (e) => this._onCommand(e.detail);
 
   _onCommand(cmd) {
     if (cmd === 'toggle') this.toggleMode();
@@ -318,9 +320,10 @@ class FrameApp extends LitElement {
     this._slideshowUp = false;
     this._startSlideshowWatch();
     // The camera node's provide-mode stream wedges after a few acquire/release cycles
-    // (measured). The daemon restarts framelink-camera on this event, so the NEXT call
-    // always acquires a freshly started node.
-    if (this._control) this._control.send({ event: 'call-end' });
+    // (measured). The agent restarts framelink-camera on this event, so the NEXT call
+    // always acquires a freshly started node. It goes over the stage channel now — v1 sent
+    // it to the GPIO daemon's own WebSocket, and that port is gone with the daemon.
+    if (window.frameLinkStage) window.frameLinkStage.callEnded();
   }
 
   render() {

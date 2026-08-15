@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using FrameLink.Agent.Discovery;
 using FrameLink.Agent.Hosting;
@@ -263,6 +264,26 @@ public sealed class AgentHost
         var countdown = new RebootCountdown(_clock);
         channel.RebootRequested += countdown.SkipNow;
 
+        // Guide 11's daemon, inside the agent (§2.1). It holds the GPIO line for as long as the
+        // agent runs and turns a press into the toggle that used to arrive over a WebSocket server
+        // on 127.0.0.1:8889 — the port the catalog retires, since daemon and app are now one
+        // binary. Created before the catalog because `gpio.button.line` observes this claim.
+        var button = new ButtonWatch(new ButtonWatchServices
+        {
+            Channel = channel,
+            Lines = GpioMonLines.Instance,
+            Stage = () => BrowserStage.Compose(hub.Current, _clock.UtcNow),
+            Clock = _clock,
+            Log = _log,
+            Values = values,
+        });
+
+        // Guide 11 step 4, kept working with a different address: `systemctl kill -s SIGUSR1
+        // fl-agent.service` where v1 signalled `framelink-gpio.service`. The catalog requires the
+        // simulated press to be reimplemented rather than dropped, and it is the only way to
+        // exercise the whole path on a frame whose button is not fitted yet.
+        using var simulatedPress = SimulatedPress(button);
+
         var loop = new ReconcileLoop(new ReconcileServices
         {
             Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
@@ -281,6 +302,7 @@ public sealed class AgentHost
                 Values = values,
                 FleetAnswer = () => _fleetAnswer,
                 DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
+                Button = button,
             }),
             Interlock = interlock,
             Journal = journal,
@@ -371,14 +393,16 @@ public sealed class AgentHost
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Seven loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // Eight loops now, and none is gated on another finishing. §1.2.2: a frame must provision
         // and self-heal with the server unreachable, so the reconciler runs from the first second
         // whether or not anything ever answers. What adoption gates is the resources that need
         // issued values, and it gates them through the DAG (§2.2) rather than by not running.
-        // Three of them are §2.10's second responsibility, §2.7's browser stage and the package
-        // inventory: all keep running through an outage, because that is exactly when no help is
-        // coming — and the inventory buffers on disk like everything else on that channel (§4.1).
-        var running = new List<Task>(7)
+        // Four of them are §2.10's second responsibility, §2.7's browser stage, the package
+        // inventory and the call button: all keep running through an outage, because that is
+        // exactly when no help is coming — and the inventory buffers on disk like everything else
+        // on that channel (§4.1). The button in particular has to work with nothing reachable,
+        // because pressing it is how somebody in this room starts a call.
+        var running = new List<Task>(8)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
@@ -387,6 +411,7 @@ public sealed class AgentHost
             supervisor.RunAsync(shutdown.Token),
             BrowserStageLoopAsync(browser, shutdown.Token),
             packages.RunAsync(shutdown.Token),
+            button.RunAsync(shutdown.Token),
         };
 
         try
@@ -447,6 +472,46 @@ public sealed class AgentHost
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Listens for <c>SIGUSR1</c> and treats it as a press of the call button.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// v1's GPIO daemon did exactly this, and guide 11 step 4 is built on it: the signal handler
+    /// and the wire ran the <i>same</i> broadcast, so a simulated press exercised everything except
+    /// the two wires. The catalog keeps that behaviour when the daemon disappears, and this is
+    /// where it lands — the signal now goes to <c>fl-agent.service</c> rather than to
+    /// <c>framelink-gpio.service</c>.
+    /// </para>
+    /// <para>
+    /// <c>PosixSignal</c> has no name for <c>SIGUSR1</c>; the API takes a raw platform signal
+    /// number for precisely this case, and on Linux that number is 10. Anywhere it cannot be
+    /// registered — Windows, where the whole suite runs — the agent says so once and carries on
+    /// without it, because a missing test affordance must never be a reason for a frame not to
+    /// start.
+    /// </para>
+    /// </remarks>
+    private PosixSignalRegistration? SimulatedPress(ButtonWatch button)
+    {
+        const int Sigusr1 = 10;
+
+        try
+        {
+            return PosixSignalRegistration.Create((PosixSignal)Sigusr1, context =>
+            {
+                context.Cancel = true;
+                _ = button.SimulateAsync(CancellationToken.None);
+            });
+        }
+        catch (Exception exception) when (exception is PlatformNotSupportedException
+            or ArgumentOutOfRangeException
+            or ArgumentException)
+        {
+            _log.Warn($"SIGUSR1 could not be registered, so there is no simulated button press on this machine: {exception.Message}");
+            return null;
         }
     }
 

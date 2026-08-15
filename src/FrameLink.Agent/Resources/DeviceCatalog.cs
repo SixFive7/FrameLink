@@ -64,6 +64,17 @@ public sealed record DeviceCatalogContext
 
     /// <summary>The display name the Fleet Manager assigned at adoption.</summary>
     public Func<string?> DesiredDeviceName { get; init; } = () => null;
+
+    /// <summary>
+    /// The agent's own claim on the call button's GPIO line (guide 11), where one is running.
+    /// </summary>
+    /// <remarks>
+    /// Optional rather than required, because the claim is a live object with a loop behind it and
+    /// a catalog is also built in places that have no such loop — the graph tests, and anything
+    /// that only wants to inspect the resource set. <c>gpio.button.line</c> reports its absence as
+    /// the fault it would be on a frame rather than skipping itself.
+    /// </remarks>
+    public ButtonWatch? Button { get; init; }
 }
 
 /// <summary>
@@ -133,6 +144,11 @@ public static class DeviceCatalog
             // user-unit layer hangs off that one drop-in, because there is no `enable-linger`
             // anywhere in this build.
             new SwapZramResource(context.Processes, context.SystemControl),
+
+            // Position 25, and ahead of the autologin drop-in on purpose: a supplementary group
+            // only reaches a process through a *new login session*, so the membership has to be
+            // right before the session that will carry it is created.
+            new UserGroupsResource(context.Processes, context.Session),
             new ConsoleAutologinResource(
                 context.Files,
                 context.SystemControl,
@@ -166,6 +182,17 @@ public static class DeviceCatalog
             // a reading of a value something else may still change (see SessionAudio).
             .. AudioCatalog.Build(context),
 
+            // Position 75, the last of the product layer. Guide 11 keeps only two resources and
+            // this is the second of them; the daemon that used to hold this line is inside the
+            // agent now (see ButtonWatch), so what is left on the device is the claim itself.
+            new GpioButtonLineResource(context.Processes, context.Values, context.Button),
+
+            // Position 76, first of §5.5's last phase. Guide 6's, and it stays here rather than
+            // moving up beside the rest of the camera chain: the display group is the only
+            // carve-out from "brick-capable last", and a camera that appears twenty minutes later
+            // costs nothing, where a dark panel costs §2.7's whole honesty mechanism.
+            new CameraAutoDetectResource(context.Files, guard, context.Session, context.Log),
+
             // Position 77, in §5.5's last phase with the other brick-capable boot-partition
             // writes. It is guide 4's, and it is here rather than beside its siblings because a
             // `/boot/firmware` write is scheduled by risk rather than by subject.
@@ -194,6 +221,12 @@ public static class DeviceCatalog
             new LabwcTouchMapResource(context.Files, context.Session),
             new DisplayTransformResource(context.Session, autostart),
 
+            // Position 43. A guide 6 resource that the catalog schedules with the session rather
+            // than with the camera chain, because it is a user-unit drop-in like everything else
+            // here and because the interface it unlocks is what the chain below is for. The kiosk
+            // workstream left it for the camera block deliberately.
+            new PortalDesktopDropInResource(context.Files, context.Session),
+
             // §2.1: the app is inside the binary and the agent serves it. Ahead of the browser
             // unit because that unit's readiness guard polls this origin before Chromium opens.
             new LocalOriginResource(context.Origin),
@@ -202,12 +235,47 @@ public static class DeviceCatalog
             new ChromiumKioskEnabledResource(context.Session),
             new ChromiumKioskRunningResource(context.Files, context.Processes, context.Session, kioskUnit),
 
+            // Positions 48–53, the camera chain. It sits after the browser and before the product
+            // layer, and its own order is the catalog's: switch WirePlumber's camera hunting off
+            // first, then create the one node, then the portal that hands it to Chromium, and only
+            // then assert that the node is actually there — which is the assertion that exists
+            // because the unit reports `active` while the camera is dead.
+            .. CameraChain(context),
+
             // The five values guide 10's config.json used to hold, now issued by the Fleet Manager
             // and recorded by the agent. Blocked behind adoption, because §3.3 gives a pending
             // device nothing.
             .. AppConfigCatalog.Build(context.Store, context.Values, context.Channel, context.Clock),
         ];
     }
+
+    /// <summary>
+    /// The camera chain, in catalog order.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Six of guide 6's sixteen resources. The other ten are elsewhere by the catalog's own
+    /// scheduling: seven are apt packages in the package block (six present, one asserted
+    /// <i>absent</i>), <c>unit.xdg-desktop-portal.dropin-desktop</c> sits with the session,
+    /// <c>unit.chromium-kiosk.running-matches-content</c> with the browser, and
+    /// <c>boot.config.camera-auto-detect</c> in the last phase with the other boot-partition
+    /// writes.
+    /// </para>
+    /// <para>
+    /// The permission store comes before the interface check for a practical reason: observing the
+    /// interface D-Bus-activates the portal, and a portal that starts while the permission is still
+    /// unset is a portal that will pop a dialog at the first call.
+    /// </para>
+    /// </remarks>
+    private static IReadOnlyList<IResource> CameraChain(DeviceCatalogContext context) =>
+    [
+        new WirePlumberCameraMonitorsResource(context.Files, context.Session),
+        new CameraUnitResource(context.Files, context.Session),
+        new CameraUnitEnabledResource(context.Session),
+        new PortalCameraPermissionResource(context.Session),
+        new PortalCameraInterfaceResource(context.Session),
+        new CameraNodeResource(context.Session),
+    ];
 
     /// <summary>Builds the set and validates its ordering (§2.2).</summary>
     public static ResourceGraph BuildGraph(DeviceCatalogContext context) => new(Build(context));

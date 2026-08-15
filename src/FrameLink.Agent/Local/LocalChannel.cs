@@ -99,6 +99,24 @@ public sealed record StageMessage
     /// for a frame that is visibly blinking every ten minutes.
     /// </remarks>
     public string? SupervisionOverlay { get; init; }
+
+    /// <summary>
+    /// An instruction to the product, rather than anything about the device's condition.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Null on every ordinary frame. It carries <c>toggle</c> when the call button is pressed —
+    /// v1's <c>{"cmd":"toggle"}</c>, which used to arrive over a WebSocket server the GPIO daemon
+    /// ran on <c>127.0.0.1:8889</c>. The catalog retires that port outright ("an internal detail of
+    /// the v1 split between daemon and SPA; with both inside one binary there is no port"), so the
+    /// press rides the one local origin the page is already connected to.
+    /// </para>
+    /// <para>
+    /// It travels on a full, current stage frame rather than in a message of its own so that a page
+    /// which does not understand commands still renders the truth instead of a default condition.
+    /// </para>
+    /// </remarks>
+    public string? Command { get; init; }
 }
 
 /// <summary>The configuration document the app fetches from the local origin (§2.1).</summary>
