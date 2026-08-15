@@ -79,6 +79,16 @@ public sealed record ReconcileServices
 
     /// <summary>Budgets and schedules.</summary>
     public ReconcileOptions Options { get; init; } = new();
+
+    /// <summary>
+    /// The interlock this loop shares with supervision (§2.10), or null where there is none.
+    /// </summary>
+    /// <remarks>
+    /// Optional so that a test of the loop's own mechanics does not have to build a supervisor,
+    /// and null-safe throughout: with no interlock the loop behaves exactly as it did before §2.10
+    /// existed, which is the honest default for a catalog with nothing supervised in it.
+    /// </remarks>
+    public Supervise.SupervisionInterlock? Interlock { get; init; }
 }
 
 /// <summary>
@@ -518,6 +528,28 @@ public sealed class ReconcileLoop
                 continue;
             }
 
+            if (_services.Interlock?.ExcusedBy(resource.Name, _services.Clock.UtcNow) is { } behaviour)
+            {
+                // §2.10 clause 2: "While a supervision window is open, the transient wrongness it
+                // causes — a kiosk process that is briefly not running — is expected rather than
+                // drift, so it never trips §2.6." Not acted on either, because acting would race
+                // the restart that is already under way — the other half of the same interference.
+                // The window's own deadline is what ends this: once it expires the resource is
+                // observed exactly as any other, "and everything §2.6 and §2.7 prescribe takes
+                // over".
+                Record(new ResourceStatus
+                {
+                    Name = resource.Name,
+                    Kind = ResourceStatusKind.Progressing,
+                    Delta = $"{observation.Delta} — expected while supervision restarts it ({behaviour})",
+                    Attempts = entry.Attempts,
+                    AttemptBudget = _services.Options.AttemptBudget,
+                });
+
+                result = Worst(result, PassResult.Pending);
+                continue;
+            }
+
             if (acted)
             {
                 // Drifted, but this pass has already spent its one change (§1.2.5). Observed and
@@ -618,7 +650,24 @@ public sealed class ReconcileLoop
             }),
             cancellationToken).ConfigureAwait(false);
 
-        var action = await resource.ActAsync(cancellationToken).ConfigureAwait(false);
+        // §2.10 clause 1: the reconciler holds a lock on what it is applying. Taken before the Act
+        // rather than at the end of the pass, because the race this prevents is inside the Act —
+        // supervision restarting the very unit being rewritten.
+        _services.Interlock?.Applying(resource.Name);
+
+        ResourceAction action;
+        try
+        {
+            action = await resource.ActAsync(cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            // Released here and not after the reboot: what follows is journalled, and the status
+            // list published from it carries AwaitingReboot, which PublishHolds turns into a hold
+            // of its own. Holding across the reboot boundary in this field would instead leak on a
+            // process that comes back without one.
+            _services.Interlock?.Applying(null);
+        }
 
         // Journalled before the reboot is requested, never after. This write is the only thing
         // standing between a frame that goes down mid-contract and a frame that comes back with
@@ -1194,9 +1243,30 @@ public sealed class ReconcileLoop
             .OrderByDescending(status => (int)status.Kind)
             .FirstOrDefault();
 
+        // §2.10 clause 1, the reconciler's half: supervision must not touch anything this loop is
+        // Progressing, AwaitingReboot or Blocked on, and this is where it learns which those are.
+        _services.Interlock?.PublishHolds(statuses);
+
+        // §2.6's "any drift stops the product", with §2.10 clause 2's one exclusion applied. The
+        // exclusion is subtracted here rather than at the point each status is recorded, so there
+        // is exactly one place in the agent that decides whether the product runs.
+        var now = _services.Clock.UtcNow;
+        var drifted = false;
+        foreach (var status in statuses)
+        {
+            if (status.Kind is ResourceStatusKind.InSync || _services.Interlock?.Excuses(status.Name, now) == true)
+            {
+                continue;
+            }
+
+            drifted = true;
+            break;
+        }
+
         _services.Hub.Publish(status => status with
         {
             Resources = statuses,
+            Drifted = drifted,
             Reconcile = status.Reconcile with
             {
                 LoopState = LoopStateFor(result),

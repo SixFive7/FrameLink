@@ -1,4 +1,5 @@
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 
 namespace FrameLink.Agent.Resources;
@@ -17,6 +18,21 @@ public sealed record DeviceCatalogContext
 
     /// <summary>The narrow window onto systemd.</summary>
     public required ISystemControl SystemControl { get; init; }
+
+    /// <summary>
+    /// The login user's home and their <c>systemd --user</c> manager.
+    /// </summary>
+    /// <remarks>
+    /// Required from the session and kiosk block onwards: everything guide 5 builds lives in one
+    /// unprivileged user's session, and the agent is root in the system manager.
+    /// </remarks>
+    public required IUserSession Session { get; init; }
+
+    /// <summary>The server the agent serves the product app and the repair screen from (§2.1).</summary>
+    public required LocalOrigin Origin { get; init; }
+
+    /// <summary>The page's own reports, for the <c>app.config.*</c> cross-check.</summary>
+    public required LocalChannel Channel { get; init; }
 
     /// <summary>Whether anything can show a picture.</summary>
     public required IDisplayProbe Display { get; init; }
@@ -58,7 +74,9 @@ public sealed record DeviceCatalogContext
 /// <b>This is M3 in progress, not the fleet's catalog.</b> The full enumeration is 79 resources
 /// in <c>reference/resource-catalog.md</c>. What was here at M2 is the set that makes every rung
 /// of §2.3's status vocabulary reachable by something that touches a real system; M3 adds the
-/// catalog's blocks to it in dependency order, and the package block is the first of them.
+/// catalog's blocks to it in dependency order — the package block first, then the session and
+/// kiosk stack of guides 5 and 10, which is where the frame stops showing a console and starts
+/// showing the product.
 /// </para>
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
@@ -109,6 +127,18 @@ public static class DeviceCatalog
             // needs in order to render the repair screen the pending frame is showing.
             .. PackageCatalog.Build(new AptPackages(context.Processes)),
 
+            // Positions 23–37, the system-configuration phase. `swap.zram-active` is a guide 5
+            // resource that the catalog's ordering places here rather than with the session, and
+            // `boot.autologin.getty-tty1` has to precede everything user-scoped: the whole
+            // user-unit layer hangs off that one drop-in, because there is no `enable-linger`
+            // anywhere in this build.
+            new SwapZramResource(context.Processes, context.SystemControl),
+            new ConsoleAutologinResource(
+                context.Files,
+                context.SystemControl,
+                context.Processes,
+                context.Session),
+
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 
             // The three-level chain that makes Blocked(dependency) and the escalation ladder
@@ -117,6 +147,48 @@ public static class DeviceCatalog
             new CpuGovernorUnitResource(context.Files, context.SystemControl),
             new CpuGovernorUnitEnabledResource(context.SystemControl),
             new CpuGovernorResource(context.Files, context.Values),
+
+            // Positions 38–47: the session and kiosk stack, front-loaded per §2.7 so that the
+            // browser stage exists as early as the DAG allows. Everything from here to the
+            // Chromium unit lives in the login user's session.
+            new BashProfileLabwcResource(context.Files, context.Processes, context.Session),
+            .. KioskStack(context),
+        ];
+    }
+
+    /// <summary>
+    /// The session and kiosk stack, in catalog order.
+    /// </summary>
+    /// <remarks>
+    /// Extracted so the two resources that need the same <see cref="LabwcAutostartResource"/>
+    /// instance — its mode bit and the transform it declares — get it, rather than each holding a
+    /// second copy of a resource whose desired value is a fleet setting that can move underneath
+    /// them.
+    /// </remarks>
+    private static IReadOnlyList<IResource> KioskStack(DeviceCatalogContext context)
+    {
+        var autostart = new LabwcAutostartResource(context.Files, context.Session, context.Values);
+        var kioskUnit = new ChromiumKioskUnitResource(context.Files, context.Session);
+
+        return
+        [
+            autostart,
+            new LabwcAutostartExecutableResource(context.Files, autostart),
+            new LabwcTouchMapResource(context.Files, context.Session),
+            new DisplayTransformResource(context.Session, autostart),
+
+            // §2.1: the app is inside the binary and the agent serves it. Ahead of the browser
+            // unit because that unit's readiness guard polls this origin before Chromium opens.
+            new LocalOriginResource(context.Origin),
+
+            kioskUnit,
+            new ChromiumKioskEnabledResource(context.Session),
+            new ChromiumKioskRunningResource(context.Files, context.Processes, context.Session, kioskUnit),
+
+            // The five values guide 10's config.json used to hold, now issued by the Fleet Manager
+            // and recorded by the agent. Blocked behind adoption, because §3.3 gives a pending
+            // device nothing.
+            .. AppConfigCatalog.Build(context.Store, context.Values, context.Channel, context.Clock),
         ];
     }
 

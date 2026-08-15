@@ -20,11 +20,23 @@ namespace FrameLink.Agent.Reconcile;
 /// <see cref="Resources.AdoptionResource"/>, because the value it converges on is one the Fleet
 /// Manager issues and §3.3 gives a pending device none.
 /// </para>
+/// <para>
+/// <b>It gave the id back at M3.</b> Until the session and kiosk block landed this was called
+/// <c>app.config.identity</c>, borrowed from the resource catalog because it was the closest
+/// entry to hand. The two are not the same thing: the catalog's <c>app.config.identity</c> is the
+/// frame's <i>LiveKit participant identity</i>, issued as <c>call.identity</c>, unique per unit,
+/// and a collision there is a fleet-wide fault with no local symptom — while this is the display
+/// name an operator reads in a device row and can change at will. Squatting on the id would have
+/// meant one of the two silently not existing, so this resource now carries its own.
+/// </para>
 /// </remarks>
 public sealed class DeviceNameResource : IResource
 {
-    /// <summary>The catalog id.</summary>
-    public const string ResourceName = "app.config.identity";
+    /// <summary>
+    /// The resource id. <b>Not from the catalog</b> — this is a Fleet Manager display name, not a
+    /// device setting the guides ever produced.
+    /// </summary>
+    public const string ResourceName = "agent.device-name";
 
     /// <summary>File name inside the state store.</summary>
     public const string FileName = "device-name";

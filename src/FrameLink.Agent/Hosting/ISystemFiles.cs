@@ -60,6 +60,22 @@ public interface ISystemFiles
 
     /// <summary>Immediate file paths inside <paramref name="path"/>, sorted; empty if absent.</summary>
     IReadOnlyList<string> ListFiles(string path);
+
+    /// <summary>
+    /// The POSIX mode of <paramref name="path"/>, or null if it is absent or unreadable.
+    /// </summary>
+    /// <remarks>
+    /// A mode bit is a setting in its own right, which is why it needs a reader rather than only
+    /// the writer <see cref="IFilePermissions"/> already provides. The catalog's
+    /// <c>labwc.autostart.executable</c> exists because labwc <b>silently ignores</b> a
+    /// non-executable autostart: perfect content plus a missing bit produces a frame that boots to
+    /// a bare compositor with no rotation and no browser, and nothing logs a complaint. A resource
+    /// cannot observe that without being able to read the mode back.
+    /// </remarks>
+    UnixFileMode? ModeOf(string path);
+
+    /// <summary>Sets the POSIX mode of <paramref name="path"/>.</summary>
+    void SetMode(string path, UnixFileMode mode);
 }
 
 /// <summary>
@@ -76,6 +92,20 @@ public sealed class HostSystemFiles : ISystemFiles
     private static readonly char[] LeadingSeparators = ['/', '\\'];
     private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
+    /// <summary>
+    /// Modes this instance was asked to set, on a filesystem that has none.
+    /// </summary>
+    /// <remarks>
+    /// The same test affordance as <see cref="_root"/>, and it is needed for the same reason:
+    /// <see cref="File.GetUnixFileMode(string)"/> and <see cref="File.SetUnixFileMode(string,
+    /// UnixFileMode)"/> throw <see cref="PlatformNotSupportedException"/> on Windows, so without
+    /// this a mode-bearing resource could not be exercised at all off a frame — and
+    /// <c>labwc.autostart.executable</c> is precisely the resource whose whole content is a mode
+    /// bit. On Linux, which is the only place a frame ever runs, this dictionary is never touched
+    /// and every read and write goes to the real inode.
+    /// </remarks>
+    private readonly Dictionary<string, UnixFileMode> _emulatedModes = new(StringComparer.Ordinal);
+
     private readonly string? _root;
 
     /// <summary>Creates an instance rooted at <paramref name="root"/>, or at <c>/</c> when null.</summary>
@@ -84,6 +114,20 @@ public sealed class HostSystemFiles : ISystemFiles
 
     /// <summary>The instance a frame uses.</summary>
     public static HostSystemFiles Instance { get; } = new();
+
+    /// <summary>
+    /// What a newly written file is assumed to be, where the filesystem cannot say.
+    /// </summary>
+    /// <remarks>
+    /// <c>0664</c>, matching the <c>umask 002</c> a Raspberry Pi OS login shell runs with — which
+    /// is why the v1 reference shows <c>-rw-rw-r--</c> on every file the guides created and
+    /// <c>775</c> on the one they chmod'd. The value matters only on Windows, and only so that a
+    /// file that has never been chmod'd reads as <i>not executable</i> rather than as unknown.
+    /// </remarks>
+    public const UnixFileMode DefaultFileMode =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite
+        | UnixFileMode.GroupRead | UnixFileMode.GroupWrite
+        | UnixFileMode.OtherRead;
 
     /// <summary>Turns an absolute Linux path into the path this instance actually touches.</summary>
     public string Resolve(string path)
@@ -153,6 +197,52 @@ public sealed class HostSystemFiles : ISystemFiles
 
     /// <inheritdoc/>
     public void EnsureDirectory(string path) => Directory.CreateDirectory(Resolve(path));
+
+    /// <inheritdoc/>
+    public UnixFileMode? ModeOf(string path)
+    {
+        var resolved = Resolve(path);
+
+        if (!File.Exists(resolved) && !Directory.Exists(resolved))
+        {
+            return null;
+        }
+
+        if (OperatingSystem.IsWindows())
+        {
+            lock (_emulatedModes)
+            {
+                return _emulatedModes.TryGetValue(resolved, out var emulated) ? emulated : DefaultFileMode;
+            }
+        }
+
+        try
+        {
+            return File.GetUnixFileMode(resolved);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <inheritdoc/>
+    public void SetMode(string path, UnixFileMode mode)
+    {
+        var resolved = Resolve(path);
+
+        if (OperatingSystem.IsWindows())
+        {
+            lock (_emulatedModes)
+            {
+                _emulatedModes[resolved] = mode;
+            }
+
+            return;
+        }
+
+        File.SetUnixFileMode(resolved, mode);
+    }
 
     /// <inheritdoc/>
     public IReadOnlyList<string> ListDirectories(string path) =>

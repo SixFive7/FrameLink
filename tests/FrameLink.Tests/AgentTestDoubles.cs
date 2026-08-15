@@ -4,6 +4,7 @@ using FrameLink.Agent.Discovery;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Link;
 using FrameLink.Agent.State;
+using FrameLink.Agent.Supervise;
 using FrameLink.Agent.Update;
 using FrameLink.Protocol;
 
@@ -433,16 +434,87 @@ internal sealed class StubMulticastQuery : IMulticastQuery
 /// <summary>Records systemctl invocations.</summary>
 internal sealed class RecordingSystemControl : ISystemControl
 {
+    private readonly Dictionary<string, SystemControlResult> _answers = new(StringComparer.Ordinal);
+
     public List<string> Commands { get; } = [];
 
     public bool Succeed { get; set; } = true;
+
+    /// <summary>Scripts what <c>systemctl</c> says to one exact argument vector.</summary>
+    /// <remarks>
+    /// Needed once resources started reading systemd's <i>answers</i> rather than only its exit
+    /// codes — <c>systemctl show -p ExecStart</c> is how the autologin drop-in's effective value is
+    /// told apart from the value in the file, and those two disagreeing is the fault the resource
+    /// exists to catch.
+    /// </remarks>
+    public void Answer(string command, string output, bool succeeded = true) =>
+        _answers[command] = new SystemControlResult(succeeded, output);
 
     public Task<SystemControlResult> RunAsync(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
-        Commands.Add(string.Join(' ', arguments));
-        return Task.FromResult(new SystemControlResult(Succeed, string.Empty));
+        var line = string.Join(' ', arguments);
+        Commands.Add(line);
+
+        return Task.FromResult(_answers.TryGetValue(line, out var scripted)
+            ? scripted
+            : new SystemControlResult(Succeed, string.Empty));
+    }
+}
+
+/// <summary>
+/// The login user's session, without a login user.
+/// </summary>
+/// <remarks>
+/// The one seam that cannot be pointed at a temporary directory: <c>systemctl --user</c> answers
+/// about a systemd manager that exists only inside an autologin session on a Pi. Everything the
+/// kiosk block does through it — enable, is-enabled, is-active, restart, <c>wlr-randr</c> — is a
+/// command and an answer, so scripting the answers exercises the resources' real parsing.
+/// </remarks>
+internal sealed class FakeUserSession : IUserSession
+{
+    public string UserName { get; set; } = "framelink";
+
+    public string HomeDirectory => "/home/" + UserName;
+
+    public List<string> Commands { get; } = [];
+
+    public List<string> Owned { get; } = [];
+
+    public Dictionary<string, ProcessResult> Answers { get; } = new(StringComparer.Ordinal);
+
+    public ProcessResult Default { get; set; } = new(0, string.Empty, string.Empty);
+
+    public Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var line = executable + " " + string.Join(' ', arguments);
+        Commands.Add(line);
+
+        return Task.FromResult(Answers.TryGetValue(line, out var scripted) ? scripted : Default);
+    }
+
+    public Task GiveToUserAsync(string path, CancellationToken cancellationToken)
+    {
+        Owned.Add(path);
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>A memory reading a test sets outright.</summary>
+internal sealed class StubMemoryProbe : IMemoryProbe
+{
+    public MemorySample Sample { get; set; } = new(200_000, 4, 900_000);
+
+    public int Samples { get; private set; }
+
+    public ValueTask<MemorySample> SampleAsync(CancellationToken cancellationToken)
+    {
+        Samples++;
+        return ValueTask.FromResult(Sample);
     }
 }
 
@@ -452,6 +524,14 @@ internal static class AgentStatusFactory
     public static AgentStatus Starting(string deviceId = "TEST-DEVI-CEID-0001") => new()
     {
         Condition = DeviceStateLadder.Starting,
+        DeviceId = deviceId,
+    };
+
+    /// <summary>A frame the Fleet Manager has cleared, with nothing drifted (§2.6's InSync rung).</summary>
+    public static AgentStatus Green(string deviceId = "TEST-DEVI-CEID-0001") => new()
+    {
+        Condition = DeviceStateLadder.FromHandshake(AgentServerScript.Ok()),
+        LastAuthoritative = DeviceStateLadder.FromHandshake(AgentServerScript.Ok()),
         DeviceId = deviceId,
     };
 }

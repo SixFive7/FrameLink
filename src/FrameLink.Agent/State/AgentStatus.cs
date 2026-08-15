@@ -25,6 +25,48 @@ public sealed record Narration
 }
 
 /// <summary>
+/// §2.10's annotation — <b>an annotation, not a rung</b>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// §2.6's rungs answer exactly one question — does the product run? — and a supervision action
+/// does not change that answer, so it cannot become a rung without either duplicating
+/// <c>InSync</c> or stopping the product. <b>A supervised restart while <c>InSync</c> leaves the
+/// device <c>InSync</c>.</b> This record therefore sits beside <see cref="AgentStatus.Condition"/>
+/// and never replaces it, and any state can carry it.
+/// </para>
+/// <para>
+/// Below fault level it is operator-facing only — telemetry and the Fleet Manager's device row. At
+/// fault level it also renders on the frame, as the small persistent overlay §2.6 gives
+/// <c>NoContact</c>, because a frame visibly blinking every ten minutes is an abnormal condition
+/// and §1.2 principle 3 says abnormal conditions are named on the frame's own screen. The overlay
+/// does not stop the product; that is the point of it being an annotation.
+/// </para>
+/// </remarks>
+public sealed record SupervisionAnnotation
+{
+    /// <summary>Which of §2.10's four behaviours last acted.</summary>
+    public required string Behaviour { get; init; }
+
+    /// <summary>When it acted.</summary>
+    public required DateTimeOffset LastActionUtc { get; init; }
+
+    /// <summary>How many times that behaviour has acted inside the fault window.</summary>
+    public required int ActionsInWindow { get; init; }
+
+    /// <summary>Whether the rate has passed <c>supervision.faultRateThreshold</c>.</summary>
+    public required bool AtFaultLevel { get; init; }
+
+    /// <summary>The measured value against its threshold, in words.</summary>
+    public string? Detail { get; init; }
+
+    /// <summary>The overlay sentence, or null below fault level.</summary>
+    public string? Overlay => AtFaultLevel
+        ? $"This frame keeps repairing itself ({Behaviour}, {ActionsInWindow} times recently). It is still showing your photos."
+        : null;
+}
+
+/// <summary>
 /// Everything the frame's screen and the Fleet Manager know about this agent right now.
 /// </summary>
 /// <remarks>
@@ -114,6 +156,29 @@ public sealed record AgentStatus
     /// </remarks>
     public DisplayVisibility? ConsoleVisibility { get; init; }
 
+    /// <summary>
+    /// Whether the reconciler currently sees drift that §2.6 says must stop the product.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// §2.6: "<b>Any drift stops the product</b>, including an active call. Correctness and
+    /// transparency outrank call continuity; in normal operation nothing drifts, and when it does,
+    /// everyone can see why." Published by the loop rather than derived from
+    /// <see cref="Resources"/>, because the loop is the only thing that knows which of the
+    /// not-in-sync statuses are excused by an open supervision window (§2.10 clause 2) — and that
+    /// exclusion is the whole of "a supervised restart is not drift and never triggers this rule".
+    /// </para>
+    /// <para>
+    /// It is a separate field from <see cref="Condition"/> and not a rung on it. The ladder is
+    /// about what the <i>Fleet Manager</i> has said; this is about what the frame has observed of
+    /// itself, and a frame can be authoritatively adopted and locally drifted at the same instant.
+    /// </para>
+    /// </remarks>
+    public bool Drifted { get; init; }
+
+    /// <summary>§2.10's annotation, when supervision has acted.</summary>
+    public SupervisionAnnotation? Supervision { get; init; }
+
     /// <summary>Whether the product app may run (§2.6).</summary>
-    public bool ProductRuns => Condition.ProductRuns;
+    public bool ProductRuns => Condition.ProductRuns && !Drifted;
 }

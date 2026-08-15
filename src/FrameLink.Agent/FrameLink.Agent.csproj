@@ -42,6 +42,32 @@
     <EmbeddedResource Include="Systemd\fl-agent.service" LogicalName="fl-agent.service" />
   </ItemGroup>
 
+  <!--
+    §2.1: "The product app is embedded too. The v1 SPA service and its on-disk git
+    checkout are gone; the agent serves the app from its own binary, so the app can
+    never drift from the agent managing it, and the repair screen and product share
+    one local origin."
+
+    LogicalName has to be set explicitly. Without it the SDK manufactures
+    `fl-agent.app.vendor.lit-all.min.js` — every separator collapsed into a dot, so a
+    request path can no longer be recovered from the resource name at all. The
+    String.Replace call normalises %(RecursiveDir), which carries the *host's*
+    separator: a build on the workstation would otherwise embed `app/vendor\lit.js`
+    and the arm64 container `app/vendor/lit.js`, and the served URL would depend on
+    where the binary was built. EmbeddedApp normalises again on read, so neither form
+    can reach a URL.
+
+    config.example.json is excluded on purpose. The five values it templates are now
+    Fleet-Manager-supplied and served from /config.json (LocalOrigin); shipping the
+    example beside them would give the app a second, stale place to find them.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\app\**\*.*"
+                      Exclude="..\..\app\config.example.json;..\..\app\config.json;..\..\app\.gitignore">
+      <LogicalName>app/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\FrameLink.Protocol\FrameLink.Protocol.csproj" />
   </ItemGroup>

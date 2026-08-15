@@ -1,4 +1,5 @@
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
 
@@ -136,8 +137,10 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        // Nine from M2 plus the catalog's fifteen-resource package block (M3's first migration).
-        Assert.Equal(24, graph.Count);
+        // Nine from M2, the catalog's fifteen-resource package block, and the sixteen of the
+        // session and kiosk stack (guides 5 and 10, plus the running-command-line check the
+        // catalog files under guide 6 and schedules in this phase).
+        Assert.Equal(40, graph.Count);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],
@@ -155,17 +158,70 @@ public sealed class AgentResourceGraphTests
             < order.IndexOf(CpuGovernorResource.ResourceName));
     }
 
-    internal static DeviceCatalogContext Context(TemporaryFiles files) => new()
+    [Fact]
+    public void The_session_and_kiosk_block_depends_on_what_the_catalog_document_says_it_does()
     {
-        Files = files.Files,
-        Store = files.Store,
-        Processes = new RecordingProcessRunner(),
-        SystemControl = new RecordingSystemControl(),
-        Display = StaticDisplayProbe.Visible,
-        Boot = new MutableBootIdentity(),
-        Clock = new ManualClock(),
-        Log = new RecordingLog(),
-    };
+        using var files = new TemporaryFiles();
+        var graph = DeviceCatalog.BuildGraph(Context(files));
+        var order = graph.Ordered.Select(resource => resource.Name).ToList();
+
+        // The whole user-unit layer hangs off the autologin drop-in, because there is no
+        // `loginctl enable-linger` anywhere in this build.
+        Assert.Contains(
+            ConsoleAutologinResource.ResourceName,
+            graph.Find(BashProfileLabwcResource.ResourceName)!.DependsOn);
+        Assert.Contains(
+            ConsoleAutologinResource.ResourceName,
+            graph.Find(ChromiumKioskUnitResource.ResourceName)!.DependsOn);
+
+        // The mode bit is its own resource and comes after the content it applies to; the running
+        // browser comes after both the unit and its enablement.
+        Assert.True(order.IndexOf(LabwcAutostartResource.ResourceName)
+            < order.IndexOf(LabwcAutostartExecutableResource.ResourceName));
+        Assert.True(order.IndexOf(ChromiumKioskEnabledResource.ResourceName)
+            < order.IndexOf(ChromiumKioskRunningResource.ResourceName));
+
+        // The kiosk unit's readiness guard polls the local origin, so the origin has to be up
+        // first — the catalog puts app.http.local-origin ahead of the unit for exactly that.
+        Assert.True(order.IndexOf(LocalOriginResource.ResourceName)
+            < order.IndexOf(ChromiumKioskUnitResource.ResourceName));
+
+        // §3.3: a pending device receives nothing, so every issued value is blocked behind
+        // adoption — but the kiosk stack itself is not, because §2.7's browser stage has to be
+        // able to render the "adopt me" screen.
+        foreach (var spec in AppConfigCatalog.Specs)
+        {
+            var resource = graph.Find(spec.ResourceName)!;
+            var reachesAdoption = resource.DependsOn.Contains(AdoptionResource.ResourceName)
+                || resource.DependsOn.Any(name =>
+                    graph.Find(name)!.DependsOn.Contains(AdoptionResource.ResourceName));
+
+            Assert.True(reachesAdoption, $"{spec.ResourceName} must be gated by adoption");
+        }
+
+        Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ChromiumKioskUnitResource.ResourceName)!.DependsOn);
+    }
+
+    internal static DeviceCatalogContext Context(TemporaryFiles files)
+    {
+        var channel = new LocalChannel();
+        var clock = new ManualClock();
+
+        return new DeviceCatalogContext
+        {
+            Files = files.Files,
+            Store = files.Store,
+            Processes = new RecordingProcessRunner(),
+            SystemControl = new RecordingSystemControl(),
+            Session = new FakeUserSession(),
+            Channel = channel,
+            Origin = new LocalOrigin(channel, clock, new RecordingLog(), port: 0),
+            Display = StaticDisplayProbe.Visible,
+            Boot = new MutableBootIdentity(),
+            Clock = clock,
+            Log = new RecordingLog(),
+        };
+    }
 }
 
 /// <summary>

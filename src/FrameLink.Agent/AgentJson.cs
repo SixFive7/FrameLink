@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using FrameLink.Agent.Discovery;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
 using FrameLink.Agent.State;
@@ -23,4 +24,7 @@ namespace FrameLink.Agent;
 [JsonSerializable(typeof(ReconcileJournalState))]
 [JsonSerializable(typeof(BootTrialState))]
 [JsonSerializable(typeof(AgentMemoryState))]
+[JsonSerializable(typeof(PageMessage))]
+[JsonSerializable(typeof(StageMessage))]
+[JsonSerializable(typeof(AppConfigDocument))]
 public sealed partial class AgentJson : JsonSerializerContext;

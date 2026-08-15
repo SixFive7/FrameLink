@@ -3,10 +3,12 @@ using FrameLink.Agent.Discovery;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Identity;
 using FrameLink.Agent.Link;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
 using FrameLink.Agent.Stage;
 using FrameLink.Agent.State;
+using FrameLink.Agent.Supervise;
 using FrameLink.Agent.Telemetry;
 using FrameLink.Agent.Update;
 using FrameLink.Protocol;
@@ -202,9 +204,45 @@ public sealed class AgentHost
         var outbox = new TelemetryOutbox(uplink, store, _log);
         var boot = new KernelBootIdentity(HostTextFileReader.Instance);
 
+        var values = new FleetValues(key => Volatile.Read(ref _settings).GetValueOrDefault(key));
+
+        // The kiosk stack lives in one unprivileged user's session while the agent is root in the
+        // system manager (§6.1). One seam covers both the home directory and that user's systemd.
+        var session = new LoginUserSession(
+            HostProcessRunner.Instance,
+            () => values.Get(LoginUserSession.SettingKey, LoginUserSession.DefaultUser));
+
+        // §2.1: the app is inside this binary, and §2.7 wants the repair screen on the same
+        // origin. One server answers both, plus the local channel the page checks in over.
+        var channel = new LocalChannel();
+        await using var origin = new LocalOrigin(
+            channel,
+            _clock,
+            _log,
+            () => AppConfigCatalog.Issued(store),
+            () => BrowserStage.Compose(hub.Current, _clock.UtcNow));
+
+        // Started here and not only by its resource, because the server lives in this process and
+        // therefore cannot survive the reboot every resource takes (§2.4). If starting it were
+        // left to the Act, the resource would find it down on every boot, act, reboot, and find it
+        // down again — a loop that never converges. Started at every process start, the resource
+        // becomes what it should be: an assertion that the origin is answering, with an Act that
+        // retries the bind for the one case that can actually fail, a port somebody else holds.
+        origin.Start();
+
+        // §2.10's interlock, shared by the two responsibilities. Created here because both sides
+        // need the same instance and neither owns the other.
+        var interlock = new SupervisionInterlock();
+
         // A local debugging switch, not a configuration channel (decision 48). Read once, because
         // the command line cannot change under a running process.
         var development = CountdownDuration.IsDevelopmentRun(_arguments);
+
+        // §2.7 item 4: a "Reboot now" button to skip the countdown once read, "a tap on the
+        // touchscreen". The tap arrives over the local channel, which is why the repair screen and
+        // the product share an origin — the button is on the agent's own page.
+        var countdown = new RebootCountdown(_clock);
+        channel.RebootRequested += countdown.SkipNow;
 
         var loop = new ReconcileLoop(new ReconcileServices
         {
@@ -215,17 +253,21 @@ public sealed class AgentHost
                 Processes = HostProcessRunner.Instance,
                 SystemControl = new SystemdControl(),
                 Display = display,
+                Session = session,
+                Origin = origin,
+                Channel = channel,
                 Boot = boot,
                 Clock = _clock,
                 Log = _log,
-                Values = new FleetValues(key => Volatile.Read(ref _settings).GetValueOrDefault(key)),
+                Values = values,
                 FleetAnswer = () => _fleetAnswer,
                 DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
             }),
+            Interlock = interlock,
             Journal = journal,
             Boot = boot,
             Reboots = new SystemRebootBoundary(new SystemdControl(), _log),
-            Countdown = new RebootCountdown(_clock),
+            Countdown = countdown,
             Telemetry = outbox,
             Hub = hub,
             Clock = _clock,
@@ -272,19 +314,51 @@ public sealed class AgentHost
                 $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}"),
         };
 
+        var supervisor = new Supervisor(new SupervisionServices
+        {
+            Channel = channel,
+            Session = session,
+            Memory = new ProcMemoryProbe(systemFiles, HostProcessRunner.Instance),
+            Interlock = interlock,
+            Hub = hub,
+            Telemetry = outbox,
+            Clock = _clock,
+            Log = _log,
+            Settings = new SupervisionSettings(values),
+            Store = store,
+            DeviceId = identity.DeviceId,
+        });
+
+        var browser = new BrowserStage(new BrowserStageServices
+        {
+            Channel = channel,
+            Session = session,
+            SystemControl = new SystemdControl(),
+            Hub = hub,
+            Telemetry = outbox,
+            Clock = _clock,
+            Log = _log,
+            Interlock = interlock,
+            Values = values,
+            DeviceId = identity.DeviceId,
+        });
+
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Four loops now, and the fourth is deliberately not gated on the third. §1.2.2: a frame
-        // must provision and self-heal with the server unreachable, so the reconciler runs from
-        // the first second whether or not anything ever answers. What adoption gates is the
-        // resources that need issued values, and it gates them through the DAG (§2.2) rather
-        // than by not running.
-        var running = new List<Task>(4)
+        // Six loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // and self-heal with the server unreachable, so the reconciler runs from the first second
+        // whether or not anything ever answers. What adoption gates is the resources that need
+        // issued values, and it gates them through the DAG (§2.2) rather than by not running.
+        // The last two are §2.10's second responsibility and §2.7's browser stage: both keep
+        // running through an outage, because that is exactly when no help is coming.
+        var running = new List<Task>(6)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
             updates.RunAsync(shutdown.Token),
             loop.RunAsync(shutdown.Token),
+            supervisor.RunAsync(shutdown.Token),
+            BrowserStageLoopAsync(browser, shutdown.Token),
         };
 
         try
@@ -305,6 +379,47 @@ public sealed class AgentHost
         }
 
         return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+    }
+
+    /// <summary>
+    /// Drives §2.7's browser stage on the same cadence supervision uses.
+    /// </summary>
+    /// <remarks>
+    /// Its own loop rather than a call inside the supervisor, because the two answer different
+    /// questions about the same browser and §2.10 is explicit that they are different
+    /// responsibilities: supervision restarts a page that <i>was</i> rendering and stopped; the
+    /// stage tears the session down for a page that <i>never</i> rendered. Sharing a tick interval
+    /// is convenience, not coupling.
+    /// </remarks>
+    private async Task BrowserStageLoopAsync(BrowserStage browser, CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                await browser.TickAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                // §2.7's hard rule is against blank screens, and a stage that died would be the
+                // one thing left to notice one. Recording and carrying on is the only response
+                // that keeps the rule enforceable.
+                _log.Warn($"A browser-stage tick failed and was skipped: {exception.Message}");
+            }
+
+            try
+            {
+                await _clock.DelayAsync(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
     }
 
     private async Task<ControlEndpoints?> ResolveEndpointsAsync(

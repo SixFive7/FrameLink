@@ -11,6 +11,10 @@
 </head>
 <body>
   <frame-app></frame-app>
+  <!-- Loaded first and with no imports of its own: version2.md §2.7's browser stage has to keep
+       saying the page rendered even when the app below it does not, because the agent tears the
+       graphical session down when nothing checks in. -->
+  <script type="module" src="./frame-stage.js"></script>
   <script src="./vendor/livekit-client.umd.js"></script>
   <script type="module" src="./frame-app.js"></script>
 </body>
