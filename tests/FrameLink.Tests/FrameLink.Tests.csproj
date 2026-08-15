@@ -43,6 +43,10 @@
     <ProjectReference Include="..\..\src\FrameLink.Protocol\FrameLink.Protocol.csproj" />
     <ProjectReference Include="..\..\src\FrameLink.Control\FrameLink.Control.csproj" />
     <ProjectReference Include="..\..\src\FrameLink.Agent\FrameLink.Agent.csproj" />
+    <!-- §7.1's upstream review ledger. The tool owns the probes, which reach the network and
+         therefore never run here; what the suite asserts is the offline half — that the committed
+         ledger is sound and still describes the pins in source. -->
+    <ProjectReference Include="..\..\tools\FrameLink.Upstream\FrameLink.Upstream.csproj" />
   </ItemGroup>
 
 </Project>

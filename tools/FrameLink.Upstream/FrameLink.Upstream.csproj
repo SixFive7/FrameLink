@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The upstream review ledger's detector (version2.md §7.1).
+
+    A development tool, never shipped and never invoked by a build. It is a .NET project
+    rather than a script for one reason: Directory.Build.props applies here too, so the
+    thing that decides whether a release may be cut is held to the same analyser bar,
+    warnings-as-errors and source-generated JSON as the two programs it gates.
+
+    tests/FrameLink.Tests references it, which is what lets the offline half — does this
+    ledger still describe the pins in source? — run inside the ordinary suite while every
+    network probe stays outside it.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FrameLink.Upstream</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>

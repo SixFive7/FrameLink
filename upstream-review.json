@@ -1,0 +1,104 @@
+{
+  "$comment": [
+    "The upstream review ledger - version2.md section 7.1.",
+    "",
+    "Every entry is a version somebody CHOSE. 'pinned' is what this project uses today;",
+    "'reviewed.upstream' is what upstream was serving the last time a person looked, and it is",
+    "the only field the detector compares against. When a live probe answers something else, that",
+    "entry has MOVED and owes a decision before the next release: re-pin it deliberately, or",
+    "upgrade it and validate against the suite.",
+    "",
+    "Nothing here fails a build. 'dotnet run --project tools/FrameLink.Upstream -- check' is the",
+    "detector, and no build, test or publish invokes it. The only always-on check is the offline",
+    "test that keeps this file agreeing with the pins in source, which fails when a human changed",
+    "one and forgot the other - never because upstream published something overnight.",
+    "",
+    "Debian package versions are deliberately NOT in scope. The apt resources move forward on",
+    "their own through security updates, by design, and the Fleet Manager records the versions it",
+    "finds. Recorded inventory is not a chosen version: an entry per Debian package would turn a",
+    "release gate into a daily chore, and a ceremony nobody performs is worse than none."
+  ],
+  "entries": [
+    {
+      "id": "raspios-lite-arm64",
+      "title": "Raspberry Pi OS Lite (Trixie, arm64) - the base image the section 3.9 generator writes into",
+      "pinnedIn": "src/FrameLink.Control/Imaging/BaseImagePin.cs",
+      "pinned": "2026-06-18",
+      "probe": {
+        "kind": "raspios-images",
+        "url": "https://downloads.raspberrypi.com/raspios_lite_arm64/images/"
+      },
+      "reviewed": {
+        "utc": "2026-08-15",
+        "upstream": "2026-06-19",
+        "verdict": "adopted",
+        "note": "Measured against the file the URL served on 2026-08-15: the published .sha256 sidecar matched, the archive decompressed to the recorded length, and the image digest, the partition table and the three target directories were read back out of the result. Upstream publishes each image under a directory dated a day after the image itself - raspios_lite_arm64-2026-06-19 holds the 2026-06-18 image - so the probe's answer and the pin differ by that day and always will."
+      }
+    },
+    {
+      "id": "immich-kiosk",
+      "title": "Immich Kiosk - the slideshow the agent fetches and supervises (section 2.1, decision 41)",
+      "pinnedIn": "version2.md section 6.2",
+      "pinned": "0.42.0",
+      "probe": {
+        "kind": "github-release",
+        "url": "https://api.github.com/repos/damongolding/immich-kiosk/releases/latest"
+      },
+      "reviewed": {
+        "utc": "2026-08-15",
+        "upstream": "0.42.0",
+        "verdict": "adopted",
+        "note": "Section 6.2 verified v0.42.0 on 2026-08-15 and the release probe still answers it. The kiosk.binary.pinned-release resource is not written yet, so this entry is where the chosen version lives until it is; v1's compose file still names 0.39.3 and is not a consumer of anything v2 builds. Decision 41 verifies the checksum at fetch time on the frame, which is a different guarantee from this one: that the bytes are the release, not that the release is the one somebody picked."
+      }
+    },
+    {
+      "id": "nuget-microsoft-data-sqlite",
+      "title": "Microsoft.Data.Sqlite - the Fleet Manager's store, EF Core being unusable under AOT (section 6.2)",
+      "pinnedIn": "src/FrameLink.Control/FrameLink.Control.csproj",
+      "pinned": "10.0.11",
+      "probe": {
+        "kind": "nuget-package",
+        "url": "https://api.nuget.org/v3-flatcontainer/microsoft.data.sqlite/index.json"
+      },
+      "reviewed": {
+        "utc": "2026-08-15",
+        "upstream": "10.0.11",
+        "verdict": "adopted",
+        "note": "Floats by section 7.1: the reference is Version=\"*\", and restore resolved 10.0.11 on 2026-08-15, which is what nuget.org served that day. A float cannot be held back without becoming a pin, so this entry moves the moment nuget.org does - which is the whole point of watching it, because the next build takes the new one whether or not anyone looked."
+      }
+    },
+    {
+      "id": "nuget-xunit-v3",
+      "title": "xunit.v3 - the suite runner both the harness and the operator invoke",
+      "pinnedIn": "tests/FrameLink.Tests/FrameLink.Tests.csproj",
+      "pinned": "4.0.0",
+      "probe": {
+        "kind": "nuget-package",
+        "url": "https://api.nuget.org/v3-flatcontainer/xunit.v3/index.json"
+      },
+      "reviewed": {
+        "utc": "2026-08-15",
+        "upstream": "4.0.0",
+        "verdict": "adopted",
+        "note": "Floats by section 7.1, resolved 4.0.0 on 2026-08-15. Worth a human's attention on every move rather than a shrug: 4.0.0 is the version whose dropped VSTest bridge is why the suite runs by executing the project directly instead of through dotnet test, and a runner change lands underneath every other gate in this repository."
+      }
+    },
+    {
+      "id": "dotnet-lts-band",
+      "title": ".NET LTS band - the target framework both programs are built against",
+      "pinnedIn": "Directory.Build.props",
+      "pinned": "net10.0",
+      "probe": {
+        "kind": "dotnet-channel",
+        "url": "https://builds.dotnet.microsoft.com/dotnet/release-metadata/releases-index.json",
+        "channel": "10.0"
+      },
+      "reviewed": {
+        "utc": "2026-08-15",
+        "upstream": "10.0.400",
+        "verdict": "adopted",
+        "note": "What is chosen here is the band, not the patch: net10.0 is LTS, in active support, EOL 2028-11-14, and .NET 8 and 9 were both out of support from 2026-11-10 (section 6.2). The probe answers with the channel's newest SDK, 10.0.400 on 2026-08-15; the workstation that built this ran 10.0.302 (section 6.1), which is a build-host fact rather than an artifact one, since Native AOT leaves no runtime for the frame to have. A support phase that stops being 'active' is the signal this entry exists to deliver."
+      }
+    }
+  ]
+}

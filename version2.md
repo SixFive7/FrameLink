@@ -876,21 +876,55 @@ none of which applies to a 1.35 MB headless ELF.
 **"Everything floats, the build freezes it"** (from BrowserAI, reinforced by Jeeves): every
 dependency resolves to latest at build time and is frozen into the artifact. Never pin to work
 around a break — fix forward. Version claims are never asserted from memory, only verified per
-session and stamped `Verified <date> @ <version>`. An `upstream-review.json` ledger records
-human-reviewed upstream versions, enforced by a marker test that fails when the build resolves
-something newer than the last review.
+session and stamped `Verified <date> @ <version>`.
 
 **Fleet synthesis:** aggressive at build, gated at release (mule + test suite), frozen at
 deploy — artifacts promote through the Fleet Manager; frames never resolve dependencies.
+
+**The upstream review ledger is detection, and it gates a release rather than a build**
+(decision 54). `upstream-review.json` at the repository root records, for each chosen upstream
+version, what this project uses, what upstream was serving the last time a person looked, when
+they looked, and why they decided what they did. Five entries: the pinned base OS image, the
+pinned Immich Kiosk release, the two floating NuGet packages, and the .NET LTS band.
+`dotnet run --project tools/FrameLink.Upstream -- check` asks all four upstreams what they are
+serving now — the Raspberry Pi OS image directory, the GitHub release, the NuGet version index,
+the .NET release channel — and reports each entry as current, moved or unreachable.
+
+**No build, test or publish invokes it, and that is the point.** An upstream publishing something
+overnight must not interrupt ordinary work, so the probes live outside every automated path and a
+test asserts that no build file mentions the tool. What *does* run on every build is the offline
+half: the suite checks that the ledger is structurally sound and still describes the pins in
+source — that the base image pin, the target framework band and every `PackageReference` agree
+with it. That fails when a human changed one and forgot the other, which is a different failure
+from the one the operator refused.
+
+**Cutting a release**, therefore, is four steps and no ceremony beyond them:
+
+1. `check` — every entry current. Unreachable counts as not current: a release waits for an
+   answer rather than assuming one.
+2. Anything moved gets a decision. Re-pin deliberately, or upgrade the pin and validate against
+   the suite. Both end the same way, with `review <id> --seen <version> --note "<why>"`, which
+   stamps the day and rewrites the one entry.
+3. `dotnet run --project tests/FrameLink.Tests` — green, with nothing skipped (§7.2).
+4. Build and publish the version. The commit carrying the ledger *is* the release record; there
+   is no second store of what was reviewed when.
+
+**Debian package versions are deliberately out of scope.** The apt resources are meant to move
+forward on their own under security updates, and the Fleet Manager records the versions it finds
+on each frame as inventory. Inventory is not a chosen version, and an entry per Debian package
+would put a value that changes weekly in front of a gate that runs once per release — which is
+how a gate stops being performed. The ledger has no probe kind that could answer for one, so
+widening it is a deliberate edit rather than a convenience somebody reaches for.
 
 **The base OS image is a dependency like any other, and a stricter one.** §3.9's generator builds
 on `2026-06-18-raspios-trixie-arm64-lite.img`, and "everything floats" does not extend to it: the
 artifact is 2.8 GB of somebody else's filesystem, it is written to a card, and it boots. So it is
 pinned by URL, by the digest Raspberry Pi Ltd publishes beside the archive, by the digest of the
 decompressed image and by exact byte length, all in source where a change is a reviewable diff,
-and the generator verifies the file before touching it. Verified 2026-08-15 @ 2026-06-18. When the
-`upstream-review.json` ledger above lands, this pin belongs in it on the same terms as everything
-else; until then the record is the source file and this stamp.
+and the generator verifies the file before touching it. Verified 2026-08-15 @ 2026-06-18, and that
+review is now the ledger's `raspios-lite-arm64` entry, tied to the pin by a test so the two cannot
+part company. Upstream publishes each image under a directory dated a day after the image itself,
+so the entry's two versions differ by that day permanently rather than by accident.
 
 ### 7.2 Testing doctrine
 
@@ -1039,6 +1073,7 @@ The record of *what was decided and why*, in the order decided.
 | 51 | Countdown scope | The countdown applies to **drift repair, not to initial provisioning** (§2.7). It does not supersede decision 48 — that chain still decides *how long*; this decides *whether at all*. §2.7's reason for the pause is a viewer in front of a working frame reading what a repair is about to do before it takes their photos away, and initial provisioning has no viewer and no product to interrupt: the frame has never displayed anything and nobody is standing there. At decision 48's 60 s that pause costs 79 minutes across 79 resources against 29 minutes of measured reboot — three quarters of a bare provision spent waiting for nobody. So a frame that has never reached `InSync` reboots as soon as a resource is applied; once it has been green, every later repair pauses in full. The condition is durable state — first-green is written to the progress journal beside the attempt ledger (§2.1), never inferred from the link, the hub or anything else that resets at boot — and it is never cleared. `--development` is unaffected and still forces 0, which is what covers the mule *after* its first convergence, since by this decision it is then a frame that has been green. One function decides it, so reverting is one edit |
 | 52 | Image generation, again | **In v2, as §3.9 and milestone M2.5. Supersedes decision 32**, which stays above as history. What deferred it was an assumed blocker that does not exist: writing into an arm64 ext4 filesystem was taken to need privilege, loop devices and emulation, and measured against the real `2026-06-18-raspios-trixie-arm64-lite.img` in a plain `debian:trixie-slim` container with no `--privileged`, no `--cap-add` and no device mapping, `debugfs` and `mtools` do the whole job and `e2fsck -fn` calls the result clean — while `mount -o loop` fails in that same container, which is what proves loopback was never involved. It is 2 MB of packages editing a file, so an amd64 Fleet Manager writes an arm64 image with no emulation at all. **Tier C — a real ~500 MB image — over the cheaper tiers**, even though decision 32's literal wording ("URL, Wi-Fi and settings pre-seeded") is already satisfied by a ~2 KB boot-partition file, because §2.8 serves the binary over versionless HTTPS and §4.3 already accepts that file. The cheaper tiers all leave the operator flashing a stock image and mounting a card; tier C is flash-and-go, and it is what makes the milestone pay for the migration phase behind it. **Tier D — one image per frame — is refused on principle**, not on cost: a per-device image is exactly where identity gets pre-seeded and decision 17 dies. The image carries the binary, the unit, the enable symlink and `control-url=`, and it carries **no token, key or adoption credential** — the request type has two fields and both are URLs. The base image becomes a pinned upstream dependency under §7.1, verified by digest before the generator touches it, and `e2fsck -fn` gates every artifact because `debugfs -R` exits 0 on failure and `debugfs mkdir` on an existing directory corrupts the filesystem while doing so. **Not delivered and named as such:** Wi-Fi seeding, which needs `custom.toml` and a wireless regulatory country to work at all, and a card flashed from a generated image and booted, which is M2.5's acceptance test |
 | 53 | Provisioning pace | A fleet setting, **`provisioning.paceSeconds`, default 0** (§2.7, §3.4). Decision 51 cut a bare provision from ~108 minutes to ~30 by taking the countdown away from it, and removed with it the only thing that let a person *watch* one happen — 79 screens now paint at machine speed. This gives the watching back as an option and never as a default: at 0 the behaviour decision 51 left is exactly unchanged, and raising it inserts before each provisioning reboot the same pause `repair.countdownSeconds` inserts before a repair's. **The sibling of that setting, not a second mechanism beside it** — one function, `CountdownScope.ForReboot`, takes both durations and the durable first-green field decides which applies, so the "Reboot now" skip, the narration and the screen work on a paced provision with no new code, and reverting is still one edit. Opposite fallbacks for a mistyped value, deliberately: the countdown falls back to 60 s because a typo must not silently remove the one pause a person has to read a repair, and the pace falls back to 0 because a typo must not silently add an hour and a half to a provision nobody is watching. `--development` is unaffected and still forces 0 for both — a binary switch, not a setting |
+| 54 | Upstream review ledger | **Detection at release time, never a build failure** (§7.1). §7.1 had described `upstream-review.json` as a marker test that fails the build when it resolves something newer than the last review. It was never built, and the operator changed what it should do before it was: *"I do not want the build to fail. I just want a detection and then a pin decision or an upgrade + test validation before we cut a release."* So the ledger records, per chosen version, what this project uses, what upstream was serving when somebody last looked, and why they decided what they did — five entries covering the pinned base OS image, the pinned Immich Kiosk release, the two floating NuGet packages and the .NET LTS band — and `tools/FrameLink.Upstream` probes all four upstreams on demand. **No build, test or publish invokes it**, which a test asserts over the build files; what runs on every build is only the offline agreement between the ledger and the pins in source, so a red test means a human changed one and forgot the other, never that somebody else shipped a release overnight. **Cutting a release** is four steps: `check` reports every entry current (unreachable counts as not current — a release waits for an answer rather than assuming one), anything moved gets re-pinned deliberately or upgraded and validated, both recorded by the same one-line `review` command; the suite is green with nothing skipped; then the version is built, and the commit carrying the ledger *is* the release record, because a one-operator project does not need a second store of what was reviewed when. **Debian package versions stay out of scope**: they are meant to move forward on their own under security updates and the Fleet Manager records what it finds as inventory, so a ledger entry per package would put a weekly value in front of a once-per-release gate — there is deliberately no probe kind that could answer for one |
 
 ## Appendix B — Open items
 
