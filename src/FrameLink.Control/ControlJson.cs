@@ -34,5 +34,7 @@ namespace FrameLink.Control;
 [JsonSerializable(typeof(DeviceSettingsResponse))]
 [JsonSerializable(typeof(DeviceReconcileResponse))]
 [JsonSerializable(typeof(DeviceEventsResponse))]
+[JsonSerializable(typeof(ImageRequest))]
+[JsonSerializable(typeof(ImageStatusResponse))]
 [JsonSerializable(typeof(ApiError))]
 public sealed partial class ControlJson : JsonSerializerContext;

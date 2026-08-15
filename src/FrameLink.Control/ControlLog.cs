@@ -167,4 +167,32 @@ internal static partial class ControlLog
         Level = LogLevel.Warning,
         Message = "Could not read the version sidecar at {Path}.")]
     public static partial void ReleaseVersionUnreadable(this ILogger logger, Exception exception, string path);
+
+    [LoggerMessage(
+        EventId = 1700,
+        Level = LogLevel.Warning,
+        Message = "Refusing to build an image from {Path}: {Problem}")]
+    public static partial void BaseImageRejected(this ILogger logger, string path, string problem);
+
+    [LoggerMessage(
+        EventId = 1701,
+        Level = LogLevel.Error,
+        Message = "Image build stopped at '{Step}': {Problem} Nothing was published.")]
+    public static partial void ImageStepFailed(this ILogger logger, string step, string problem);
+
+    [LoggerMessage(
+        EventId = 1702,
+        Level = LogLevel.Information,
+        Message = "Built {FileName} (sha256 {Sha256}) seeded with {ControlUrl}.")]
+    public static partial void ImageBuilt(
+        this ILogger logger,
+        string fileName,
+        string sha256,
+        string controlUrl);
+
+    [LoggerMessage(
+        EventId = 1703,
+        Level = LogLevel.Error,
+        Message = "An image build faulted. Nothing was published.")]
+    public static partial void ImageBuildFaulted(this ILogger logger, Exception exception);
 }

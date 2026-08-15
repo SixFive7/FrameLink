@@ -552,6 +552,112 @@ via declared pinholes.
 ⚠ **Authelia cannot sit in front of the agent route** — machine-to-machine, no interactive SSO.
 GUI routes behind Authelia; `/agent` authenticated by device keypair instead.
 
+### 3.9 Image generation
+
+The Fleet Manager turns a pinned stock Raspberry Pi OS image into a **ready-to-flash FrameLink
+image**: flash it, put the card in a frame, and the frame appears in the adoption queue with
+nobody having typed anything. It sits logically *before* §3.3 — it is how a frame comes to be
+pointed at a control URL in the first place — and is numbered last only because renumbering five
+sections and their cross-references costs more than it explains.
+
+**The assumed blocker does not exist, and that is what moved this out of v3.** The reason to
+defer was always that writing into an arm64 ext4 filesystem meant privilege, loop devices and
+emulation, none of which belongs in a self-hoster's container. Measured against the real
+`2026-06-18-raspios-trixie-arm64-lite.img` in a plain `debian:trixie-slim` container with **no
+`--privileged`, no `--cap-add` and no device mapping**: `debugfs` writes the binary, sets its mode
+and owner and creates the enable symlink; `mcopy` writes the boot-partition file; `e2fsck -fn`
+calls the result clean. `mount -o loop` **fails** in that same container, which is the proof that
+loopback was never involved. It is `e2fsprogs` (1537 kB installed) and `mtools` (400 kB) editing a
+file. Because it is file manipulation and not execution, an **amd64** Fleet Manager writes an
+**arm64** image with no qemu, no binfmt and no emulation anywhere in the path.
+
+**What a generated image carries**, and the list is exhaustive:
+
+| In the image | Where | Why |
+|---|---|---|
+| The `fl-agent` binary | `/usr/local/bin/fl-agent`, **0755 root:root** | The one the Fleet Manager serves, so §1.2 principle 4's version-lock holds from the first boot |
+| Its systemd unit | `/etc/systemd/system/fl-agent.service`, 0644 root:root | Byte-identical to the agent's own embedded copy — the Fleet Manager embeds *that file*, not a copy of it |
+| The enable symlink | `/etc/systemd/system/multi-user.target.wants/fl-agent.service` | Enablement is not a database, it is this symlink; it lands beside the stock `userconfig.service` |
+| The discovery seed | `/boot/firmware/framelink.conf` with `control-url=` | §4.3's boot-partition candidate, parsed by the agent's own `BootFileEndpointSource` |
+
+**And what it must never carry.** Decision 17 — "generic image, no secrets" — is the constraint
+this capability is most likely to violate by being helpful. Pre-seeding a device token so the
+frame arrives already adopted is not a shortcut through enrollment, it is the destruction of it:
+identity is the keypair the agent generates on its own first boot, and adoption is a human
+pressing **Adopt**. The request type therefore has exactly two fields and both are URLs, so there
+is nowhere to put a credential — widening it is a review a person performs, not a line somebody
+adds. The two ways a secret could still ride in on a URL are refused explicitly: **user
+information** (`https://token@host/`) and **a query or fragment** (`?adopt=…`). Control characters
+are refused too, because the seed is a `key=value` file and a newline in a value does not corrupt
+it, it appends a line to it. One image serves the whole fleet, which is also what keeps the
+storage cost to one artifact rather than one per frame.
+
+**The base image is an upstream dependency and §7.1 freezes it.** Its URL, the digest Raspberry Pi
+Ltd publishes beside the archive, the digest of the decompressed image, and its exact byte length
+are all pinned in source where changing them is a diff somebody reviews, and the generator
+verifies length and digest **before it touches the file**. Silently building on whatever the
+mirror serves today would mean shipping cards made from an image nobody looked at. The pin also
+records the measured partition offsets — never used as an input, since the real ones are read from
+the image's own partition table every time, but cross-checked against it, so a pin updated with a
+new digest and stale geometry is caught by the server rather than by somebody holding a card.
+
+**`e2fsck -fn` before the artifact is offered, and the reason is measured.** `debugfs -R` **exits
+0 when the request fails.** A missing parent directory, an existing target, a forgotten `-w`, an
+offset past the end of the file — every one of them prints a message and exits 0. A generator that
+trusted the exit code would write the seed file, silently fail to install the agent, pass its own
+checks and hand somebody a card that boots into stock Raspberry Pi OS. So success is read from the
+output against a whitelist of the two benign lines, an unrecognised message is a refusal, and the
+read-only filesystem check is the last step of every build — the artifact filename is unreachable
+except through it. Worse than a wasted call: `debugfs mkdir` on a directory that already exists
+allocates the inode *before* noticing the name is taken and abandons it, leaving a filesystem
+`e2fsck` reports as corrupt while `debugfs` exits 0. The generator therefore contains **no
+`mkdir`** at all; all three directories it writes into exist in the pinned image, which is a fact
+because the pin is verified first. The failure being designed against is not an untidy server, it
+is a person driving to a house with a card that does not boot.
+
+**Why a whole image, and what the cheaper tiers would have bought.** Four shapes were costed.
+Decision 32's *literal* wording — "ready-to-flash, with URL, Wi-Fi and settings pre-seeded" — is
+already satisfied by tier A, because §2.8 has the Fleet Manager serving the agent binary over
+versionless HTTPS and §4.3 already accepts a boot-partition file. That is worth stating plainly so
+the choice stays legible.
+
+| Tier | Artifact | Buys | Does not buy |
+|---|---|---|---|
+| **A** | ~2 KB `framelink.conf` | Satisfies decision 32's wording at zero cost and no new dependency | Operator still flashes a stock image, finds the boot partition and drops a file on it; the agent must still be fetched over the network before anything happens |
+| **B** | ~1.4 MB overlay — seed + binary + unit | Removes the first-boot network dependency | Still a stock flash first, still a mounted card, and now a second thing to keep in step with the served binary |
+| **C** | **~500 MB compressed / 2.98 GB raw image** ✅ | Flash and go. Nothing to mount, nothing to type, no first-boot fetch, one artifact for the whole fleet. Also retires §5.3's "pre-flash spare cards with SSH enabled" prep and makes §5.5's card-swap recovery a swap rather than a flashing session | Free. ~6 GB of disk on the operator's server at rest and ~9 GB while building (below) |
+| **D** | One image per frame | Nothing that C does not | Would put identity in the image, which is where decision 17 dies. Refused on principle, not on cost |
+
+**⚠ The storage requirement is genuinely unbudgeted.** §3.1 specifies one container and one
+volume, sized in the reasoning for a SQLite file, and does not account for a 2.98 GB base image
+plus a working copy plus an artifact. That is stated here rather than left to surface as a full
+disk that takes the database down with it. Three mitigations, all implemented: the image directory
+is separately configurable (`FRAMELINK_IMAGE_DIR`) so it can be pointed at another volume; a
+free-space check runs **before** anything is copied and refuses with the required and available
+figures rather than half-writing an image; and exactly one build runs at a time, with the finished
+image published by a rename inside the same directory, so peak usage is the base image, one
+working copy and one previous artifact — roughly 9 GB — rather than an unbounded pile.
+
+**Operator-facing shape:** three routes under `/api`, so the operator password guards them with no
+special case. Read the state, ask for a build, take the file. Builds are asynchronous because they
+are minutes of copying and checking, and a request held open for minutes is one some proxy will
+eventually drop; a second request while one is running is answered rather than queued.
+
+**⚠ Two things this does not yet do, named rather than implied.**
+
+1. **Wi-Fi is not seeded**, although decision 32's wording included it. The vendor's supported
+   channel is `/boot/firmware/custom.toml`, which also governs first-boot user creation, hostname
+   and SSH, so a partial one changes first-boot behaviour in ways nothing short of flashing a card
+   can confirm. And on Bookworm and later the WLAN interface stays rfkill-soft-blocked until a
+   wireless regulatory country is set, so a NetworkManager keyfile alone is a seed that looks
+   right and never associates. Adding a `[wlan]` section to a generated `custom.toml` is the shape
+   that will work; it needs a card and a boot to prove.
+2. **No card has been flashed from a generated image and booted.** Everything above is verified —
+   the real image, the real tools, unprivileged, as a non-root user, `e2fsck` clean, the binary at
+   0755 root:root, the unit byte-identical, the symlink beside `userconfig.service` — but
+   verification stops at the filesystem. The first flash is the acceptance test for M2.5 (§5.1),
+   and §5.3 already lists an SD card reader as **not attached**.
+
 ---
 
 ## 4. Protocol
@@ -609,6 +715,7 @@ close it, and the honest limits are stated rather than glossed.
 | **M0** | **Autonomy harness** | A code change reaches the mule and is verified with no human help: build path, deploy script, power-cycle control, screenshot + journal collection, resumable progress file, test runner. |
 | **M1** | **Walking skeleton** | Agent connects → appears pending → adopted in the GUI → reconciles one trivial resource → self-updates from the Fleet Manager. Every *integration* risk retired at once. |
 | **M2** | **Reconciler engine** | DAG, status vocabulary, retry/backoff, reboot-verified apply, escalation ladder, live telemetry, console and browser narration. |
+| **M2.5** | **Image generation** | A card flashed from a Fleet-Manager-generated image boots, starts the agent unattended, and appears in the adoption queue (§3.9). |
 | **M3…Mn** | **Resource migration** | Guide by guide, lowest-risk first, firmware DFU last. Each group passes the triple bar: state-diff vs the frozen v1 reference, checkpoint assertions, validation battery on the mule. |
 | **Mn+1** | **Bundled LiveKit** | Fleet Manager supervises LiveKit and mints tokens at adoption; guide 7 obsolete. |
 | **Mn+2** | **Production Fleet Manager** | Deployed as a PortainerCompose stack behind Traefik at `framelink.huisman.io`, with alerting. |
@@ -618,6 +725,27 @@ close it, and the honest limits are stated rather than glossed.
 AOT on arm64, the update path, the frozen handshake, adoption, socket liveness. None are hard
 once proven and all are miserable to discover late underneath a finished reconciler. After M1
 the work becomes pleasantly repetitive: add one resource, verify on the mule, repeat.
+
+**Why image generation sits between M2 and the migration, and not at the end.** Its dependencies
+are already paid for: it needs an agent binary the Fleet Manager serves (M1), the boot-partition
+discovery candidate (§4.3, M1) and the unit (M1). It needs **nothing** from LiveKit (Mn+1) or from
+the production deployment (Mn+2), and it does not need the reconciler to be finished — a generated
+image's whole job is to get `fl-agent` running and pointed at a Fleet Manager, and whatever the
+reconciler can do at that moment is what it does. So it *could* go almost anywhere, and where it
+goes is decided by what it pays for rather than by what it needs.
+
+What it pays for is M3…Mn, which is by far the longest phase and the one that wipes and re-flashes
+the mule repeatedly — §5.3 already budgets spare cards on exactly that expectation. Ahead of the
+migration, every one of those cycles becomes flash-and-walk-away instead of flash-then-provision-by-hand,
+§5.3's "pre-flash stock cards with SSH enabled" preparation stops being a manual step, and §5.5's
+card-swap recovery path stops requiring a flashing session. Put after the migration, it would
+deliver the same capability having saved none of that. The half-milestone number is deliberate: it
+renumbers nothing, because M3…Mn, Mn+1 and Mn+2 are referenced from other sections and from other
+workstreams' notes.
+
+It is also the smallest milestone here, and the one whose acceptance test is a single physical
+act — flash a card, watch a row appear — which is why it is worth doing while the thing it
+accelerates is still ahead rather than behind.
 
 ### 5.2 Build path
 
@@ -741,6 +869,15 @@ something newer than the last review.
 **Fleet synthesis:** aggressive at build, gated at release (mule + test suite), frozen at
 deploy — artifacts promote through the Fleet Manager; frames never resolve dependencies.
 
+**The base OS image is a dependency like any other, and a stricter one.** §3.9's generator builds
+on `2026-06-18-raspios-trixie-arm64-lite.img`, and "everything floats" does not extend to it: the
+artifact is 2.8 GB of somebody else's filesystem, it is written to a card, and it boots. So it is
+pinned by URL, by the digest Raspberry Pi Ltd publishes beside the archive, by the digest of the
+decompressed image and by exact byte length, all in source where a change is a reviewable diff,
+and the generator verifies the file before touching it. Verified 2026-08-15 @ 2026-06-18. When the
+`upstream-review.json` ledger above lands, this pin belongs in it on the same terms as everything
+else; until then the record is the source file and this stamp.
+
 ### 7.2 Testing doctrine
 
 The suite is the only gate between a change and a release. Every behaviour change ships with
@@ -760,6 +897,17 @@ Verified facts: **sole authorship** (42/42 commits), so relicensing forward is u
 **Previously published versions stay EUPL-1.2** — that grant is irrevocable for released
 commits, which is worth stating plainly rather than implying withdrawal. **Vendored assets keep
 their own licences** (`lit` BSD-3-Clause, `livekit-client` Apache-2.0).
+
+**§3.9 makes every self-hoster a redistributor of Raspberry Pi OS**, and that is worth naming
+rather than assuming. A generated image is Raspberry Pi OS with four files added, and the
+redistribution is performed by each operator's own Fleet Manager, not by this project — nothing in
+this repository contains a byte of it. Raspberry Pi OS is freely redistributable, and it is a
+Debian derivative: the great majority is GPL/LGPL and other free licences whose source obligations
+Debian and Raspberry Pi Ltd already discharge through their own archives, alongside a small set of
+non-free firmware and the `raspberrypi-sys-mods` licence terms that permit redistribution of the
+image as supplied. The practical consequence for FrameLink is narrow and is what the notice
+records: the base image is named, its origin URL and digests are pinned (§7.1), and it is listed in
+`THIRD-PARTY-NOTICES.md` as software this project neither contains nor relicenses.
 
 Execution checklist, not yet performed:
 
@@ -790,8 +938,6 @@ E2E testing begins.
 
 - **Fleet Manager MCP server** — the operator's local AI agent talking straight through to one
   or many devices via the shell channel.
-- **SD image generation from the Fleet Manager** — ready-to-flash, with URL, Wi-Fi and settings
-  pre-seeded.
 - **Camera privacy** — an on-screen live-camera indicator, and a physical shutter as an
   enclosure design requirement.
 - **Fleet Manager credential management and single sign-on** (multi-user, roles, SSO).
@@ -806,9 +952,13 @@ E2E testing begins.
   [7](docs/7-livekit-server.md) and [8](docs/8-webrtc-validation.md) install the LiveKit CLI with
   the same `winget` line, the only Windows-only command in any guide. The harness under
   `tools/harness/` is already portable and no operator runs it, so it is the smallest part of
-  this. **SD image generation** above (decision 32) may deliver most of the rest on its own: hand
-  someone a ready-to-flash file and their workstation's OS stops mattering. ⚠ Until then, a
-  household with no Windows machine has no supported path through the guides.
+  this. **Image generation is no longer part of this item** — it moved into v2 as §3.9 and
+  milestone M2.5 (decision 52), and it delivers most of the rest on its own: hand someone a
+  ready-to-flash file and their workstation's OS stops mattering, since flashing it needs no
+  Imager customisation and no mounted boot partition. What is left here is the guides themselves —
+  guide 2's thirteen Windows screenshots and the two `winget` lines. ⚠ Until those are re-shot, a
+  household with no Windows machine still has no supported path through the *guides*, even though
+  it now has one through the product.
 
 **Guide fate at parity:** after deep, triple-checked verification the guides shrink to hardware
 assembly, Raspberry Pi OS install, agent install, and Fleet Manager container setup. Everything
@@ -853,7 +1003,7 @@ The record of *what was decided and why*, in the order decided.
 | 29 | Visual bar | Beautiful and richly animated on both surfaces |
 | 30 | Network onboarding | Install-time precondition check; no Wi-Fi UI in v2 |
 | 31 | Disaster recovery | No backup subsystem; recovery is re-adoption |
-| 32 | Image generation | v3 |
+| 32 | Image generation | v3 — **superseded by decision 52**, kept here as the record of what was decided first |
 | 33 | Visual direction | Free rein, documented, one language for both |
 | 34 | Adoption | A reconciled resource; an unadopted frame runs no product |
 | 35 | Settings model | Everything fleet-managed: fleet default + per-device override |
@@ -873,6 +1023,7 @@ The record of *what was decided and why*, in the order decided.
 | 49 | Halt scope | `Halted` is **device-level, not resource-level**. One resource exhausting its escalation budget stops the loop touching *everything* on that device — including resources ordered ahead of the halted one, and across process restarts. Continuing to reboot a frame an administrator has been told about twice is the same damage under another resource's name |
 | 50 | Display granularity | The display is **two resources**, panel overlay and console rotation, so a dark panel and a sideways one are different diagnoses (§2.2). The dependency runs one way only — rotation depends on the overlay, never the reverse — so a failed cosmetic rotation can never keep the panel dark or mark it `Blocked`. A sideways console is a strictly better state than a dark one, which is what makes the split affordable under decision 46's early scheduling |
 | 51 | Countdown scope | The countdown applies to **drift repair, not to initial provisioning** (§2.7). It does not supersede decision 48 — that chain still decides *how long*; this decides *whether at all*. §2.7's reason for the pause is a viewer in front of a working frame reading what a repair is about to do before it takes their photos away, and initial provisioning has no viewer and no product to interrupt: the frame has never displayed anything and nobody is standing there. At decision 48's 60 s that pause costs 79 minutes across 79 resources against 29 minutes of measured reboot — three quarters of a bare provision spent waiting for nobody. So a frame that has never reached `InSync` reboots as soon as a resource is applied; once it has been green, every later repair pauses in full. The condition is durable state — first-green is written to the progress journal beside the attempt ledger (§2.1), never inferred from the link, the hub or anything else that resets at boot — and it is never cleared. `--development` is unaffected and still forces 0, which is what covers the mule *after* its first convergence, since by this decision it is then a frame that has been green. One function decides it, so reverting is one edit |
+| 52 | Image generation, again | **In v2, as §3.9 and milestone M2.5. Supersedes decision 32**, which stays above as history. What deferred it was an assumed blocker that does not exist: writing into an arm64 ext4 filesystem was taken to need privilege, loop devices and emulation, and measured against the real `2026-06-18-raspios-trixie-arm64-lite.img` in a plain `debian:trixie-slim` container with no `--privileged`, no `--cap-add` and no device mapping, `debugfs` and `mtools` do the whole job and `e2fsck -fn` calls the result clean — while `mount -o loop` fails in that same container, which is what proves loopback was never involved. It is 2 MB of packages editing a file, so an amd64 Fleet Manager writes an arm64 image with no emulation at all. **Tier C — a real ~500 MB image — over the cheaper tiers**, even though decision 32's literal wording ("URL, Wi-Fi and settings pre-seeded") is already satisfied by a ~2 KB boot-partition file, because §2.8 serves the binary over versionless HTTPS and §4.3 already accepts that file. The cheaper tiers all leave the operator flashing a stock image and mounting a card; tier C is flash-and-go, and it is what makes the milestone pay for the migration phase behind it. **Tier D — one image per frame — is refused on principle**, not on cost: a per-device image is exactly where identity gets pre-seeded and decision 17 dies. The image carries the binary, the unit, the enable symlink and `control-url=`, and it carries **no token, key or adoption credential** — the request type has two fields and both are URLs. The base image becomes a pinned upstream dependency under §7.1, verified by digest before the generator touches it, and `e2fsck -fn` gates every artifact because `debugfs -R` exits 0 on failure and `debugfs mkdir` on an existing directory corrupts the filesystem while doing so. **Not delivered and named as such:** Wi-Fi seeding, which needs `custom.toml` and a wireless regulatory country to work at all, and a card flashed from a generated image and booted, which is M2.5's acceptance test |
 
 ## Appendix B — Open items
 

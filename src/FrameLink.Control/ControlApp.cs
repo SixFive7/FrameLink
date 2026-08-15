@@ -2,6 +2,7 @@ using System.Net;
 using FrameLink.Control.Agent;
 using FrameLink.Control.Endpoints;
 using FrameLink.Control.Authentication;
+using FrameLink.Control.Imaging;
 using FrameLink.Control.Storage;
 using FrameLink.Control.Updates;
 using FrameLink.Protocol;
@@ -66,6 +67,15 @@ public static class ControlApp
         builder.Services.AddSingleton<AgentConnectionRegistry>();
         builder.Services.AddSingleton<RegistrationRateLimiter>();
         builder.Services.AddSingleton<AgentReleaseCatalog>();
+
+        // §3.9. The tool runner and the storage probe are the two places this capability touches
+        // the machine rather than a file it owns, so both are interfaces — which is what lets the
+        // suite drive a full disk and a refusing debugfs on a workstation that has neither.
+        builder.Services.AddSingleton<IImageToolRunner, ProcessImageToolRunner>();
+        builder.Services.AddSingleton<IStorageProbe, DriveStorageProbe>();
+        builder.Services.AddSingleton<ImageBuilder>();
+        builder.Services.AddSingleton<ImageBuildService>();
+
         builder.Services.AddSingleton<SettingsPublisher>();
         builder.Services.AddSingleton<DeviceHandshake>();
         builder.Services.AddSingleton<TelemetryIngest>();
@@ -120,6 +130,7 @@ public static class ControlApp
 
         app.MapAgentEndpoints();
         app.MapOperatorEndpoints();
+        app.MapImageEndpoints();
         app.MapGuiEndpoints();
 
         return app;

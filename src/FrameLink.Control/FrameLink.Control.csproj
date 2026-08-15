@@ -45,6 +45,24 @@
   </ItemGroup>
 
   <!--
+    §3.9's image generator writes /etc/systemd/system/fl-agent.service into a generated image, so
+    this project needs the unit text. It links the AGENT'S file rather than taking a copy: same
+    bytes on disk, one editor, drift structurally impossible.
+
+    The unit already lives in two committed places (the agent's embedded resource and the
+    harness's deploy asset) held equal by AgentSystemdUnitTests, because nothing hands one
+    artifact to both. A third copy would have been a third chance for a frame to run a unit its
+    neighbour does not. This is not a copy — note there is no Link metadata and no file under
+    this project directory; the path reaches across, and MSBuild embeds what it finds there.
+
+    LogicalName matches the agent's, so AgentUnitText.Read() and UnitInstaller.ReadUnit() name the
+    same resource in their own assemblies.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\FrameLink.Agent\Systemd\fl-agent.service" LogicalName="fl-agent.service" />
+  </ItemGroup>
+
+  <!--
     ══ The GUI is part of the build ═════════════════════════════════════════════════════════
 
     `wwwroot` is a committed build artifact — §3.1 ships one container with the Svelte output

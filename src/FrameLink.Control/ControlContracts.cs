@@ -196,6 +196,93 @@ public sealed record DeviceEventsResponse
     public required IReadOnlyList<DeviceEvent> Events { get; init; }
 }
 
+/// <summary>What the operator asks for when generating an image (§3.9).</summary>
+/// <remarks>
+/// Two URLs, and that is the entire request. There is nothing here to name a device, because a
+/// generated image is generic — one image serves the whole fleet, and identity is the keypair
+/// each frame generates on its own first boot (§3.3, decision 17). Anyone extending this record
+/// with a token, a key or a device id is undoing enrollment, not adding convenience.
+/// </remarks>
+public sealed record ImageRequest
+{
+    /// <summary>The public URL frames built from this image will dial.</summary>
+    public required string ControlUrl { get; init; }
+
+    /// <summary>An optional LAN address, tried after the public one (§4.3).</summary>
+    public string? LanUrl { get; init; }
+}
+
+/// <summary>The pinned upstream base image, as the console shows it (§7.1).</summary>
+public sealed record BaseImageView
+{
+    /// <summary>Upstream's release date.</summary>
+    public required string Release { get; init; }
+
+    /// <summary>The decompressed image's filename, which is what must be on disk.</summary>
+    public required string FileName { get; init; }
+
+    /// <summary>Where the published archive lives.</summary>
+    public required string ArchiveUrl { get; init; }
+
+    /// <summary>The digest published beside that archive.</summary>
+    public required string ArchiveSha256 { get; init; }
+
+    /// <summary>The digest of the decompressed image, which is what is verified before a build.</summary>
+    public required string ImageSha256 { get; init; }
+
+    /// <summary>Length of the decompressed image.</summary>
+    public required long ImageSizeBytes { get; init; }
+
+    /// <summary>When a human last reviewed this pin against upstream.</summary>
+    public required DateTimeOffset ReviewedUtc { get; init; }
+
+    /// <summary>Where the image is expected on disk.</summary>
+    public required string Directory { get; init; }
+
+    /// <summary>The one command that puts it there.</summary>
+    public required string PreparationCommand { get; init; }
+
+    /// <summary>
+    /// Null when a file of the right name and length is present, otherwise what is wrong.
+    /// </summary>
+    /// <remarks>
+    /// Name and length only. The digest is checked when a build starts, because hashing 2.8 GB
+    /// is not something a status route a console polls every few seconds may do.
+    /// </remarks>
+    public string? Problem { get; init; }
+}
+
+/// <summary>Everything the console renders for image generation (§3.9).</summary>
+public sealed record ImageStatusResponse
+{
+    /// <summary>The pinned base image and whether it is on disk.</summary>
+    public required BaseImageView Base { get; init; }
+
+    /// <summary>One of <c>Idle</c>, <c>Running</c>, <c>Succeeded</c>, <c>Failed</c>.</summary>
+    public required string State { get; init; }
+
+    /// <summary>The step under way, or the last one attempted.</summary>
+    public string? Step { get; init; }
+
+    /// <summary>When the current or last build started.</summary>
+    public DateTimeOffset? StartedUtc { get; init; }
+
+    /// <summary>When it finished.</summary>
+    public DateTimeOffset? CompletedUtc { get; init; }
+
+    /// <summary>Why it stopped, when it did.</summary>
+    public string? Problem { get; init; }
+
+    /// <summary>The machine-readable verdict of the last build.</summary>
+    public string? Result { get; init; }
+
+    /// <summary>The image on disk, when there is one.</summary>
+    public Imaging.ImageArtifact? Artifact { get; init; }
+
+    /// <summary>Whether a file is at the artifact path right now.</summary>
+    public required bool ArtifactAvailable { get; init; }
+}
+
 /// <summary>A refused request, in a shape the GUI can render.</summary>
 public sealed record ApiError
 {

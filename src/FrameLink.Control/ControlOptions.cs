@@ -15,11 +15,46 @@ namespace FrameLink.Control;
 /// </remarks>
 public sealed record ControlOptions
 {
+    private readonly string _imageDirectory = "";
+
     /// <summary>Directory holding the SQLite database. The volume-mapped path in Docker.</summary>
     public string DataDirectory { get; init; } = "/var/lib/fl-control";
 
     /// <summary>Where the served agent binaries live. A concurrent workstream fills it.</summary>
     public string ReleaseDirectory { get; init; } = "";
+
+    /// <summary>
+    /// Where the pinned base image is kept and generated images are written (§3.9).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Defaults inside the data directory, so a self-hoster who does nothing gets a working
+    /// setup on the one volume §3.1 already asks for. It is separately settable — and named
+    /// in the refusal an operator sees when space runs out — because §3.1's budget genuinely
+    /// does not cover this: a 2.8 GB base image, a 2.8 GB working copy and a 2.8 GB artifact
+    /// are three orders of magnitude more than a SQLite file, and a database sharing a volume
+    /// with a full disk is a worse failure than a refused image build.
+    /// </para>
+    /// <para>
+    /// The working copy is made <i>inside</i> this directory rather than in a temporary one, so
+    /// that publishing a finished image is a rename on the same filesystem rather than a second
+    /// 2.8 GB copy. Pointing this somewhere else therefore moves all three files together, which
+    /// is the only way the arithmetic stays true.
+    /// </para>
+    /// </remarks>
+    public string ImageDirectory
+    {
+        get => string.IsNullOrEmpty(_imageDirectory) ? Path.Combine(DataDirectory, "images") : _imageDirectory;
+        init => _imageDirectory = value ?? "";
+    }
+
+    /// <summary>Headroom demanded on top of one working copy before a build starts.</summary>
+    /// <remarks>
+    /// 256 MiB. The build itself needs exactly one image-sized copy, and this is what stops a
+    /// volume being taken to literally zero bytes free — which would take the SQLite database
+    /// down with it if the operator left both on the default volume.
+    /// </remarks>
+    public long ImageFreeSpaceSlackBytes { get; init; } = 256L * 1024 * 1024;
 
     /// <summary>
     /// Proxy addresses whose <c>X-Forwarded-For</c> is believed.
@@ -108,6 +143,7 @@ public sealed record ControlOptions
         {
             DataDirectory = Read("FRAMELINK_DATA_DIR") ?? defaults.DataDirectory,
             ReleaseDirectory = Read("FRAMELINK_RELEASE_DIR") ?? LocateReleaseDirectory(),
+            ImageDirectory = Read("FRAMELINK_IMAGE_DIR") ?? "",
             TrustedProxies = (Read("FRAMELINK_TRUSTED_PROXIES") ?? string.Empty)
                 .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             PendingDeviceCap = ReadInt("FRAMELINK_PENDING_CAP", defaults.PendingDeviceCap),

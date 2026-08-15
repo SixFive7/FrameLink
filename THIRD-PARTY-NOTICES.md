@@ -6,6 +6,8 @@ This file lists every such file, what it is, where it came from, and under which
 
 Versions below were verified against the files themselves and against the upstream package registry on **2026-08-15**. Where a version is embedded in the vendored file, the notice says where to find it, so a future reader can re-check rather than trust this page.
 
+One entry is not about a file in this repository at all. FrameLink's Fleet Manager can *generate* a modified Raspberry Pi OS image, and that is a redistribution performed by whoever runs the Fleet Manager. It has [its own section](#raspberry-pi-os-and-images-generated-from-it) because getting that right matters even though no byte of it is stored here.
+
 ## Vendored JavaScript libraries
 
 Both files live in `app/vendor/` and are pre-built, minified distributions taken from the publishers' own CDN releases. Neither has been modified.
@@ -72,7 +74,30 @@ The following are fetched from their own publishers at install or run time. No c
 |---|---|---|
 | [Immich Kiosk](https://github.com/damongolding/immich-kiosk) | AGPL-3.0 | Pulled as the published container image pinned in `deploy/immich-kiosk/compose.yaml` (v2 will fetch the pinned upstream binary release and verify its checksum instead). Fetching from upstream rather than redistributing is deliberate: it keeps AGPL source-offer obligations with the publisher, off this project and off every self-hoster. |
 | [LiveKit server](https://github.com/livekit/livekit) | Apache-2.0 | Pulled as the pinned `livekit/livekit-server` container image by [guide 7](docs/7-livekit-server.md). |
-| Raspberry Pi OS Lite (Trixie / Debian 13), labwc, Chromium, PipeWire, libcamera, Docker | Various — as distributed by Debian and Raspberry Pi Ltd | Installed from the distribution's own package repositories by the build guides. |
+| labwc, Chromium, PipeWire, libcamera, Docker | Various — as distributed by Debian and Raspberry Pi Ltd | Installed from the distribution's own package repositories by the build guides. |
+| Raspberry Pi OS Lite (Trixie / Debian 13) | Various — see the section below | The operating system every frame runs, installed from Raspberry Pi Ltd's own download server. **The FrameLink Fleet Manager can also generate a modified copy of it**, which is a redistribution and has its own section below. |
+
+## Raspberry Pi OS, and images generated from it
+
+FrameLink v2's Fleet Manager can take a stock Raspberry Pi OS image and write four files into it — the `fl-agent` binary, its systemd unit, the symlink that enables that unit, and a `framelink.conf` naming the Fleet Manager — producing a ready-to-flash image (see §3.9 of the build specification). This section exists because that is a **redistribution of Raspberry Pi OS**, and it is worth being precise about who performs it and on what terms.
+
+| | |
+|---|---|
+| **Project** | [Raspberry Pi OS](https://www.raspberrypi.com/software/operating-systems/) Lite, 64-bit (Trixie / Debian 13), by Raspberry Pi Ltd |
+| **Pinned release** | `2026-06-18-raspios-trixie-arm64-lite.img.xz`, published 2026-06-19 |
+| **Obtained from** | [downloads.raspberrypi.com](https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-06-19/) |
+| **SHA-256 (published archive)** | `acff736ca7945e3b305f07cda4abdb870910e12634991da69783611756e381b3` — the value Raspberry Pi Ltd publishes in the `.sha256` sidecar beside the download |
+| **SHA-256 (decompressed image)** | `e235fd24fc5f039c08daba7d3abc04aecc7313f979d16d2a3fdad29dd44c33a9`, 2,977,955,840 bytes — measured here, because no vendor publishes it, and it is what the generator verifies before touching the file |
+| **Licence** | Not a single licence. Raspberry Pi OS is a Debian derivative: the great majority of it is GPL-2.0, GPL-3.0, LGPL, MIT, BSD and Apache-2.0, alongside a set of non-free Broadcom firmware and Raspberry Pi Ltd's own terms in `raspberrypi-sys-mods`. Every package carries its own licence text in `/usr/share/doc/<package>/copyright` inside the image itself. |
+| **Redistribution** | Permitted. Raspberry Pi Ltd distributes these images for exactly this purpose, and the copyleft source obligations for the Debian-derived majority are discharged by Debian's and Raspberry Pi Ltd's own source archives, which remain the authoritative source for anything in a generated image. |
+
+Three things follow, and all three matter more than the table:
+
+- **No copy of Raspberry Pi OS lives in this repository, and none ever will.** The image is fetched by the operator, verified against the digests above, and used as an input. The [FrameLink License](LICENSE) applies to the four files FrameLink adds and to nothing else in a generated image.
+- **The redistributor is each self-hoster, not this project.** FrameLink is self-hosted by design (§1.2 principle 1), so the program that produces a modified image runs on the operator's own server. If you hand a generated image to somebody else, you are the one distributing Raspberry Pi OS to them, on Raspberry Pi Ltd's terms and Debian's — not on FrameLink's.
+- **The pin is the point.** The release, the URL and both digests are recorded in the source that uses them, so a generated image can always be traced back to an exact upstream artifact. An image built from "whatever the mirror served that day" could not be.
+
+The `fl-agent` binary written into a generated image is FrameLink's own work and carries the [FrameLink License](LICENSE). It links only `libc` and `libm` from the base image.
 
 ## Corrections
 
