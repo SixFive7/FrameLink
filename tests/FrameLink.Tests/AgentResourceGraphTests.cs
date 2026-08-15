@@ -144,8 +144,10 @@ public sealed class AgentResourceGraphTests
         // open question 3's adopted reading deletes. Then eight of guide 6's sixteen, the other
         // eight being its seven apt packages and the running-command-line check already counted
         // above; and two from guide 11, which is all the device state that guide leaves behind
-        // once its daemon moves inside the agent.
-        Assert.Equal(61, graph.Count);
+        // once its daemon moves inside the agent. Then guide 9's whole block, which is eight —
+        // and eight is the entire guide, because three of its four steps installed Docker,
+        // described a container and started one.
+        Assert.Equal(69, graph.Count);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],
@@ -207,8 +209,14 @@ public sealed class AgentResourceGraphTests
         // And the slideshow URL is not, because its base is fixed and slideshow.interval has a
         // catalog default that is correct on an unadopted frame. Nor is the kiosk stack itself:
         // §2.7's browser stage has to be able to render the "adopt me" screen on exactly the frame
-        // that has not been adopted.
-        Assert.Empty(graph.Find("app.config.immich-kiosk-url")!.DependsOn);
+        // that has not been adopted. What it does depend on is the address it names, which is the
+        // one edge the catalog gives it.
+        Assert.Equal(
+            [KioskListenAddressResource.ResourceName],
+            graph.Find("app.config.immich-kiosk-url")!.DependsOn);
+        Assert.DoesNotContain(
+            AdoptionResource.ResourceName,
+            graph.Find("app.config.immich-kiosk-url")!.DependsOn);
         Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ChromiumKioskUnitResource.ResourceName)!.DependsOn);
         Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ConsoleAutologinResource.ResourceName)!.DependsOn);
     }

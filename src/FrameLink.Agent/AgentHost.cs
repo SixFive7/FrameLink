@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using FrameLink.Agent.Discovery;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Identity;
+using FrameLink.Agent.Kiosk;
 using FrameLink.Agent.Link;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
@@ -284,6 +285,24 @@ public sealed class AgentHost
         // exercise the whole path on a frame whose button is not fitted yet.
         using var simulatedPress = SimulatedPress(button);
 
+        // §2.1, decision 41: Immich Kiosk stays upstream and runs as a child of this process, which
+        // is what takes Docker off the frame. Created before the catalog because seven of guide 9's
+        // eight resources read this object — the paths it owns and the pid only it holds — and a
+        // second instance would be a second child nobody is supervising. Its settings are read from
+        // what the reconciler has *recorded*, not from what the Fleet Manager most recently said,
+        // so a settings push reaches the child through the resource that owns it (§2.6).
+        var kiosk = new KioskProcess(new KioskProcessServices
+        {
+            Store = store,
+            Clock = _clock,
+            Log = _log,
+            Interlock = interlock,
+            RecoveryDeadline = () => new SupervisionSettings(values).RecoveryDeadline,
+            Settings = () => KioskCatalog.SettingsFrom(
+                store,
+                Path.Combine(store.Root, KioskProcess.DirectoryName)),
+        });
+
         var loop = new ReconcileLoop(new ReconcileServices
         {
             Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
@@ -303,6 +322,9 @@ public sealed class AgentHost
                 FleetAnswer = () => _fleetAnswer,
                 DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
                 Button = button,
+                Kiosk = kiosk,
+                KioskDownload = new HttpKioskDownload(http, _log),
+                Permissions = PosixFilePermissions.Instance,
             }),
             Interlock = interlock,
             Journal = journal,
@@ -402,7 +424,7 @@ public sealed class AgentHost
         // exactly when no help is coming — and the inventory buffers on disk like everything else
         // on that channel (§4.1). The button in particular has to work with nothing reachable,
         // because pressing it is how somebody in this room starts a call.
-        var running = new List<Task>(8)
+        var running = new List<Task>(9)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
@@ -412,6 +434,14 @@ public sealed class AgentHost
             BrowserStageLoopAsync(browser, shutdown.Token),
             packages.RunAsync(shutdown.Token),
             button.RunAsync(shutdown.Token),
+
+            // Guide 9's `restart: always`, without Docker underneath it. It is not one of §2.10's
+            // four behaviours and deliberately not a fifth: the agent is this child's *parent*, so
+            // "it exited" is an event it is told about rather than a health symptom it has to
+            // infer. What it shares with §2.10 is the interlock, because the collision is identical
+            // — a reconcile pass landing between an exit and the relaunch would otherwise read a
+            // blink as drift and reboot the frame for it.
+            kiosk.RunAsync(shutdown.Token),
         };
 
         try

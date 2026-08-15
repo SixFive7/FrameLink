@@ -493,11 +493,10 @@ public static class AppConfigCatalog
             // The catalog gives this resource one dependency, `kiosk.listen-address`, and no
             // adoption edge — the base URL is fixed and `slideshow.interval` has a catalog default
             // that is correct before adoption, which is exactly the condition the catalog's
-            // dependsOn rule uses to decide the question. `kiosk.listen-address` belongs to the
-            // Immich Kiosk block and is not compiled in yet; the DAG refuses a dependency on
-            // something that does not exist — deliberately, since it could never be satisfied — so
-            // that edge arrives with that block rather than being approximated by a different one.
-            DependsOn = [],
+            // dependsOn rule uses to decide the question. The edge arrived with the Immich Kiosk
+            // block, as its absence here said it would: this URL names an address that has to be
+            // published before pointing the browser at it means anything.
+            DependsOn = [KioskListenAddressResource.ResourceName],
             Detected = "This frame does not know where to find its photos.",
             WhyItMatters = "The screen shows a spinner instead of the slideshow.",
             Gloss = "Telling this frame where its photo slideshow comes from.",

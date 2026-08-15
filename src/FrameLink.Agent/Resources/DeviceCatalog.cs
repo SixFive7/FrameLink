@@ -1,4 +1,5 @@
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Kiosk;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 
@@ -75,6 +76,34 @@ public sealed record DeviceCatalogContext
     /// the fault it would be on a frame rather than skipping itself.
     /// </remarks>
     public ButtonWatch? Button { get; init; }
+
+    /// <summary>
+    /// The Immich Kiosk child the agent supervises (guide 9), where one is running.
+    /// </summary>
+    /// <remarks>
+    /// Optional for the same reason <see cref="Button"/> is: it is a live object with a process
+    /// behind it, and a catalog is also built where there is no process to have. When it is absent
+    /// the block still builds — against a child that is simply never running — so the graph, the
+    /// dependency edges and the resource count stay assertable off a frame.
+    /// </remarks>
+    public KioskProcess? Kiosk { get; init; }
+
+    /// <summary>
+    /// How the pinned Immich Kiosk release is fetched (§2.1: fetched, never redistributed).
+    /// </summary>
+    /// <remarks>
+    /// Absent means <see cref="UnreachableKioskDownload"/>, so a catalog built off a frame reports
+    /// the fetch as unreachable rather than reaching the network from a test.
+    /// </remarks>
+    public IKioskDownload? KioskDownload { get; init; }
+
+    /// <summary>How files the agent creates are locked down.</summary>
+    /// <remarks>
+    /// Needed from the kiosk block onwards: the fetched executable has to carry the executable bit,
+    /// which is a mode the installer sets on the staging file <i>before</i> the rename, so that the
+    /// target is never briefly non-executable.
+    /// </remarks>
+    public IFilePermissions Permissions { get; init; } = PosixFilePermissions.Instance;
 }
 
 /// <summary>
@@ -149,6 +178,7 @@ public static class DeviceCatalog
             // only reaches a process through a *new login session*, so the membership has to be
             // right before the session that will carry it is created.
             new UserGroupsResource(context.Processes, context.Session),
+
             new ConsoleAutologinResource(
                 context.Files,
                 context.SystemControl,
@@ -242,11 +272,47 @@ public static class DeviceCatalog
             // because the unit reports `active` while the camera is dead.
             .. CameraChain(context),
 
+            // Positions 62–69, the head of the product layer: guide 9's whole block. This is where
+            // Docker leaves the frame — the Engine, the Compose plugin, containerd, the docker0
+            // bridge and docker-selfheal existed to keep one process running, and the agent is that
+            // process's parent instead. Ahead of app.config.* because app.config.immich-kiosk-url
+            // names the address kiosk.listen-address publishes.
+            .. KioskBlock(context),
+
             // The five values guide 10's config.json used to hold, now issued by the Fleet Manager
             // and recorded by the agent. Blocked behind adoption, because §3.3 gives a pending
             // device nothing.
             .. AppConfigCatalog.Build(context.Store, context.Values, context.Channel, context.Clock),
         ];
+    }
+
+    /// <summary>
+    /// Guide 9's eight resources, with the child and the installer they share.
+    /// </summary>
+    /// <remarks>
+    /// Extracted because seven of the eight need the same <see cref="KioskProcess"/> — the paths it
+    /// owns, and the pid it is the only holder of — and a second instance would be a second child
+    /// nobody is supervising.
+    /// </remarks>
+    private static IReadOnlyList<IResource> KioskBlock(DeviceCatalogContext context)
+    {
+        var kiosk = context.Kiosk ?? new KioskProcess(new KioskProcessServices
+        {
+            Store = context.Store,
+            Clock = context.Clock,
+            Log = context.Log,
+            Settings = () => KioskCatalog.SettingsFrom(
+                context.Store,
+                Path.Combine(context.Store.Root, KioskProcess.DirectoryName)),
+        });
+
+        var installer = new KioskInstaller(
+            kiosk.BinaryPath,
+            context.KioskDownload ?? UnreachableKioskDownload.Instance,
+            context.Permissions,
+            context.Log);
+
+        return KioskCatalog.Build(context with { Kiosk = kiosk }, installer);
     }
 
     /// <summary>

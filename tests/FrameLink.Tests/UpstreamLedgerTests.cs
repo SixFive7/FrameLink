@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using FrameLink.Agent.Kiosk;
 using FrameLink.Agent.Resources;
 using FrameLink.Control.Imaging;
 using FrameLink.Upstream;
@@ -84,6 +85,30 @@ public sealed class UpstreamLedgerTests
         // whoever next reads a report that says `using 2026-06-18  reviewed 2026-06-19`.
         Assert.NotEqual(entry.Pinned, entry.Reviewed.Upstream);
         Assert.Contains(entry.Reviewed.Upstream, BaseImagePin.Current.ArchiveUrl.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_immich_kiosk_pin_and_the_ledger_agree_on_the_release()
+    {
+        // The same tie the base image gets, for the same reason and one step further. §2.1 has the
+        // agent fetch this release over the network onto a frame and then run it, so "which version"
+        // is not a note in a document — it is a URL, two digests and a length that a frame acts on
+        // unattended. Two records of one decision that can disagree silently is worse than one.
+        var entry = Ledger.Find("immich-kiosk");
+        Assert.NotNull(entry);
+
+        Assert.Equal(KioskReleasePin.Current.Version, entry.Pinned);
+        Assert.Contains(KioskReleasePin.Current.Tag, KioskReleasePin.Current.ArchiveUrl.ToString(), StringComparison.Ordinal);
+        Assert.Contains(entry.Pinned, KioskReleasePin.Current.AssetFileName + KioskReleasePin.Current.ChecksumsUrl, StringComparison.Ordinal);
+
+        // The probe watches the same repository the pin fetches from, which is the only way a
+        // `check` run can answer for this entry at all.
+        Assert.Contains("damongolding/immich-kiosk", entry.Probe.Url!.ToString(), StringComparison.Ordinal);
+        Assert.Contains("damongolding/immich-kiosk", KioskReleasePin.Current.ArchiveUrl.ToString(), StringComparison.Ordinal);
+
+        // And the digest a human reviews against is in the note, so re-checking the pin is reading
+        // one field rather than reconstructing what was looked at.
+        Assert.Contains(KioskReleasePin.Current.ArchiveSha256, entry.Reviewed.Note, StringComparison.Ordinal);
     }
 
     [Fact]

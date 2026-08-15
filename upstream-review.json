@@ -38,7 +38,7 @@
     {
       "id": "immich-kiosk",
       "title": "Immich Kiosk - the slideshow the agent fetches and supervises (section 2.1, decision 41)",
-      "pinnedIn": "version2.md section 6.2",
+      "pinnedIn": "src/FrameLink.Agent/Kiosk/KioskRelease.cs",
       "pinned": "0.42.0",
       "probe": {
         "kind": "github-release",
@@ -48,7 +48,7 @@
         "utc": "2026-08-15",
         "upstream": "0.42.0",
         "verdict": "adopted",
-        "note": "Section 6.2 verified v0.42.0 on 2026-08-15 and the release probe still answers it. The kiosk.binary.pinned-release resource is not written yet, so this entry is where the chosen version lives until it is; v1's compose file still names 0.39.3 and is not a consumer of anything v2 builds. Decision 41 verifies the checksum at fetch time on the frame, which is a different guarantee from this one: that the bytes are the release, not that the release is the one somebody picked."
+        "note": "Re-probed live on 2026-08-15 while the kiosk.binary.pinned-release resource was written, so this entry now points at the pin in source rather than at a paragraph. The release API answers v0.42.0 (published 2026-08-04); immich-kiosk_0.42.0_checksums.txt names 93476535e86dd6914b1b8e644fdc147b4770903434f0db15d0ee469e0857e423 for immich-kiosk_Linux_arm64.tar.gz and the 7,712,323 downloaded bytes hash to it; the archive holds LICENSE, README.md and one 18,546,850-byte immich-kiosk at 0755 whose Go build record reads -X main.version=0.42.0 with GOOS=linux GOARCH=arm64 CGO_ENABLED=0. KioskReleasePin carries both digests because they answer different questions: the published one gates the download, the binary one is what the resource observes on the frame every pass. One thing upstream does not offer is a bind address - main.go starts the server on ':' plus the port and the config struct has no host field - so the loopback-only property v1 had was Docker's port publishing, not Kiosk's, and kiosk.listen-address records the real bind set rather than claiming it. v1's compose file still names 0.39.3 and is not a consumer of anything v2 builds."
       }
     },
     {
