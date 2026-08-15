@@ -1,0 +1,4 @@
+# A Fleet Manager is an operator's private console reachable from the internet (§3.8).
+# Nothing here should ever appear in a search index.
+User-agent: *
+Disallow: /

@@ -1,0 +1,36 @@
+{
+	"name": "framelink-control-gui",
+	"private": true,
+	"version": "0.1.0",
+	"description": "FrameLink Fleet Manager web GUI. Builds into ../wwwroot, which fl-control serves with UseStaticFiles().",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build && node tools/stamp.mjs",
+		"stamp": "node tools/stamp.mjs",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"mock": "node mock/server.js",
+		"mock:unconfigured": "node mock/server.js --unconfigured",
+		"serve": "node mock/server.js --serve",
+		"verify": "npm run build && node mock/server.js --serve"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-static": "^3.0.10",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16"
+	},
+	"dependencies": {
+		"@fontsource-variable/inter": "^5.3.0",
+		"@fontsource-variable/jetbrains-mono": "^5.3.0"
+	}
+}

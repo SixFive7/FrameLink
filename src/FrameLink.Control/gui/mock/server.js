@@ -1,0 +1,588 @@
+#!/usr/bin/env node
+/**
+ * A stand-in for `fl-control`, for developing and verifying the GUI.
+ *
+ * Two jobs, and it is deliberately one file with no dependencies so it can do both without
+ * anything being installed:
+ *
+ *  1. **`npm run mock`** — an in-memory operator API on :5199 that `vite dev` proxies to, so
+ *     the whole GUI can be driven without a .NET build, a SQLite file or a real frame.
+ *  2. **`npm run verify`** — the same API *plus* a plain static-file host serving the built
+ *     `../wwwroot` with an SPA fallback, which is the acceptance test the build has to pass:
+ *     the committed output must load with no dev server, no bundler and no framework runtime
+ *     on the server side.
+ *
+ * The API is a faithful copy of the routes in `Endpoints/OperatorEndpoints.cs` — same paths,
+ * same JSON casing, same status codes, and the same three refusals that matter to the GUI:
+ * 401 `unauthorized`, 503 `not-configured`, 409 `not-adopted`. Where this file and the C#
+ * disagree, the C# is right and this file is a bug.
+ *
+ * It is **not** a second implementation of the Fleet Manager. There is no `/agent` route, no
+ * WebSocket, no keypair verification and no persistence — a device cannot talk to this.
+ *
+ * Usage:
+ *   node mock/server.js                     API only, :5199
+ *   node mock/server.js --serve             API + static ../wwwroot, :5199
+ *   node mock/server.js --unconfigured      pretends FRAMELINK_OPERATOR_PASSWORD is unset
+ *   node mock/server.js --empty             no seeded devices
+ *   node mock/server.js --port 8080
+ */
+
+import { createServer } from 'node:http';
+import { readFile, stat } from 'node:fs/promises';
+import { extname, join, normalize, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const args = process.argv.slice(2);
+const flag = (name) => args.includes(`--${name}`);
+const option = (name, fallback) => {
+	const at = args.indexOf(`--${name}`);
+	return at === -1 ? fallback : args[at + 1];
+};
+
+const PORT = Number(option('port', 5199));
+const CONFIGURED = !flag('unconfigured');
+const SERVE_STATIC = flag('serve');
+const PASSWORD = option('password', 'correct-horse-battery-staple-frame');
+const WWWROOT = resolve(fileURLToPath(new URL('../../wwwroot', import.meta.url)));
+
+// ── the fake fleet ────────────────────────────────────────────────────────────────────────
+
+const COOKIE = 'fl_operator';
+const sessions = new Set();
+
+const iso = (minutesAgo) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+
+/** Seeded to exercise every branch of `presence.ts` and every device state. */
+const devices = flag('empty')
+	? []
+	: [
+			{
+				deviceId: 'K4W2-9TRB-8ZQ1-3MHF',
+				state: 'pending',
+				online: false,
+				hardwareSerial: '100000004e3f21bc',
+				agentVersion: '0.4.2+9f1c3ae',
+				agentStatus: 'Waiting to be adopted',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(4),
+				lastSeenUtc: iso(1),
+				stateChangedUtc: iso(4),
+				lastRemoteAddress: '192.168.1.51'
+			},
+			{
+				deviceId: 'PQ7X-0DGE-5NVC-2JKT',
+				state: 'pending',
+				online: false,
+				hardwareSerial: '10000000a71d90f4',
+				agentVersion: '0.4.2+9f1c3ae',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(19),
+				lastSeenUtc: iso(2),
+				stateChangedUtc: iso(19),
+				lastRemoteAddress: '192.168.1.52'
+			},
+			{
+				deviceId: 'A1B2-C3D4-E5F6-G7H8',
+				state: 'adopted',
+				online: true,
+				name: "Oma's living room",
+				hardwareSerial: '10000000bb42c701',
+				agentVersion: '0.4.2+9f1c3ae',
+				agentStatus: 'InSync',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(60 * 24 * 31),
+				lastSeenUtc: iso(0),
+				stateChangedUtc: iso(60 * 24 * 31),
+				lastRemoteAddress: '192.168.1.31'
+			},
+			{
+				deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+				state: 'adopted',
+				online: true,
+				name: 'Studeerkamer',
+				hardwareSerial: '10000000cd11a3e9',
+				agentVersion: '0.4.2+9f1c3ae',
+				agentStatus: 'Degraded(audio.volume, expected 75 observed 40, attempt 3)',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(60 * 24 * 12),
+				lastSeenUtc: iso(0),
+				stateChangedUtc: iso(60 * 24 * 12),
+				lastRemoteAddress: '192.168.1.32'
+			},
+			{
+				deviceId: 'W1X2-Y3Z4-0A1B-2C3D',
+				state: 'adopted',
+				online: false,
+				name: 'Keuken',
+				hardwareSerial: '10000000ff8e2210',
+				agentVersion: '0.3.9+11ab77c',
+				agentStatus: 'Update failed: checksum mismatch, 4 attempts',
+				protocolVersion: 0,
+				protocolCompatible: false,
+				firstSeenUtc: iso(60 * 24 * 40),
+				lastSeenUtc: iso(60 * 26),
+				stateChangedUtc: iso(60 * 24 * 40),
+				lastRemoteAddress: '192.168.1.33'
+			},
+			{
+				deviceId: 'HH11-JJ22-KK33-MM44',
+				state: 'adopted',
+				online: false,
+				name: 'Logeerkamer',
+				hardwareSerial: '10000000123aa9de',
+				agentVersion: '0.4.2+9f1c3ae',
+				agentStatus: 'InSync',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(60 * 24 * 9),
+				lastSeenUtc: iso(60 * 24 * 4),
+				stateChangedUtc: iso(60 * 24 * 9),
+				lastRemoteAddress: '192.168.1.34'
+			},
+			{
+				deviceId: 'BB55-CC66-DD77-EE88',
+				state: 'adopted',
+				online: false,
+				name: 'Zolder',
+				hardwareSerial: '100000007c4e0b52',
+				agentVersion: '0.4.2+9f1c3ae',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(60 * 24 * 6),
+				// Adopted after it was last seen: the UniFi reading of `Never enrolled`.
+				lastSeenUtc: iso(60 * 24 * 5),
+				stateChangedUtc: iso(60 * 24 * 2),
+				lastRemoteAddress: '192.168.1.35'
+			},
+			{
+				deviceId: 'ZZ99-XX88-VV77-TT66',
+				state: 'blocked',
+				online: false,
+				hardwareSerial: 'unknown',
+				agentVersion: '0.4.2+9f1c3ae',
+				protocolVersion: 1,
+				protocolCompatible: true,
+				firstSeenUtc: iso(60 * 24 * 3),
+				lastSeenUtc: iso(60 * 24 * 2),
+				stateChangedUtc: iso(60 * 24 * 2),
+				lastRemoteAddress: '203.0.113.77'
+			}
+		];
+
+let revision = 7;
+const fleetDefaults = flag('empty')
+	? {}
+	: {
+			'immich.url': 'https://photos.example.org',
+			'immich.apiKey': 'imk_9f2b71c0d84e4a1fae37',
+			'slideshow.intervalSeconds': '30',
+			'call.room': 'huisman',
+			'call.autoAnswer': 'true',
+			'display.backlightOn': '07:30',
+			'display.backlightOff': '22:30',
+			'audio.volume': '75',
+			'repair.countdownSeconds': '25',
+			'locale.timezone': 'Europe/Amsterdam',
+			'kiosk.pinnedRelease': 'v0.42.0'
+		};
+
+const overrides = flag('empty')
+	? {}
+	: {
+			'A1B2-C3D4-E5F6-G7H8': { 'slideshow.album': 'Oma & Opa', 'audio.volume': '90' },
+			'M9N8-P7Q6-R5S4-T3V2': { 'display.backlightOff': '23:45' }
+		};
+
+// ── plumbing ──────────────────────────────────────────────────────────────────────────────
+
+const MIME = {
+	'.html': 'text/html; charset=utf-8',
+	'.js': 'text/javascript; charset=utf-8',
+	'.css': 'text/css; charset=utf-8',
+	'.json': 'application/json; charset=utf-8',
+	'.svg': 'image/svg+xml',
+	'.woff2': 'font/woff2',
+	'.woff': 'font/woff',
+	'.png': 'image/png',
+	'.jpg': 'image/jpeg',
+	'.ico': 'image/x-icon',
+	'.txt': 'text/plain; charset=utf-8',
+	'.map': 'application/json; charset=utf-8'
+};
+
+const json = (res, status, body, headers = {}) => {
+	const payload = JSON.stringify(body);
+	res.writeHead(status, {
+		'content-type': 'application/json; charset=utf-8',
+		'content-length': Buffer.byteLength(payload),
+		...headers
+	});
+	res.end(payload);
+};
+
+const noContent = (res) => {
+	res.writeHead(204);
+	res.end();
+};
+
+const error = (res, status, code, detail) => json(res, status, { error: code, detail });
+
+const readBody = (req) =>
+	new Promise((done) => {
+		let raw = '';
+		req.on('data', (chunk) => (raw += chunk));
+		req.on('end', () => {
+			try {
+				done(raw ? JSON.parse(raw) : undefined);
+			} catch {
+				done(undefined);
+			}
+		});
+	});
+
+const authed = (req) => {
+	const cookie = req.headers.cookie ?? '';
+	const match = cookie.match(new RegExp(`(?:^|;\\s*)${COOKIE}=([^;]+)`));
+	return Boolean(match && sessions.has(match[1]));
+};
+
+const find = (id) => devices.find((device) => device.deviceId === id);
+
+/** Open `/api/events` responses, so a mutation here nudges the console the way the server does. */
+const streams = new Set();
+
+const publish = (deviceId) => {
+	for (const stream of streams) stream.write(`event: device\ndata: ${deviceId}\n\n`);
+};
+
+/**
+ * `AgentHealth.Classify`, in JavaScript. The GUI must never do this itself — that is the whole
+ * point of the `health` field — so the mock does what the server does and nothing else.
+ */
+const WORKING = new Set(['progressing', 'awaitingreboot']);
+const BROKEN = new Set(['degraded', 'blocked', 'escalated']);
+
+const classifyHealth = (agentStatus) => {
+	const head = (agentStatus ?? '').split('(')[0].trim().toLowerCase();
+	if (!head) return 'unknown';
+	if (head === 'insync') return 'in-sync';
+	if (WORKING.has(head)) return 'working';
+	if (BROKEN.has(head)) return 'degraded';
+	if (head === 'halted') return 'halted';
+	return 'unknown';
+};
+
+const view = (device) => ({ ...device, health: classifyHealth(device.agentStatus) });
+
+// ── the operator API ──────────────────────────────────────────────────────────────────────
+
+async function handleApi(req, res, url) {
+	const path = url.pathname;
+	const method = req.method ?? 'GET';
+
+	// `OperatorGate`: everything under /api needs a session except GET /api/status and
+	// POST /api/session.
+	const exempt =
+		path === '/api/status' || (path === '/api/session' && method === 'POST');
+
+	if (!exempt && !authed(req)) {
+		return error(
+			res,
+			401,
+			CONFIGURED ? 'unauthorized' : 'not-configured',
+			CONFIGURED ? 'Sign in with the operator password.' : problemSentence()
+		);
+	}
+
+	if (path === '/api/status' && method === 'GET') {
+		return json(res, 200, {
+			configured: CONFIGURED,
+			variable: 'FRAMELINK_OPERATOR_PASSWORD',
+			...(CONFIGURED
+				? {}
+				: { problem: problemSentence(), composeExample: COMPOSE_EXAMPLE })
+		});
+	}
+
+	if (path === '/api/session' && method === 'POST') {
+		if (!CONFIGURED) return error(res, 503, 'not-configured', problemSentence());
+		const body = await readBody(req);
+		if (body?.password !== PASSWORD) {
+			return error(res, 401, 'unauthorized', 'That is not the operator password.');
+		}
+		const token = `tok_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+		sessions.add(token);
+		return json(
+			res,
+			200,
+			{ token, expiresUtc: new Date(Date.now() + 12 * 3600_000).toISOString() },
+			{ 'set-cookie': `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Strict` }
+		);
+	}
+
+	if (path === '/api/session' && method === 'DELETE') {
+		sessions.clear();
+		res.writeHead(204, { 'set-cookie': `${COOKIE}=; Path=/; Max-Age=0` });
+		return res.end();
+	}
+
+	// `OperatorEndpoints.StreamFleetEventsAsync`. Nothing in this mock changes on its own, so
+	// the stream only ever carries `ready` and keep-alives — enough for the console to show that
+	// it is live, and enough that an EventSource is not left retrying a 404 forever.
+	if (path === '/api/events' && method === 'GET') {
+		res.writeHead(200, {
+			'content-type': 'text/event-stream',
+			'cache-control': 'no-cache',
+			'x-accel-buffering': 'no'
+		});
+		res.write('event: ready\ndata: \n\n');
+		const beat = setInterval(() => res.write(': keep-alive\n\n'), 25_000);
+		streams.add(res);
+		req.on('close', () => {
+			clearInterval(beat);
+			streams.delete(res);
+		});
+		return undefined;
+	}
+
+	if (path === '/api/devices' && method === 'GET') {
+		const includeBlocked = url.searchParams.get('includeBlocked') === 'true';
+		const rows = devices
+			.filter((device) => includeBlocked || device.state !== 'blocked')
+			.sort((a, b) => Date.parse(b.lastSeenUtc) - Date.parse(a.lastSeenUtc));
+		return json(res, 200, { devices: rows.map(view), includeBlocked });
+	}
+
+	const oneDevice = path.match(/^\/api\/devices\/([^/]+)$/);
+	if (oneDevice && method === 'GET') {
+		const device = find(decodeURIComponent(oneDevice[1]));
+		return device ? json(res, 200, view(device)) : notFoundDevice(res, oneDevice[1]);
+	}
+
+	const deviceAction = path.match(/^\/api\/devices\/([^/]+)\/(adopt|block|unblock)$/);
+	if (deviceAction && method === 'POST') {
+		const device = find(decodeURIComponent(deviceAction[1]));
+		if (!device) return notFoundDevice(res, deviceAction[1]);
+
+		if (deviceAction[2] === 'adopt') {
+			// No body: the optional name rides in the query. And a blocked device is refused —
+			// unblocking is what returns it to the queue, and adopting it is a second press.
+			if (device.state === 'blocked') {
+				return error(
+					res,
+					409,
+					'blocked',
+					'This device is blocked. Unblock it first — that returns it to the adoption ' +
+						'queue, where it can be adopted deliberately.'
+				);
+			}
+			const name = url.searchParams.get('name')?.trim();
+			if (device.state !== 'adopted') device.stateChangedUtc = new Date().toISOString();
+			device.state = 'adopted';
+			if (name) device.name = name;
+		} else if (deviceAction[2] === 'block') {
+			device.state = 'blocked';
+			device.online = false;
+			device.stateChangedUtc = new Date().toISOString();
+		} else {
+			// Unblocking returns to pending and clears the name and overrides — see
+			// `SqliteDeviceStore.ReturnToPendingAsync`.
+			device.state = 'pending';
+			device.stateChangedUtc = new Date().toISOString();
+			delete device.name;
+			delete overrides[device.deviceId];
+		}
+		revision++;
+		publish(device.deviceId);
+		return json(res, 200, view(device));
+	}
+
+	const deviceRoot = path.match(/^\/api\/devices\/([^/]+)$/);
+	if (deviceRoot && method === 'DELETE') {
+		const id = decodeURIComponent(deviceRoot[1]);
+		const at = devices.findIndex((device) => device.deviceId === id);
+		if (at === -1) return notFoundDevice(res, id);
+		devices.splice(at, 1);
+		delete overrides[id];
+		publish(id);
+		return noContent(res);
+	}
+
+	if (path === '/api/settings' && method === 'GET') {
+		return json(res, 200, { revision, values: { ...fleetDefaults } });
+	}
+
+	const fleetKey = path.match(/^\/api\/settings\/(.+)$/);
+	if (fleetKey) {
+		const key = decodeURIComponent(fleetKey[1]);
+		if (method === 'PUT') {
+			const body = await readBody(req);
+			if (typeof body?.value !== 'string') {
+				return error(res, 400, 'bad-request', 'A value is required.');
+			}
+			fleetDefaults[key] = body.value;
+			revision++;
+			return noContent(res);
+		}
+		if (method === 'DELETE') {
+			if (!(key in fleetDefaults)) {
+				return error(res, 404, 'no-such-setting', `No setting named '${key}'.`);
+			}
+			delete fleetDefaults[key];
+			revision++;
+			return noContent(res);
+		}
+	}
+
+	const deviceSettings = path.match(/^\/api\/devices\/([^/]+)\/settings$/);
+	if (deviceSettings && method === 'GET') {
+		const id = decodeURIComponent(deviceSettings[1]);
+		const device = find(id);
+		const own = overrides[id] ?? {};
+		return json(res, 200, {
+			deviceId: id,
+			revision,
+			fleetDefaults: { ...fleetDefaults },
+			overrides: { ...own },
+			// Empty unless adopted — the structural half of "a pending device receives nothing".
+			effective: device?.state === 'adopted' ? { ...fleetDefaults, ...own } : {}
+		});
+	}
+
+	const deviceSettingKey = path.match(/^\/api\/devices\/([^/]+)\/settings\/(.+)$/);
+	if (deviceSettingKey) {
+		const id = decodeURIComponent(deviceSettingKey[1]);
+		const key = decodeURIComponent(deviceSettingKey[2]);
+		const device = find(id);
+
+		if (method === 'PUT') {
+			const body = await readBody(req);
+			if (typeof body?.value !== 'string') {
+				return error(res, 400, 'bad-request', 'A value is required.');
+			}
+			if (device?.state !== 'adopted') {
+				return error(
+					res,
+					409,
+					'not-adopted',
+					'Only an adopted device can hold settings. Adopt it first.'
+				);
+			}
+			overrides[id] = { ...(overrides[id] ?? {}), [key]: body.value };
+			revision++;
+			return noContent(res);
+		}
+
+		if (method === 'DELETE') {
+			if (!overrides[id] || !(key in overrides[id])) {
+				return error(res, 404, 'no-such-setting', `No setting named '${key}'.`);
+			}
+			delete overrides[id][key];
+			revision++;
+			return noContent(res);
+		}
+	}
+
+	return error(res, 404, 'no-such-route', `Nothing is mapped at ${method} ${path}.`);
+}
+
+const notFoundDevice = (res, id) =>
+	error(res, 404, 'no-such-device', `No device with id '${decodeURIComponent(id)}'.`);
+
+const problemSentence = () =>
+	'The environment variable FRAMELINK_OPERATOR_PASSWORD is not set, so this Fleet Manager ' +
+	'has no operator password and cannot adopt any device yet.';
+
+const COMPOSE_EXAMPLE = `services:
+  fl-control:
+    image: framelink/fl-control:latest
+    environment:
+      FRAMELINK_OPERATOR_PASSWORD: "choose-a-long-passphrase-at-least-24-characters"
+    volumes:
+      - ./framelink-data:/var/lib/fl-control
+    ports:
+      - "8080:8080"
+    restart: unless-stopped`;
+
+// ── the static host ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Mirrors what `UseStaticFiles()` + `MapFallback` do in `ControlApp`/`GuiEndpoints`: serve the
+ * file if it exists under the web root, otherwise hand back `index.html` so client-side
+ * routing works. Nothing here knows anything about SvelteKit.
+ */
+async function serveStatic(req, res, url) {
+	const requested = normalize(decodeURIComponent(url.pathname)).replace(/^([/\\])+/, '');
+	const candidate = join(WWWROOT, requested);
+
+	// Path traversal guard. The real server gets this from the static-files middleware.
+	if (!candidate.startsWith(WWWROOT)) {
+		res.writeHead(403);
+		return res.end('forbidden');
+	}
+
+	const file = await tryFile(candidate);
+	const target = file ?? join(WWWROOT, 'index.html');
+
+	try {
+		const body = await readFile(target);
+		res.writeHead(file ? 200 : 200, {
+			'content-type': MIME[extname(target)] ?? 'application/octet-stream',
+			'content-length': body.length,
+			'cache-control': file && requested.startsWith('_app/immutable/')
+				? 'public, max-age=31536000, immutable'
+				: 'no-cache'
+		});
+		res.end(body);
+	} catch {
+		res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+		res.end(
+			`Not found, and there is no index.html in ${WWWROOT}.\n` +
+				'Run `npm run build` first — the SPA fallback needs the built shell.\n'
+		);
+	}
+}
+
+async function tryFile(path) {
+	try {
+		const info = await stat(path);
+		return info.isFile() ? path : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// ── go ────────────────────────────────────────────────────────────────────────────────────
+
+const server = createServer(async (req, res) => {
+	const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+
+	try {
+		if (url.pathname === '/healthz') {
+			res.writeHead(200, { 'content-type': 'text/plain' });
+			return res.end('ok');
+		}
+
+		if (url.pathname.startsWith('/api')) return await handleApi(req, res, url);
+
+		if (SERVE_STATIC) return await serveStatic(req, res, url);
+
+		res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+		res.end('This mock only answers /api. Run vite dev for the GUI, or pass --serve.\n');
+	} catch (cause) {
+		console.error(cause);
+		error(res, 500, 'mock-failure', String(cause));
+	}
+});
+
+server.listen(PORT, () => {
+	console.log(`fl-control mock listening on http://127.0.0.1:${PORT}`);
+	console.log(`  configured : ${CONFIGURED ? `yes (password: ${PASSWORD})` : 'NO — setup screen'}`);
+	console.log(`  devices    : ${devices.length}`);
+	console.log(`  static     : ${SERVE_STATIC ? WWWROOT : 'off (vite dev serves the GUI)'}`);
+});

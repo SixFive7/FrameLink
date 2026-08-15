@@ -1,0 +1,422 @@
+/*
+	==========================================================================================
+	FrameLink design system — "Lamplight"
+	==========================================================================================
+
+	This file is the design system. version2.md §7.4 asks for a palette, a type scale and a
+	motion language "defined and documented in the repo, then applied consistently" across
+	*both* surfaces — the Fleet Manager console and the frame's own screens — with no
+	toned-down variant for the device. CLAUDE.md §3 forbids new markdown outside docs/ and
+	research/, so the documentation lives here, in the artifact that is actually loaded.
+
+	The on-device UI will be built against these tokens later. Copy this file; do not fork it.
+
+	------------------------------------------------------------------------------------------
+	The idea
+	------------------------------------------------------------------------------------------
+
+	A FrameLink frame is furniture. It sits in an elderly person's living room showing
+	photographs, and its interface is only ever seen when something is wrong or when someone
+	is calling. So the language is *lamplight in a dim room*: deep, cool, near-black grounds
+	that let a photograph be the brightest thing present, one warm amber accent that reads as
+	a lit filament, and status colours saturated enough to be unmistakable from across a room.
+
+	The console inherits that language unchanged. An operator at a laptop and a viewer in an
+	armchair are looking at the same product, and the second person never sees this screen —
+	which is exactly why the first person's screen has to carry the family resemblance.
+
+	------------------------------------------------------------------------------------------
+	Structure
+	------------------------------------------------------------------------------------------
+
+	1. Primitives   — raw ramps. Never referenced by a component. Renaming a ramp is safe.
+	2. Semantics    — role-named tokens (`--surface-2`, `--danger`). Components use ONLY these.
+	3. Scales       — type, space, radius, elevation. Theme-independent.
+	4. Motion       — durations, easings, and the named primitives in `motion.ts`.
+
+	Rule: a component that reaches past a semantic token into a primitive is a bug. It will
+	look right in one theme and wrong in the other.
+*/
+
+:root {
+	/* ======================================================================================
+		1. PRIMITIVES — raw colour ramps
+		======================================================================================
+
+		Six hues, each on a 50→900 ramp (light→dark). Deliberately few: a fleet console that
+		needs a seventh hue almost always needs a clearer information hierarchy instead.
+
+		Contrast was checked against the two grounds each ramp is used on. Where a step is
+		named below as "on light" or "on dark" that is the accessible pairing; the others are
+		for fills, borders and washes.
+	*/
+
+	/* Ink — cool neutral. Both grounds, all borders, all body text. The blue cast is
+	   deliberate: a truly neutral grey next to the ember accent reads green. */
+	--ink-0: #ffffff;
+	--ink-25: #f8fafd;
+	--ink-50: #eff2f8;
+	--ink-100: #e3e8f1;
+	--ink-200: #ccd4e2;
+	--ink-300: #aab5c9;
+	--ink-400: #808da5;
+	--ink-500: #5d6981;
+	--ink-600: #444f64;
+	--ink-700: #2f394b;
+	--ink-800: #1e2532;
+	--ink-850: #171d28;
+	--ink-900: #11151d;
+	--ink-950: #0b0e14;
+	--ink-1000: #06080c;
+
+	/* Ember — the brand. Warm amber, the colour of a filament lamp. Also the colour of
+	   "this needs you": a pending frame is the operator's core action (§3.3), so the thing
+	   that demands attention wears the brand rather than a warning yellow. */
+	--ember-50: #fff7ea;
+	--ember-100: #ffeacb;
+	--ember-200: #ffd89d;
+	--ember-300: #ffc570;
+	--ember-400: #ffb35c;
+	--ember-500: #f79a34;
+	--ember-600: #d97d18; /* on light */
+	--ember-700: #ab5f0f;
+	--ember-800: #7c440c;
+	--ember-900: #4a2807;
+
+	/* Signal — mint/teal. Online, healthy, in sync, adopted. Chosen over a pure green
+	   because green-on-near-black tends to vibrate; the teal shift calms it. */
+	--signal-50: #e6fff7;
+	--signal-100: #b9fbe7;
+	--signal-200: #7ff2d2;
+	--signal-300: #4ce3bd;
+	--signal-400: #34d3a6;
+	--signal-500: #16b98c;
+	--signal-600: #0d9472; /* on light */
+	--signal-700: #0b7059;
+	--signal-800: #094f40;
+	--signal-900: #062f27;
+
+	/* Beacon — sky. Information, links, focus rings, the "technical detail" register.
+	   Matches the #8fd3ff the server-rendered setup page already uses for code. */
+	--beacon-50: #eaf7ff;
+	--beacon-100: #cbecff;
+	--beacon-200: #9fdbff;
+	--beacon-300: #74c9ff;
+	--beacon-400: #5ec2ff;
+	--beacon-500: #2fa6f2;
+	--beacon-600: #1683cf; /* on light */
+	--beacon-700: #1265a1;
+	--beacon-800: #0e4874;
+	--beacon-900: #092c47;
+
+	/* Alert — rose. Blocked, refused, destructive, failed. Rose rather than fire-red so it
+	   does not fight the ember accent for the same attention. */
+	--alert-50: #fff0f2;
+	--alert-100: #ffdbe1;
+	--alert-200: #ffb3bf;
+	--alert-300: #ff8b9e;
+	--alert-400: #ff6b81;
+	--alert-500: #f2445f;
+	--alert-600: #cf2447; /* on light */
+	--alert-700: #a41837;
+	--alert-800: #761128;
+	--alert-900: #470a18;
+
+	/* Haze — violet. Version, protocol, identity: the machine-facing facts that are neither
+	   good nor bad and should not be read as status. */
+	--haze-50: #f4f0ff;
+	--haze-100: #e7dfff;
+	--haze-200: #cdbcff;
+	--haze-300: #b79fff;
+	--haze-400: #a98bff;
+	--haze-500: #8b66f5;
+	--haze-600: #6f47db; /* on light */
+	--haze-700: #5636ab;
+	--haze-800: #3d267a;
+	--haze-900: #241648;
+
+	/* ======================================================================================
+		3. SCALES — type
+		======================================================================================
+
+		Anchored at 16px with a roughly 1.22 ratio at the reading sizes and a widening ratio
+		above, because the top of this scale is not "a big heading" — it is a fingerprint that
+		has to be matched against a frame's own screen from the other side of a bench (§3.3).
+		The frame's repair screen reads at the same distance, which is why the scale is shared.
+
+		Every step pairs with a tracking value. Tracking, not optical sizing, is what carries
+		the display sizes here: the `wght`-axis font subset ships (see fonts.css), so letter
+		spacing is doing the job `opsz` would otherwise do, and it does it for the fallback
+		font too.
+	*/
+	--text-2xs: 0.6875rem; /* 11px — badge text, table micro-labels */
+	--text-xs: 0.75rem; /*  12px — captions, timestamps */
+	--text-sm: 0.875rem; /*  14px — secondary body, dense rows */
+	--text-md: 1rem; /*     16px — body */
+	--text-lg: 1.125rem; /* 18px — lead paragraph, card titles */
+	--text-xl: 1.375rem; /* 22px — section titles */
+	--text-2xl: 1.75rem; /* 28px — screen titles */
+	--text-3xl: 2.25rem; /* 36px — hero */
+	--text-4xl: 3rem; /*    48px — bench-readable fingerprint */
+	--text-5xl: 4rem; /*    64px — the frame's own screens */
+
+	--track-tight: -0.022em; /* ≥ 28px */
+	--track-snug: -0.014em; /* 18–22px */
+	--track-normal: -0.006em; /* body */
+	--track-wide: 0.02em; /* small caps-ish labels */
+	--track-caps: 0.13em; /* uppercase micro-labels */
+	--track-code: 0.06em; /* fingerprints and serials, grouped for reading aloud */
+
+	--leading-tight: 1.1;
+	--leading-snug: 1.28;
+	--leading-normal: 1.55;
+	--leading-loose: 1.7;
+
+	--weight-normal: 400;
+	--weight-medium: 500;
+	--weight-semibold: 600;
+	--weight-bold: 700;
+	--weight-black: 800;
+
+	--font-sans:
+		'Inter Variable', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+		'Helvetica Neue', Arial, sans-serif;
+	--font-mono:
+		'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', 'Cascadia Mono', Menlo,
+		Consolas, monospace;
+
+	/* ======================================================================================
+		3. SCALES — space, radius, size
+		======================================================================================
+
+		4px base. Named by multiple, so `--space-6` is unambiguously 24px and arithmetic in a
+		reviewer's head still works.
+	*/
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.25rem;
+	--space-6: 1.5rem;
+	--space-8: 2rem;
+	--space-10: 2.5rem;
+	--space-12: 3rem;
+	--space-16: 4rem;
+	--space-20: 5rem;
+
+	/* Rounding is generous throughout. Furniture, not equipment. */
+	--radius-xs: 6px;
+	--radius-sm: 10px;
+	--radius-md: 14px;
+	--radius-lg: 20px;
+	--radius-xl: 28px;
+	--radius-pill: 999px;
+
+	--width-content: 78rem; /* the fleet list at its widest */
+	--width-prose: 44rem; /* setup and login, where line length matters */
+	--width-rail: 15rem;
+
+	/* ======================================================================================
+		4. MOTION — durations and easings
+		======================================================================================
+
+		§7.4 makes motion "a first-class part of the design", which in practice means motion is
+		*specified*, not improvised per component. Every animation in this app draws its
+		duration and its curve from this block. The named primitives that combine them live in
+		`motion.ts`, which is the file to read next.
+
+		Durations are chosen by distance and consequence, not by taste:
+	*/
+	--dur-instant: 90ms; /* state flips with no travel: checkbox, chip, hover tint */
+	--dur-quick: 160ms; /* small travel: press, tooltip, focus ring */
+	--dur-base: 260ms; /* the default: card enter, panel open, list reorder */
+	--dur-slow: 420ms; /* large travel or a change of context: route swap */
+	--dur-grand: 720ms; /* once-per-screen moments: the setup page arriving */
+	--dur-ambient: 14s; /* background drift; never gates an interaction */
+
+	/*
+		Easings. Four curves, each with a job:
+
+		  standard  — symmetric-ish, slightly emphasised. Anything that moves within a screen.
+		  entrance  — expo-out. Things arriving from nothing: fast start, long soft landing.
+		  exit      — accelerate. Things leaving: no lingering, no ceremony.
+		  spring    — overshoots ~5%. Confirmations only. An adopt button springs; a menu
+		              never does, because overshoot on a frequent action becomes a tic.
+		  glide     — in-out, for looping ambient motion where both ends must be seamless.
+	*/
+	--ease-standard: cubic-bezier(0.2, 0, 0, 1);
+	--ease-entrance: cubic-bezier(0.22, 1, 0.36, 1);
+	--ease-exit: cubic-bezier(0.4, 0, 1, 1);
+	--ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+	--ease-glide: cubic-bezier(0.65, 0, 0.35, 1);
+
+	/* Stagger step for lists. 34ms reads as one gesture across ~8 items; beyond that
+	   `motion.ts` caps the total so a 40-device fleet does not crawl in over two seconds. */
+	--stagger-step: 34ms;
+}
+
+/*
+	==========================================================================================
+	2. SEMANTICS — dark (default)
+	==========================================================================================
+
+	Dark is the default because the operator is often working at night and because the frame's
+	own screens are dark by necessity — a photo frame that glows white in a dim room is a lamp
+	nobody asked for. Light is a first-class alternative, not an afterthought (the operator
+	"may be anywhere"), and every token below has a light counterpart.
+*/
+:root,
+[data-theme='dark'] {
+	color-scheme: dark;
+
+	--ground: var(--ink-1000);
+	--ground-2: var(--ink-950);
+
+	/* The aurora. Two soft radial washes behind everything, drifting on --dur-ambient.
+	   Kept very low in alpha: it should be felt, not seen. */
+	--veil-warm: rgb(255 179 92 / 0.1);
+	--veil-cool: rgb(94 194 255 / 0.08);
+
+	--surface-1: rgb(255 255 255 / 0.032);
+	--surface-2: rgb(255 255 255 / 0.055);
+	--surface-3: rgb(255 255 255 / 0.085);
+	--surface-sunken: rgb(0 0 0 / 0.28);
+	--surface-glass: rgb(11 14 20 / 0.72);
+
+	--line: rgb(255 255 255 / 0.09);
+	--line-strong: rgb(255 255 255 / 0.16);
+
+	--text-1: var(--ink-50);
+	--text-2: var(--ink-300);
+	--text-3: var(--ink-400);
+	--text-on-accent: var(--ink-1000);
+
+	--accent: var(--ember-400);
+	--accent-strong: var(--ember-300);
+	--accent-dim: var(--ember-600);
+	--accent-soft: rgb(255 179 92 / 0.14);
+	--accent-line: rgb(255 179 92 / 0.34);
+	--accent-glow: rgb(255 179 92 / 0.24);
+
+	--ok: var(--signal-400);
+	--ok-soft: rgb(52 211 166 / 0.14);
+	--ok-line: rgb(52 211 166 / 0.32);
+
+	--danger: var(--alert-400);
+	--danger-soft: rgb(255 107 129 / 0.14);
+	--danger-line: rgb(255 107 129 / 0.32);
+	--danger-contrast: var(--ink-1000);
+
+	--info: var(--beacon-400);
+	--info-soft: rgb(94 194 255 / 0.13);
+	--info-line: rgb(94 194 255 / 0.3);
+
+	--tech: var(--haze-400);
+	--tech-soft: rgb(169 139 255 / 0.14);
+	--tech-line: rgb(169 139 255 / 0.3);
+
+	--focus: var(--beacon-300);
+
+	/* Elevation. Two layered shadows each: a tight contact shadow that grounds the element
+	   and a wide soft one that gives it air. On dark, both are pure black — a coloured
+	   shadow on a near-black ground just muddies it. */
+	--shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+	--shadow-2:
+		0 2px 4px rgb(0 0 0 / 0.34), 0 8px 20px -6px rgb(0 0 0 / 0.5);
+	--shadow-3:
+		0 4px 8px rgb(0 0 0 / 0.36), 0 20px 44px -12px rgb(0 0 0 / 0.62);
+	--shadow-4:
+		0 8px 16px rgb(0 0 0 / 0.4), 0 40px 90px -20px rgb(0 0 0 / 0.72);
+	--shadow-accent: 0 8px 30px -8px rgb(255 179 92 / 0.42);
+}
+
+/*
+	==========================================================================================
+	2. SEMANTICS — light
+	==========================================================================================
+
+	Not an inversion. The dark theme is built from translucent white over near-black; a
+	naive inversion (translucent black over white) produces grey mud. Light uses opaque
+	surfaces with real borders instead, and shifts every accent one to three steps darker so
+	it still passes contrast on paper.
+*/
+[data-theme='light'] {
+	color-scheme: light;
+
+	--ground: #f2f4f9;
+	--ground-2: #e9edf5;
+
+	--veil-warm: rgb(217 125 24 / 0.1);
+	--veil-cool: rgb(22 131 207 / 0.08);
+
+	--surface-1: rgb(255 255 255 / 0.72);
+	--surface-2: #ffffff;
+	--surface-3: var(--ink-25);
+	--surface-sunken: var(--ink-50);
+	--surface-glass: rgb(248 250 253 / 0.82);
+
+	--line: rgb(15 23 42 / 0.1);
+	--line-strong: rgb(15 23 42 / 0.19);
+
+	--text-1: var(--ink-900);
+	--text-2: var(--ink-600);
+	--text-3: var(--ink-500);
+	--text-on-accent: #ffffff;
+
+	--accent: var(--ember-600);
+	--accent-strong: var(--ember-700);
+	--accent-dim: var(--ember-500);
+	--accent-soft: rgb(217 125 24 / 0.12);
+	--accent-line: rgb(217 125 24 / 0.34);
+	--accent-glow: rgb(217 125 24 / 0.22);
+
+	--ok: var(--signal-600);
+	--ok-soft: rgb(13 148 114 / 0.12);
+	--ok-line: rgb(13 148 114 / 0.3);
+
+	--danger: var(--alert-600);
+	--danger-soft: rgb(207 36 71 / 0.1);
+	--danger-line: rgb(207 36 71 / 0.28);
+	--danger-contrast: #ffffff;
+
+	--info: var(--beacon-600);
+	--info-soft: rgb(22 131 207 / 0.11);
+	--info-line: rgb(22 131 207 / 0.28);
+
+	--tech: var(--haze-600);
+	--tech-soft: rgb(111 71 219 / 0.11);
+	--tech-line: rgb(111 71 219 / 0.28);
+
+	--focus: var(--beacon-600);
+
+	--shadow-1: 0 1px 2px rgb(15 23 42 / 0.07);
+	--shadow-2:
+		0 1px 3px rgb(15 23 42 / 0.07), 0 8px 18px -8px rgb(15 23 42 / 0.14);
+	--shadow-3:
+		0 2px 6px rgb(15 23 42 / 0.08), 0 18px 38px -14px rgb(15 23 42 / 0.2);
+	--shadow-4:
+		0 6px 14px rgb(15 23 42 / 0.1), 0 36px 78px -24px rgb(15 23 42 / 0.28);
+	--shadow-accent: 0 10px 28px -10px rgb(217 125 24 / 0.44);
+}
+
+/*
+	==========================================================================================
+	Reduced motion
+	==========================================================================================
+
+	One override, applied at the token layer so nothing has to remember it. Durations collapse
+	to near-zero and looping ambient animation stops entirely; `motion.ts` additionally skips
+	the travel component of every Svelte transition, so an element still *appears* — it just
+	appears where it belongs instead of sliding there.
+*/
+@media (prefers-reduced-motion: reduce) {
+	:root {
+		--dur-instant: 1ms;
+		--dur-quick: 1ms;
+		--dur-base: 1ms;
+		--dur-slow: 1ms;
+		--dur-grand: 1ms;
+		--dur-ambient: 1ms;
+		--stagger-step: 0ms;
+	}
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" type="image/svg+xml" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="dark light" />
+		<meta name="theme-color" content="#080a10" />
+		<meta name="description" content="FrameLink Fleet Manager" />
+		<title>FrameLink Fleet Manager</title>
+
+		<!--
+			Theme resolution before first paint. Without this the page renders in the default
+			dark theme and then snaps to light, which is the one flash of unstyled content a
+			design that ships both themes cannot hide behind a transition.
+		-->
+		<script>
+			(() => {
+				try {
+					const stored = localStorage.getItem('framelink.theme');
+					const mode = stored === 'light' || stored === 'dark' ? stored : null;
+					const system = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+					document.documentElement.dataset.theme = mode ?? system;
+				} catch {
+					/* private mode, no storage: the dark default in the markup stands */
+				}
+			})();
+		</script>
+
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+	</body>
+</html>
