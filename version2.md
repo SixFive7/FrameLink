@@ -673,9 +673,9 @@ Supplied in-session, never written to any file (repo rule §1.2):
 | Frame → internet | ✅ Debian repos and GitHub reachable |
 | Smart plug | ✅ controllable, 9.24 W idle |
 | **Home Assistant** | ✅ **`http://10.20.30.250:8123`**, verified 2026-08-15: `GET /api/` answers `{"message":"API running."}`. **The harness had the wrong port.** It defaulted to `:8086`, which is a different service on the same host (an MCP server) answering HTTP **404 for every path, including `/api/`** — so an entity lookup returned a 404 that the harness reported as *"Home Assistant does not know `switch.wall_plug_25`"* while that entity was live and drawing **3.54 W**. A misleading diagnostic costs more than none: it sends the reader to check the one thing that was never wrong. `tools/harness` now defaults to 8123 and, on any 404, probes `/api/` first so the message distinguishes a wrong entity from a server that is not Home Assistant at all. |
-| Reboot cost | ✅ **22.3 s** relay-on to SSH-ready, measured twice 2026-08-15 (22.3 s and ~20 s) with loss of port 22 confirmed between them. Materially cheaper than the ~57 s per resource the resource catalog's 75–80 minute budget for 79 resources implies — that budget should be re-derived before it is planned against. |
+| Reboot cost | ✅ **22.3 s** relay-on to SSH-ready, measured twice 2026-08-15 (22.3 s and ~20 s) with loss of port 22 confirmed between them. Materially cheaper than the ~57 s per resource the resource catalog's 75–80 minute budget for 79 resources implied. **Re-derived:** the catalog now budgets **~30 minutes** of reboot overhead for 79 resources, quoting §2.7's countdown as a separate configurable term rather than folding it in. Cost was the main argument against decision 26, and the real cost is under half what was assumed. |
 | `POWER_OFF_ON_HALT` | ✅ **set to 1** in this Pi's EEPROM, so `halt`/`poweroff` genuinely cut power rather than leaving the board idling. A silent frame on a live relay therefore has three explanations, not two: booting, hung, or halted and drawing nothing. |
-| Own-hostname resolution | ⚠️ **stale `/etc/hosts` after a rename, 2026-08-15.** `hostnamectl set-hostname` does **not** maintain `/etc/hosts`, so `127.0.1.1` still named the shipped hostname; resolution fell through to DNS and the search domain answered `getent hosts framelink-mule` with `217.61.253.65 framelink-mule.huisman.io` — **the frame resolved its own name to a public internet address.** Anything that resolves its own name (a service bind, a certificate, an advertised media address) is pointed at a machine that is not this one. `sudo`'s "unable to resolve host" warning is the only signal, and the harness had been suppressing it as benign; it now reports it once per connection. Belongs with Appendix B's cloud-init hostname trap: the hostname resource must own `/etc/hosts` too. |
+| Own-hostname resolution | ⚠️ **stale `/etc/hosts` after a rename, 2026-08-15.** `hostnamectl set-hostname` does **not** maintain `/etc/hosts`, so `127.0.1.1` still named the shipped hostname; resolution fell through to DNS and the search domain answered `getent hosts framelink-mule` with `217.61.253.65 framelink-mule.huisman.io` — **the frame resolved its own name to a public internet address.** Anything that resolves its own name (a service bind, a certificate, an advertised media address) is pointed at a machine that is not this one. `sudo`'s "unable to resolve host" warning is the only signal, and the harness had been suppressing it as benign; it now reports it once per connection. **This, and not the cloud-init trap Appendix B used to record, is what makes `identity.hostname` worth doing correctly** — the trap did not reproduce on the same session, while this did, twice. The hostname resource must own `/etc/hosts` too. |
 | Portainer API / LiveKit | ✅ verified |
 | **SD card reader** | ⚠️ **not attached** |
 
@@ -860,12 +860,28 @@ Not blockers for starting; each has a recorded default that applies unless overr
 
 1. **Resource catalog** — the enumeration of every atomic setting extracted from guides 3–12.
    This is the first task of M3, not a design question.
-   - ⚠ **Known trap, observed on the mule 2026-08-15:** the hostname is **cloud-init managed**
-     on this image. `hostnamectl set-hostname` appears to succeed and is silently reverted at
-     the next boot, even with a `preserve_hostname: true` drop-in. The hostname resource must
-     therefore act on cloud-init's configuration, not on `hostnamectl` — and this is a textbook
-     illustration of decision 26 (every resource reboots to prove it stuck): a write-only check
-     would have marked this `InSync` while it was quietly wrong.
+   - ⚠ **The hostname trap recorded here has been measured and does not reproduce.** This item
+     used to state that the hostname was cloud-init managed and silently reverted at the next
+     boot. On the mule 2026-08-15 it **survives** — `hostnamectl set-hostname framelink-mule`,
+     then a real reboot (`boot_id` changed), and the name is still `framelink-mule`, with
+     cloud-init logging nothing about hostnames. The shipped seed carries no hostname to
+     re-apply, and cloud-init's `update_hostname` stands down once it sees a human has taken
+     over. The earlier observation was made on the Imager-flashed v1 frame, which is provisioned
+     differently; whether an Imager-written card genuinely behaves that way is **a difference to
+     verify, not an established fact.** No mechanism is asserted here any more.
+   - ✅ **A real defect was underneath it, and it is worse than a wrong name.** `hostnamectl`
+     does not maintain `/etc/hosts`. After the rename `127.0.1.1` still named the old host, so
+     the frame resolved **its own name** through DNS to a public internet address — anything
+     binding to that name, or advertising it, is pointed at a machine that is not this one
+     (§6.1). The corrected `identity.hostname` entry in
+     [the resource catalog](reference/resource-catalog.md) is the authority: `hostnamectl` plus
+     an idempotent `/etc/hosts` rewrite, Observe checking both the name *and* that
+     `getent hosts $(hostname)` answers loopback, and the resource reclassified as **not**
+     brick-adjacent, since nothing under `/boot/firmware` is written.
+   - **Decision 26 survives the correction intact.** A write-only check would still have been
+     wrong here — `hostnamectl` returns success while the resource is half-applied at that
+     instant — so the reboot is still what proves the whole state rather than the half the tool
+     owns. The lesson was right; only the mechanism attributed to it was not.
 2. **Cross-household connectivity** — advertised IP, TURN and TLS for frames outside the
    operator's LAN. Deferred within v2; LAN calling is validated first.
 3. **Design system specifics** — palette, typography and motion language, to be defined and

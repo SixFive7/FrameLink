@@ -110,7 +110,10 @@ attached to them:
    Pi bootloader's own `tryboot` one-shot, where the candidate goes to `tryboot.txt`, the reboot
    requests it once, and any later boot falls back to the untouched `config.txt` — which
    [§5.1](../version2.md)'s smart-plug power-cycle harness can supply unattended. The second is the
-   only one that survives a frame that never boots again. Choosing and proving one is the
+   only one that survives a frame that never boots again. **Measured 2026-08-15: `tryboot` is not
+   configured on the mule** — no `autoboot.txt`, no tryboot files on the boot partition — so it is
+   an unused mechanism rather than a working one waiting to be adopted, and the boot partition's
+   430 MB free means neither mechanism is constrained by space. Choosing and proving one is the
    outstanding half of this decision (open question 1).
 
 **`boot.cmdline.fbcon-rotate`**
@@ -122,7 +125,7 @@ attached to them:
 - **dependsOn** — `agent.version`
 - **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy). Applied from the catalog default when no fleet value has been issued, which is the normal case at position 2 — the frame is not adopted yet. A later fleet override is ordinary drift and reconciles like any other.
 - **Risk** — **brick-capable** (`cmdline.txt`; a malformed single line is unbootable). The riskier of the two display writes and the one the write discipline above exists for: `config.txt` tolerates an unknown overlay line, a broken `cmdline.txt` does not boot.
-- **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL` and `ds=nocloud;i=rpi-imager-…`; see `boot.cmdline.wifi-regdom` and `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 78, so one line-aware editor must serve both ends of the order.
+- **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL`, which is its own resource (`boot.cmdline.wifi-regdom`), and `ds=nocloud;i=rpi-imager-…`, which is **not** owned by any resource: it is Raspberry Pi Imager's datasource pin, present because the v1 card was Imager-flashed and absent on the raw-flashed mule. No resource writes it, and it is worth leaving alone rather than normalising, because it is the one piece of evidence distinguishing an Imager-provisioned card from a raw-written one — see the hypothesis under `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 78, so one line-aware editor must serve both ends of the order.
 
 **`boot.config.dtoverlay-waveshare-panel`**
 
@@ -267,7 +270,7 @@ attached to them:
 - **dependsOn** — `audio.modprobe.snd-usb-audio-index`
 - **Value source** — fleet setting `audio.captureVolume`.
 - **Risk** — —
-- **Notes** — Not set by any guide command; recorded here because it is persisted by `alsactl store` and is the mic-side twin of the `PCM,1` trap — a frame that cannot be heard while everything reports healthy. Kept as one resource pending open question 9: whether `Headset,0`/`Headset,1` are two real gain stages (as `PCM,0`/`PCM,1` turned out to be) or two views of one. If two, split it.
+- **Notes** — Not set by any guide command; recorded here because it is persisted by `alsactl store` and is the mic-side twin of the `PCM,1` trap — a frame that cannot be heard while everything reports healthy. Kept as one resource pending open question 8: whether `Headset,0`/`Headset,1` are two real gain stages (as `PCM,0`/`PCM,1` turned out to be) or two views of one. If two, split it.
 
 **`audio.alsa.stored-state`**
 
@@ -315,7 +318,7 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fleet setting `device.user` (the username; `framelink` in the running example).
 - **Risk** — not brick-capable, but a wrong username means no user session, and every user unit below is then `Blocked`.
-- **Notes** — Written by `raspi-config nonint do_boot_behaviour B2`, which is a **competing owner**: any later `raspi-config` boot-behaviour call rewrites or removes this file. The empty first `ExecStart=` is required by systemd to clear the inherited value; a drop-in missing that line does not override. **The whole user-unit layer hangs off this one file** — there is no `loginctl enable-linger` anywhere in the v1 build (see open question 7).
+- **Notes** — Written by `raspi-config nonint do_boot_behaviour B2`, which is a **competing owner**: any later `raspi-config` boot-behaviour call rewrites or removes this file. The empty first `ExecStart=` is required by systemd to clear the inherited value; a drop-in missing that line does not override. **The whole user-unit layer hangs off this one file** — there is no `loginctl enable-linger` anywhere in the v1 build (see open question 6).
 
 **`session.bash-profile-exec-labwc`**
 
@@ -493,7 +496,7 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fixed.
 - **Risk** — **brick-capable** (`config.txt`).
-- **Notes** — Stock-image default, not written by any guide, but the guide names it as the thing to check when the camera is missing — so it is a real resource with a real Act (restore the line). See open question 8 on the wider set of stock `config.txt` lines.
+- **Notes** — Stock-image default, not written by any guide, but the guide names it as the thing to check when the camera is missing — so it is a real resource with a real Act (restore the line). See open question 7 on the wider set of stock `config.txt` lines.
 
 **`portal.camera-interface-published`**
 
@@ -783,7 +786,7 @@ itself and the group membership that reaches it.
 - **dependsOn** — —
 - **Value source** — fixed; on/off is a fleet setting per [Appendix B item 4](../version2.md).
 - **Risk** — —
-- **Notes** — **Not present in the v1 reference.** Guide 12 step 6 was never applied to the frame that defines parity, so this resource has no v1 counterpart to diff against. See open question 10.
+- **Notes** — **Not present in the v1 reference.** Guide 12 step 6 was never applied to the frame that defines parity, so this resource has no v1 counterpart to diff against. See open question 9.
 
 **`apt.auto-upgrades-enabled`**
 
@@ -880,14 +883,18 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 
 **`identity.hostname`**
 
-- **From** — set at flash time in [guide 2](../docs/2-sd-flash-first-boot.md); changed per unit in [guide 13 step 4](../docs/13-multi-device-deploy.md#4-give-the-clone-its-own-hostname); **trap recorded in [version2.md Appendix B item 1](../version2.md)**
-- **Sets** — the system hostname (and the matching `/etc/hosts` entry), for example `framelink-douwe`.
-- **Observe** — `hostnamectl --static` **and** the cloud-init source of truth on the boot partition (`/boot/firmware/meta-data` and `/boot/firmware/user-data`, plus any `/etc/cloud/cloud.cfg.d/*` drop-in) **and** `/etc/hosts`.
-- **Verify** — identical, and only meaningful **after a reboot** — that is the entire point of the trap.
+- **From** — set at flash time in [guide 2](../docs/2-sd-flash-first-boot.md); changed per unit in [guide 13 step 4](../docs/13-multi-device-deploy.md#4-give-the-clone-its-own-hostname)
+- **Sets** — the system hostname (for example `framelink-douwe`) **and** the `127.0.1.1` line of `/etc/hosts` that maps that name back to loopback.
+- **Observe** — `hostnamectl --static` **and** `getent hosts $(hostname)`, which must answer a loopback address (`127.0.1.1`). Both halves are required, and the second is the one that catches the real fault: the name check passes on its own while the frame is resolving itself off-machine.
+- **Verify** — identical, after a reboot, like every other resource ([§2.4](../version2.md)).
 - **dependsOn** — `agent.adoption`
 - **Value source** — fleet setting `device.hostname` (per-device override; the guide-2 pattern is `framelink-<recipient>`).
-- **Risk** — **brick-adjacent** — the corrective write targets `/boot/firmware`, the same partition as the brick-capable resources, and shares their validate-and-back-up discipline.
-- **Notes** — **Observed on the mule 2026-08-15:** the hostname is cloud-init managed on this image. `hostnamectl set-hostname` appears to succeed and is **silently reverted at the next boot**, and a `preserve_hostname: true` drop-in was **not** sufficient. The concrete mechanism is visible in the v1 kernel command line: `ds=nocloud;i=rpi-imager-1776005232619` — the NoCloud datasource, seeded from the boot partition by Raspberry Pi Imager, with `rpi-cloud-init-mods` and `cloud-init 25.2` installed and `cloud-init-local`/`cloud-init-main`/`cloud-init-network`/`cloud-config`/`cloud-final` all enabled. The resource must therefore act on **cloud-init's seed**, not on `hostnamectl`, and its Verify must be a post-reboot read. A write-only check would have marked this `InSync` while it was quietly wrong. Guide 13's `raspi-config nonint do_hostname` is subject to the same revert and cannot be transcribed as the Act.
+- **Risk** — **not brick-capable, and not brick-adjacent either.** The Act is `hostnamectl set-hostname` plus an idempotent `/etc/hosts` rewrite; nothing under `/boot/firmware` is touched, so none of the boot-partition write discipline applies.
+- **Notes** — **Why this resource matters is `/etc/hosts`, not the name.** `hostnamectl` does not maintain that file. Measured on the mule 2026-08-15: after renaming to `framelink-mule`, `127.0.1.1` still read `raspberrypi`, no local entry existed for the new name, and resolution fell through to DNS — `getent hosts framelink-mule` answered `217.61.253.65   framelink-mule.huisman.io`. **The frame resolved its own name to a public internet address.** Anything resolving its own name — a service binding to it, a certificate, LiveKit's advertised media address — is pointed at a machine that is not this one, and the only warning is `sudo`'s `unable to resolve host`, which reads as cosmetic noise. Writing `127.0.1.1<TAB>framelink-mule` fixes it (`getent` then returns `127.0.1.1`) and it survived a second reboot. Half-applied is the dangerous state here; a merely wrong name is the mild one. One resource covering both files by sub-rule 1 — they are written together, cannot be acted on independently, and a content compare already names which half drifted.
+  **The cloud-init trap this entry used to carry does not reproduce.** [Appendix B item 1](../version2.md) recorded the hostname as cloud-init managed and silently reverted at the next boot, and this catalog acted on that: the Act wrote cloud-init's NoCloud seed and the risk was called brick-adjacent because that write lands on `/boot/firmware`. Measured on the mule 2026-08-15, **the hostname survives a reboot** — `raspberrypi` → `hostnamectl set-hostname framelink-mule` → `framelink-mule` after a real reboot, with `boot_id` moving from `4b668b4f-…` to `fdb32d94-…` — and cloud-init logged nothing about hostnames on that boot. Two independent reasons why. First, **the shipped seed supplies no hostname**: `/boot/firmware/user-data` carries `#hostname: raspberrypi`, commented out, and `/boot/firmware/meta-data` holds only `dsmode: local` and `instance_id: rpios-image` with no `local-hostname`, so there is nothing to re-apply. Second, **cloud-init's `update_hostname` stands down once a human has taken over**: `/var/lib/cloud/data/previous-hostname` still reads `raspberrypi`, so the running hostname differs from the one cloud-init last recorded, and the module treats it as user-maintained and returns without acting. `preserve_hostname: false` in `/etc/cloud/cloud.cfg` does not override that.
+  **A difference still to verify — hypothesis, not fact.** The mule was flashed with a raw image write, so its kernel command line carries **no `ds=nocloud;i=rpi-imager-…` parameter**; cloud-init found its seed through `seedfrom: file:///boot/firmware` instead. The v1 frame *was* Imager-flashed and does carry that parameter with an Imager-generated instance id (v1 inventory `KERNEL_CMDLINE`), and an Imager-written `user-data` contains a real, uncommented `hostname:` key. An Imager-flashed card may therefore genuinely re-apply the hostname where a raw-flashed one does not. **That is untested and must not be restated as established.** The honest position: the trap was observed once on a differently-provisioned system and does not hold on the stock image v2 bootstraps from — which is the image that counts.
+  **What survives the disproof is [decision 26](../version2.md).** A write-only check would still have been wrong here, only about a different thing: `hostnamectl` returns success while the resource is half-applied at that instant. The reboot proves the whole state, not just the half the tool owns. [Guide 13 step 4](../docs/13-multi-device-deploy.md#4-give-the-clone-its-own-hostname)'s `raspi-config nonint do_hostname` writes `/etc/hostname` and `/etc/hosts` together and is therefore *more* correct than `hostnamectl` alone; it still is not the Act, because it is a competing owner (suspected-revert item 6) rather than because anything reverts it.
+  **Scheduled 37th**, last in the system-configuration phase and ahead of the session and kiosk stack, because everything that binds to the frame's own name comes after it. It sat at 75 while it was believed to be a boot-partition write.
 
 **`system.timezone`**
 
@@ -897,8 +904,8 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 - **Verify** — identical, after a reboot.
 - **dependsOn** — `agent.adoption`
 - **Value source** — fleet setting `locale.timeZone`.
-- **Risk** — brick-adjacent if the Act writes the boot-partition seed.
-- **Notes** — **Same owner as the hostname.** cloud-init has a `timezone` module and Imager seeds it, so this is a first-class suspect for the same silent revert. Verify after a reboot; do not trust `timedatectl set-timezone` alone. Directly visible to the user — the 3 AM restart window and the slideshow both depend on local time.
+- **Risk** — none established. Assume the Act is `timedatectl set-timezone`; it becomes a boot-partition write only if the seed turns out to own the value, and there is now no evidence that it does.
+- **Notes** — **The "same owner as the hostname" argument has lost the case it rested on.** It was written when the hostname was believed to be silently reverted by cloud-init; that trap did not reproduce (see `identity.hostname`), so "cloud-init has a `timezone` module and Imager seeds it" is now an untested inference rather than a suspicion with a confirmed sibling. What is still true and still worth acting on: cloud-init does ship a `timezone` module, and nobody has read this image's seed for a `timezone:` key — the mule's `user-data` was read for `hostname` only, and that key was present *as a comment*. Read the seed for `timezone:` before designing an Act around it, and keep Verify after a reboot regardless, because [§2.4](../version2.md) requires that of every resource and not only of suspected reverts. Directly visible to the user — the 3 AM restart window and the slideshow both depend on local time.
 
 **`system.locale`**
 
@@ -909,7 +916,7 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 - **dependsOn** — `agent.adoption`
 - **Value source** — fleet setting `locale.language` / `locale.keyboard`.
 - **Risk** — —
-- **Notes** — Same cloud-init suspicion as the time zone. `console-setup.service` and `keyboard-setup.service` are enabled in the v1 reference and re-apply keyboard configuration at boot — a second competing owner.
+- **Notes** — The cloud-init half of this is the same weakened inference as the time zone's, and for the same reason. The **keyboard** half is on firmer ground and does not depend on it at all: `console-setup.service` and `keyboard-setup.service` are enabled in the v1 reference and re-apply keyboard configuration at boot from `/etc/default/keyboard`, which is a competing owner evidenced by the inventory rather than by analogy — still untested as a revert, but reasoned from something measured.
 
 **`boot.cmdline.wifi-regdom`**
 
@@ -931,7 +938,7 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 - **dependsOn** — —
 - **Value source** — fixed by the catalog.
 - **Risk** — **brick-capable** (EEPROM). Recovery is a card swap at best, a recovery-image flash at worst.
-- **Notes** — Included because it is parity state that the state-diff harness will compare and because `rpi-eeprom-update.service` is **enabled** in the v1 reference — an autonomous owner that can flash a newer bootloader and change this configuration without anyone asking. `POWER_OFF_ON_HALT=1` matters for the smart-plug power-cycle harness in [§5.1](../version2.md). The v1 inventory captures the EEPROM *config* but not the bootloader *version*; see open question 13.
+- **Notes** — Included because it is parity state that the state-diff harness will compare and because `rpi-eeprom-update.service` is **enabled** in the v1 reference — an autonomous owner that can flash a newer bootloader and change this configuration without anyone asking. **Confirmed on the stock mule 2026-08-15:** `POWER_OFF_ON_HALT=1` and `BOOT_ORDER=0xf461`, matching the v1 reference, so these are stock-image values rather than anything a guide set. `POWER_OFF_ON_HALT=1` matters for the smart-plug power-cycle harness in [§5.1](../version2.md) in a specific way worth stating: `halt` genuinely cuts power, so a silent frame on a live relay has three explanations and not two — booting, hung, or halted and drawing nothing. The v1 inventory captures the EEPROM *config* but not the bootloader *version*; that gap is now closed by measurement — see open question 11, including the standing instruction **not** to update it.
 
 ---
 
@@ -1011,13 +1018,23 @@ dependency: guide 4 states the mixer levels are validated against firmware 2.0.1
 | 2–3 | **Display — §5.5 carve-out, earliest possible slot** | `boot.cmdline.fbcon-rotate` · `boot.config.dtoverlay-waveshare-panel` |
 | 4–5 | **Agent roots — identity and adoption** | `agent.keypair` · `agent.adoption` |
 | 6–22 | **Package set** | `pkg.labwc` · `pkg.chromium` · `pkg.wireplumber` · `pkg.pipewire-alsa` · `pkg.wlr-randr` · `pkg.xdg-desktop-portal` · `pkg.xdg-desktop-portal-gtk` · `pkg.gstreamer1.0-tools` · `pkg.gstreamer1.0-plugins-base` · `pkg.gstreamer1.0-libcamera` · `pkg.gstreamer1.0-pipewire` · `pkg.libspa-0.2-libcamera.absent` · `pkg.dfu-util` · `pkg.git` · `pkg.grim` · `pkg.unattended-upgrades` · `tool.xvf-host.installed` |
-| 23–36 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` |
-| 37–46 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
-| 47–52 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
-| 53 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
-| 54–60 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
-| 61–74 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
-| 75–79 | **Brick-capable, unbootable risk — last** | `identity.hostname` · `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+| 23–37 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` · `identity.hostname` |
+| 38–47 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
+| 48–53 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
+| 54 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
+| 55–61 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
+| 62–75 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
+| 76–79 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+
+**`identity.hostname` moved out of the last phase, from 75 to 37.** It was scheduled there because
+the trap made its Act a `/boot/firmware` write; with the trap disproved the Act is `hostnamectl`
+plus an `/etc/hosts` rewrite and the resource is not brick-capable at all. Its new slot is the end
+of system configuration, immediately before the session and kiosk stack, so the frame is answering
+to its own name — and resolving that name to loopback — before anything binds to it. The shift
+cancels out at the tail: removing one resource from the final phase and adding one ahead of it
+leaves `boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio` and
+`boot.cmdline.wifi-regdom` at the same positions 76, 77 and 78 that the prose elsewhere in this
+document cites, and the last phase is four resources rather than five.
 
 **What moving the display early costs elsewhere.** Three things get worse, and they are worth naming
 rather than smoothing over.
@@ -1045,20 +1062,39 @@ rather than smoothing over.
    these two resources it is the *only* post-mortem, so it has to be flushed before the reboot rather
    than at the end of the cycle.
 
-**Reboot cost, stated plainly.** [§2.4](../version2.md) mandates a reboot per resource with no
-exceptions. At 79 resources and roughly 40–60 s per boot-and-verify cycle, a bare-metal provision
-carries **75–80 minutes of reboot overhead alone**, before apt download time (~350 MB across the two
-package steps). That is the deliberate cost of the rule, but it is worth having the number: a first
-provision is a one-to-two-hour operation, and the console-stage narration in
-[§2.7](../version2.md) is what makes it legible while it happens.
+**Reboot cost, re-derived from measurement.** [§2.4](../version2.md) mandates a reboot per resource
+with no exceptions. The earlier figure here — 40–60 s per cycle, **75–80 minutes** across 79
+resources — was an estimate, and it was roughly **2.5× too pessimistic**. Measured on the mule
+2026-08-15 and recorded in [§6.1](../version2.md): **22.3 s from `systemctl reboot` to SSH accepting
+again**, taken twice (22.3 s and ~20 s) with loss of port 22 confirmed in between, so it is a real
+round trip and not a connection that never dropped. At ~22 s a cycle, 79 resources cost **about 29
+minutes of reboot overhead** — call the budget **30 minutes** to leave room for each resource's
+Observe pass, which is a handful of cheap reads and not a second boot. Before apt download time
+(~350 MB across the two package steps) a first bare-metal provision is therefore well under an hour
+rather than the one-to-two-hour operation this section previously described.
+
+**This is the number the reboot rule is argued against, so the correction matters beyond
+arithmetic.** Cost was the strongest case for per-resource cleverness about which settings "really"
+need a reboot — the exact reasoning [§2.4](../version2.md) blames for v1's governor bug — and the
+real cost is under half what was assumed. [Decision 26](../version2.md) gets cheaper without
+changing.
+
+**One term this figure deliberately excludes, so nobody double-counts it.** [§2.7](../version2.md)
+puts a countdown bar before each verifying reboot, defaulting to 60 s under
+[decision 48](../version2.md). That is *deliberate pacing for a human reading the screen*, not
+machine time, and it is skippable per reboot, settable per fleet or device, and forced to zero by
+`--development`. At its default it would dominate everything above, so a provision's wall-clock time
+is the 30 minutes here plus whatever pacing the operator has configured — two numbers that must be
+quoted separately, because only one of them is a cost of the reboot rule.
 
 **The carve-out does not change that total — it changes who can watch it.** The resource count and
-the per-cycle cost are untouched, so 75–80 minutes still stands. What moves is the dark window: under
-the literal §5.5 ordering the panel lit at position 76, so roughly 75 of the 79 cycles — over an hour
-— ran with nothing on screen and §2.7's narration became real only in the last few minutes. Under the
-carve-out the dark window is **three cycles** — `agent.version` plus the two display resources
-themselves, the panel lighting on the overlay's own verifying reboot. That is the floor: nothing can
-be shown before the overlay lands. The one thing the figure still does not include is item 2 above —
+the per-cycle cost are untouched, so the 30 minutes stands. What moves is the dark window: under
+the literal §5.5 ordering the panel lit near position 76, so roughly 75 of the 79 cycles — around
+half an hour — ran with nothing on screen and §2.7's narration became real only in the last minutes.
+Under the carve-out the dark window is **three cycles** — `agent.version` plus the two display
+resources themselves, the panel lighting on the overlay's own verifying reboot. That is the floor:
+nothing can be shown before the overlay lands. The one thing the figure still does not include is
+item 2 above —
 a mid-provision clobber of the boot files adds reboots that were not possible when the display lines
 were written last. Second-order and worth having: **an early brick is cheaper than a late one.** The
 card swap §5.5 falls back on now costs three cycles of work rather than seventy-five.
@@ -1067,44 +1103,88 @@ card swap §5.5 falls back on now costs three cycles of work rather than seventy
 
 ## Suspected "silently reverted" settings
 
-The hostname trap is not unique. These are the settings whose write can appear to succeed while a
-different owner puts them back — ranked by confidence. Every one of them can report `InSync` while
-being wrong if Observe reads what was written instead of what is in force after a reboot.
+These are the settings whose write can appear to succeed while a different owner puts them back.
+Every one of them can report `InSync` while being wrong if Observe reads what was written instead of
+what is in force after a reboot.
 
-**Confirmed on hardware**
+**Read the tier headings literally.** This list was written around one confirmed archetype — the
+hostname — and most of the entries below it were reasoned *by analogy* from that archetype rather
+than measured. **The archetype has since been disproved** (see `identity.hostname`: the hostname
+survives a reboot on the stock image, and cloud-init logs nothing about it), which does not make the
+inferences false but does remove the thing that made them look safe to assume. The tiers are
+therefore re-cut by **what kind of evidence exists**, not by how confident the entry felt when it
+was written, so the next person can see at a glance what still needs testing. Nothing has been
+silently demoted or dropped: every original entry is still here, at its original number.
 
-1. **`identity.hostname` — cloud-init.** Recorded in [Appendix B item 1](../version2.md), observed on
-   the mule 2026-08-15. `hostnamectl set-hostname` succeeds and is reverted at next boot; a
-   `preserve_hostname: true` drop-in was not enough. Owner is the NoCloud datasource seeded from the
-   boot partition (`ds=nocloud;i=rpi-imager-…` in the v1 kernel command line). Act on the seed.
-2. **`cpu.governor.performance` — kernel-parameter route is ineffective.** Documented in guide 12
-   step 7 and cited in [§2.4](../version2.md): `cpufreq.default_governor=performance` reaches
-   `/proc/cmdline` and the governor still comes up `ondemand`. The oneshot unit is the only route
-   that works, and the governor value must be read separately from the unit's state.
+**Measured on hardware — a revert or an ineffective route was actually observed**
 
-**Strongly suspected — same owner class, not yet re-tested**
+1. **`identity.hostname` — DISPROVED as a revert; the real fault is a half-apply.** ~~cloud-init
+   reverts the hostname at next boot.~~ Measured on the mule 2026-08-15: the hostname **survives**
+   a real reboot (`boot_id` changed), cloud-init logged nothing about hostnames, the shipped seed
+   carries no hostname at all, and `update_hostname` stands down because
+   `/var/lib/cloud/data/previous-hostname` shows a human took over. What *is* measured and is a
+   genuine fault is different in kind: `hostnamectl` does not maintain `/etc/hosts`, so the frame
+   resolved its own name through DNS to a public internet address. **Not a competing owner putting
+   something back — a second file the writer never wrote.** Full detail, including the untested
+   Imager-versus-raw-flash hypothesis, is under the resource. Kept in this list at number 1 rather
+   than deleted, because everything below was ranked against it.
+2. **`cpu.governor.performance` — kernel-parameter route is ineffective.** Documented in
+   [guide 12 step 7](../docs/12-systemd-and-reliability.md#7-pin-the-cpu-governor-to-performance)
+   and cited in [§2.4](../version2.md): `cpufreq.default_governor=performance` reaches
+   `/proc/cmdline` and the governor still comes up `ondemand`. The guide records this as *verified on
+   hardware*, independently of the hostname and before it, so **this entry is untouched by the
+   disproof and is now the list's only measured archetype.** The oneshot unit is the only route that
+   works, and the governor value must be read separately from the unit's state.
 
-3. **`system.timezone` and `system.locale` — cloud-init.** cloud-init has `timezone` and `locale`
-   modules, Imager seeds both, and the same five cloud-init units are enabled. Treat exactly like the
-   hostname: act on the seed, verify after a reboot. `console-setup.service` and
-   `keyboard-setup.service` are a second boot-time owner of the keyboard half.
+**Inferred from the hostname case — the reasoning that supported these is now much weaker**
+
+3. **`system.timezone` and `system.locale` — cloud-init.** ⚠ **This entry was pure analogy** —
+   "same owner class" as a hostname trap that no longer exists. cloud-init does have `timezone` and
+   `locale` modules and the five cloud-init units are enabled, but nobody has read this image's seed
+   for either key, nobody has observed either value reverting, and the one cloud-init module that was
+   actually watched declined to act. Do not treat "act on the seed" as settled; **read the seed
+   first, then decide.** The keyboard half has a separate and better-evidenced owner that does not
+   depend on this argument at all: `console-setup.service` and `keyboard-setup.service` are enabled
+   in the v1 reference and re-apply from `/etc/default/keyboard` at boot. Untested as a revert, but
+   reasoned from something measured rather than from the hostname.
+**Reasoned from an owner evidenced independently of the hostname — untouched by the disproof, but
+none has been tested either**
+
 4. **`audio.mixer.*` — WirePlumber's device-state restore.** `alsa-restore.service` applies
    `/var/lib/alsa/asound.state` early in boot, then the user session starts and WirePlumber's
    `restore-device` policy applies **its own** stored per-device volume and route from
    `~/.local/state/wireplumber/`. Later writer wins. The mixer resources therefore have two owners,
    only one of which the guides configure — and the symptom (a quiet frame) is the same one the
-   hidden `PCM,1` stage already produces, so it will be misattributed. **Recommendation:** observe
-   the mixer *after the user session is up*, and treat WirePlumber's stored device state as either a
-   resource in its own right or something the agent explicitly clears.
+   hidden `PCM,1` stage already produces, so it will be misattributed. **What the evidence actually
+   is:** documented upstream WirePlumber behaviour plus a boot ordering, not an observation.
+   [Guide 4](../docs/4-audio-configuration.md) never mentions WirePlumber at all, and the v1
+   inventory does not capture `~/.local/state/wireplumber/`, so even the presence of the stored
+   state on this frame is unconfirmed. Cheap to settle: list that directory on the mule.
+   **Recommendation unchanged:** observe the mixer *after the user session is up*, and treat
+   WirePlumber's stored device state as either a resource in its own right or something the agent
+   explicitly clears.
 5. **Network configuration — cloud-init plus NetworkManager plus netplan.** The v1 image carries
    `cloud-init`, `rpi-cloud-init-mods`, `netplan.io`, `netplan-generator`, `python3-netplan` and
    NetworkManager, with `NetworkManager.service`, `NetworkManager-wait-online.service` and
    `wpa_supplicant.service` all enabled. cloud-init writes `/etc/netplan/50-cloud-init.yaml` at boot
    and netplan renders it into NetworkManager. Any hand-written network file — including guide 13
-   step 9's `nmcli` profile — sits downstream of a generator that reruns every boot.
-6. **`/etc/hosts` — raspi-config and cloud-init.** `raspi-config nonint do_hostname` rewrites
-   `/etc/hostname` and `/etc/hosts` together; cloud-init's `manage_etc_hosts` can rewrite it again.
-   Any hostname resource must own both files or it will half-apply.
+   step 9's `nmcli` profile — sits downstream of a generator that reruns every boot. **What the
+   evidence actually is:** the package set and the enabled units are inventory facts, so the
+   *machinery* is certainly present; that it rewrites anything on this image is documented
+   behaviour, not an observation. `/etc/netplan/50-cloud-init.yaml` is not captured in the v1
+   inventory. One caution carried over from the hostname: the raw-flashed mule's NoCloud seed turned
+   out to be nearly empty, so what cloud-init would render here from a seed that says almost nothing
+   is genuinely unknown.
+6. **`/etc/hosts` — raspi-config and cloud-init.** ✅ **The half-apply is now measured; the revert
+   is not.** `hostnamectl` maintains `/etc/hostname` and **not** `/etc/hosts`, observed on the mule
+   2026-08-15, with the consequence recorded under `identity.hostname`: `127.0.1.1` kept naming the
+   old host, the frame resolved its own name through DNS, and the answer was a public internet
+   address. So "any hostname resource must own both files or it will half-apply" is confirmed —
+   and it is confirmed as a *gap in the writer*, not as a competing owner putting something back,
+   which is a different failure and needs a different fix. The original claim that
+   `raspi-config nonint do_hostname` and cloud-init's `manage_etc_hosts` can each rewrite the file
+   remains true of both tools and untested on this image. **This entry is the one thing the old
+   number-1 trap was pointing at that turned out to be real.**
 7. **`/boot/firmware/config.txt` and `cmdline.txt` — package postinst plus unattended upgrades.**
    `raspi-firmware`, `raspberrypi-sys-mods` and the kernel packages carry hooks that regenerate these
    files. Turning on `apt.auto-upgrades-enabled` (guide 12 step 6) points an unattended writer
@@ -1114,11 +1194,24 @@ being wrong if Observe reads what was written instead of what is in force after 
    written at positions 2–3, ahead of the package set and ahead of auto-upgrades being enabled, so
    they are exposed to both writers for the rest of the provision and for the life of the fleet.
    A clobber here is not cosmetic drift — it is the frame going dark, and the reconciler notices with
-   no screen left to say so. Treat this as the highest-consequence entry in this list.
+   no screen left to say so. Treat this as the highest-consequence entry in this list. **What the
+   evidence actually is:** Debian and Raspberry Pi packaging behaviour — real, and independent of
+   anything to do with the hostname — but no clobber has been observed on this hardware. It is the
+   entry most worth spending a deliberate test on, because it is the one whose failure is invisible
+   by construction.
 8. **`eeprom.config` — `rpi-eeprom-update.service` is enabled.** An autonomous owner that can flash a
-   newer bootloader at boot and change EEPROM configuration with nobody asking.
+   newer bootloader at boot and change EEPROM configuration with nobody asking. **Measured on the
+   mule 2026-08-15, and it complicates the entry rather than confirming it:** the running bootloader
+   is dated **2025-12-08** while **2026-05-26** is available, so the enabled updater has had months
+   and has demonstrably *not* fired. The capability is real; the claim that it acts unprompted on
+   this image is not supported by the only frame anyone has looked at. Treat it as an owner that
+   could act, whose actual trigger conditions (release channel, staged-firmware presence) nobody has
+   established. See open question 11 — and do not update it to find out.
 
-**Worth checking, lower confidence**
+**Worth checking, lower confidence — none of these ever rested on the hostname case**
+
+These five were reasoned from their own named owners and are unaffected by the disproof. They stay
+exactly as written.
 
 9. **`boot.autologin.getty-tty1` — raspi-config.** Nothing reverts it today, but any later
    `do_boot_behaviour` call rewrites or removes it, and the whole user-unit layer depends on it.
@@ -1143,7 +1236,7 @@ Guide 13 is out of catalog scope. Mapping its ten steps:
 | 1 | Rollout plan; four-service + container health sweep on the master | Fleet Manager device list with live per-resource status ([§3.5](../version2.md)); the sweep is the reconciler's Status roll-up |
 | 2 | Capture `framelink-golden.img` from the master's card | **Deferred to v3** ([§8](../version2.md), SD image generation). v2 provisions from a stock image; there is no golden image and no cloned identity to strip |
 | 3 | Flash the clone, boot one at a time to avoid hostname collision | Stock image plus [§4.3](../version2.md) discovery (install flag → boot file → mDNS). The one-at-a-time constraint disappears because identity is the keypair, generated per device |
-| 4 | `raspi-config nonint do_hostname` + reboot | **Device resource** `identity.hostname`, value from fleet setting `device.hostname` — and subject to the cloud-init trap, so the guide's command is not the Act |
+| 4 | `raspi-config nonint do_hostname` + reboot | **Device resource** `identity.hostname`, value from fleet setting `device.hostname`. The guide's command is not the Act, but the reason has changed: it is a competing owner the agent should not shell out to, **not** a command something reverts. What it gets right and `hostnamectl` alone does not is writing `/etc/hosts` alongside `/etc/hostname` — the half the resource now owns explicitly |
 | 5 | Hand-edit `config.json` identity and token; restart the browser | Adoption issues identity, room, LiveKit token and desired values ([§3.3](../version2.md)); the five fields become `app.config.*` resources |
 | 6 | `rpi-connect signout` / `signin` per clone | Fleet Manager reverse shell ([§3.6](../version2.md)) — outbound-initiated, audited, auto-closing. Keypair identity removes the inherited-registration problem entirely |
 | 7 | Per-clone cold-boot verification | Checkpoint assertions inside each resource's Verify, surfaced as per-device status |
@@ -1190,6 +1283,15 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
    a frame that never boots again but has not been tested on this hardware. See the write discipline
    at the head of the Guide 3 section, and prove one before the first unattended bare-metal
    provision.
+   *Measured on the mule 2026-08-15, and it leaves this exactly as open as it was:* **`tryboot` is
+   not configured.** There is no `autoboot.txt` and no `tryboot.txt` / `tryboot.img` on the boot
+   partition — the mechanism is simply not in use on this image. A Pi 5 bootloader almost certainly
+   *supports* it, but that is an inference from the platform rather than something confirmed on this
+   unit, and confirming it means writing to the boot partition and rebooting, which is the very act
+   the mechanism exists to make safe. So decision 46's carve-out still leans on an untested
+   self-repair path, and this remains the outstanding half. Space is not the obstacle: the boot
+   partition has **430 MB free**, which comfortably holds a backup pair of `config.txt` /
+   `cmdline.txt`, a boot counter, and a `tryboot` candidate at once.
 
 2. **DFU firmware ordering versus the mixer values it validates.** Guide 4 states the volume settings
    are validated against firmware 2.0.10 and that 2.0.6-era firmware exposes the DAC volume path
@@ -1297,8 +1399,17 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
     free to change it. [§2.2](../version2.md) lists "one firmware version" as a canonical example of a
     resource, so the boot chain has an unpinned firmware in a catalog that pins the mic array's.
     *Reading adopted:* `eeprom.config` covers configuration only; a `firmware.rpi-bootloader.version`
-    resource is probably warranted but cannot be specified without a captured baseline. Capture
-    `rpi-eeprom-update -l` / `vcgencmd bootloader_version` before the mule is wiped again.
+    resource is probably warranted but cannot be specified without a captured baseline.
+    *Baseline captured 2026-08-15, on the mule:* the running bootloader is dated **2025-12-08** and
+    the latest available is **2026-05-26**, so the dev mule is **several releases out of date** and
+    the enabled auto-updater has not acted on it in months. That is now a known state of the mule
+    rather than a surprise waiting for whoever next reads a boot log, and it also weakens suspected-
+    revert item 8, which assumed that updater was an active autonomous owner.
+    **Do not update it.** An EEPROM write is brick-capable and its recovery is a card swap at best
+    and a recovery-image flash at worst; there is no v2 requirement that the mule run current
+    bootloader firmware, and taking that risk to close a documentation gap is a bad trade. When a
+    `firmware.rpi-bootloader.version` resource is eventually specified, this date pair is its first
+    data point and the frame it was measured on is still available to re-read.
 
 12. **`app.config.immich-kiosk-url` disagrees with itself in the parity reference.** The running
     frame's `config.json` lacks `use_offline_mode=true` while `app/config.example.json` includes it.
