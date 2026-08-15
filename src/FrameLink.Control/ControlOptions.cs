@@ -67,8 +67,18 @@ public sealed record ControlOptions
     /// expired — it refreshes the timestamp on every reconnect.</remarks>
     public TimeSpan PendingDeviceTtl { get; init; } = TimeSpan.FromDays(7);
 
-    /// <summary>How often expired pending rows are swept.</summary>
+    /// <summary>How often expired pending rows and old events are swept.</summary>
     public TimeSpan ReaperInterval { get; init; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// How long device events and reconciliation history are kept (§3.5, decision 21).
+    /// </summary>
+    /// <remarks>
+    /// One month, and never any photo or call content. Long enough that a fault which showed up
+    /// as drift three weeks ago is still explainable; short enough that a single-volume SQLite
+    /// file on an operator's server stays a file rather than a database problem.
+    /// </remarks>
+    public TimeSpan TelemetryRetention { get; init; } = TimeSpan.FromDays(31);
 
     /// <summary>Handshake attempts allowed from one address per <see cref="RateLimitWindow"/>.</summary>
     public int RateLimitAttempts { get; init; } = 20;

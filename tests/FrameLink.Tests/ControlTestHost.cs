@@ -114,6 +114,7 @@ public sealed class StorageFixture : IDisposable
         Database = new SqliteDatabase(_workspace.DatabasePath);
         Devices = new SqliteDeviceStore(Database, Clock);
         Settings = new SqliteSettingsStore(Database, Clock);
+        Telemetry = new SqliteFleetTelemetryStore(Database);
     }
 
     /// <summary>The test clock the stores stamp rows with.</summary>
@@ -127,6 +128,9 @@ public sealed class StorageFixture : IDisposable
 
     /// <summary>Settings repository under test.</summary>
     public ISettingsStore Settings { get; }
+
+    /// <summary>Reconciliation reports and device events (§3.5).</summary>
+    public IFleetTelemetryStore Telemetry { get; }
 
     /// <summary>Registers a device by proven contact and returns its row.</summary>
     public Task<DeviceRecord> SeeDeviceAsync(string deviceId, string publicKey = "key", int cap = 100) =>
@@ -306,6 +310,97 @@ public sealed class ControlServer : IAsyncDisposable
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", login!.Token);
     }
 
+    /// <summary>Adopts a device through the operator route.</summary>
+    public async Task AdoptAsync(string deviceId, string? name = null)
+    {
+        var query = name is null ? string.Empty : "?name=" + Uri.EscapeDataString(name);
+        var response = await Client.PostAsync(
+            $"/api/devices/{deviceId}/adopt{query}",
+            content: null,
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+    }
+
+    /// <summary>Reads a device's live reconciliation state (§3.5).</summary>
+    public async Task<DeviceReconcileResponse> GetReconcileAsync(string deviceId)
+    {
+        var response = await Client.GetAsync(
+            $"/api/devices/{deviceId}/reconcile",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.DeviceReconcileResponse);
+    }
+
+    /// <summary>Reads a device's recent events.</summary>
+    public async Task<DeviceEventsResponse> GetEventsAsync(string deviceId, int limit = 50)
+    {
+        var response = await Client.GetAsync(
+            $"/api/devices/{deviceId}/events?limit={limit}",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.DeviceEventsResponse);
+    }
+
+    /// <summary>Polls the reconcile route until it satisfies a condition, or gives up.</summary>
+    /// <remarks>
+    /// The agent's message crosses a real socket and is stored on the server's own task, so the
+    /// route is eventually consistent with the send by a few milliseconds. Polling is the honest
+    /// way to wait for that; asserting immediately would be a flake generator.
+    /// </remarks>
+    public async Task<DeviceReconcileResponse> WaitForReconcileAsync(
+        string deviceId,
+        Func<ReconcileReport?, bool> condition,
+        TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        DeviceReconcileResponse latest;
+
+        do
+        {
+            latest = await GetReconcileAsync(deviceId);
+            if (condition(latest.Report))
+            {
+                return latest;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return latest;
+    }
+
+    /// <summary>Polls the events route until it satisfies a condition, or gives up.</summary>
+    public async Task<DeviceEventsResponse> WaitForEventsAsync(
+        string deviceId,
+        Func<IReadOnlyList<DeviceEvent>, bool> condition,
+        TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        DeviceEventsResponse latest;
+
+        do
+        {
+            latest = await GetEventsAsync(deviceId);
+            if (condition(latest.Events))
+            {
+                return latest;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return latest;
+    }
+
     /// <summary>Opens a device connection and runs the frozen handshake.</summary>
     public Task<TestAgent> ConnectAgentAsync(
         ECDsa key,
@@ -457,6 +552,41 @@ public sealed class TestAgent : IAsyncDisposable
         }
 
         return _socket.State is not WebSocketState.Open;
+    }
+
+    /// <summary>Sends a reconciliation report on the <c>telemetry</c> channel (§4.1).</summary>
+    public Task SendReportAsync(ReconcileReport report) =>
+        SendAsync(
+            _socket,
+            ControlWire.KindReconcileReport,
+            report,
+            ProtocolJson.Default.ReconcileReport,
+            ProtocolConstants.ChannelTelemetry);
+
+    /// <summary>Sends one device event on the <c>events</c> channel (§4.1).</summary>
+    public Task SendEventAsync(DeviceEvent deviceEvent) =>
+        SendAsync(
+            _socket,
+            ControlWire.KindDeviceEvent,
+            deviceEvent,
+            ProtocolJson.Default.DeviceEvent,
+            ProtocolConstants.ChannelEvents);
+
+    /// <summary>Sends a well-formed envelope whose payload the server cannot read.</summary>
+    /// <remarks>
+    /// The shape a newer agent, or a damaged one, produces: the frozen envelope parses and the
+    /// body does not. §4.2 makes that legible on purpose, so it must not close the socket.
+    /// </remarks>
+    public async Task SendGarbageOnAsync(string kind, string channel)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(
+            $$"""{"magic":"framelink","kind":"{{kind}}","channel":"{{channel}}","payload":"not an object"}""");
+
+        await _socket.SendAsync(
+            bytes,
+            WebSocketMessageType.Text,
+            endOfMessage: true,
+            TestContext.Current.CancellationToken);
     }
 
     /// <summary>Sends a pong, the way a live agent answers the server's liveness probe.</summary>

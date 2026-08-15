@@ -156,6 +156,46 @@ public sealed record DeviceSettingsResponse
     public required IReadOnlyDictionary<string, string> Effective { get; init; }
 }
 
+/// <summary>
+/// A device's live reconciliation state (§3.5), verbatim as the frame reported it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The GUI's live reconciliation screen is out of scope for M2</b> — a later workstream owns
+/// it. What exists now is the data and its shape: the report is the agent's own
+/// <c>ReconcileReport</c> from <c>FrameLink.Protocol</c>, handed back unchanged, so whoever
+/// builds that screen renders exactly what the frame said rather than a server's paraphrase of
+/// it. The only thing added here is <see cref="Online"/>, which the server knows and the frame
+/// does not.
+/// </para>
+/// <para>
+/// <see cref="Report"/> is null for a device that has never sent one — a pending frame, or one
+/// adopted a second ago. That is a real state and the screen has to render it, so it is a null
+/// rather than an empty report pretending to be an observation.
+/// </para>
+/// </remarks>
+public sealed record DeviceReconcileResponse
+{
+    /// <summary>The device this is about.</summary>
+    public required string DeviceId { get; init; }
+
+    /// <summary>Whether a socket is open right now. Presence <i>is</i> the socket (§3.5).</summary>
+    public required bool Online { get; init; }
+
+    /// <summary>The latest report, or null if the frame has never sent one.</summary>
+    public ReconcileReport? Report { get; init; }
+}
+
+/// <summary>A device's recent events (§4.1's <c>events</c> channel), newest first.</summary>
+public sealed record DeviceEventsResponse
+{
+    /// <summary>The device this is about.</summary>
+    public required string DeviceId { get; init; }
+
+    /// <summary>Events, newest first, capped by the request's limit.</summary>
+    public required IReadOnlyList<DeviceEvent> Events { get; init; }
+}
+
 /// <summary>A refused request, in a shape the GUI can render.</summary>
 public sealed record ApiError
 {

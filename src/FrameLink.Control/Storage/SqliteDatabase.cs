@@ -22,7 +22,15 @@ namespace FrameLink.Control.Storage;
 /// </remarks>
 public sealed class SqliteDatabase : IDisposable
 {
-    private const int SchemaVersion = 1;
+    /// <summary>
+    /// 2: the reconciliation report and device-event tables of §3.5.
+    /// </summary>
+    /// <remarks>
+    /// The schema is additive and every statement below is <c>IF NOT EXISTS</c>, so an existing
+    /// volume moves from 1 to 2 by starting the new container and nothing else. There is no
+    /// migration step because there is nothing to migrate — no existing column changed meaning.
+    /// </remarks>
+    private const int SchemaVersion = 2;
 
     /// <summary>Key of the settings revision counter in <c>control_meta</c>.</summary>
     internal const string RevisionKey = "settings_revision";
@@ -148,6 +156,37 @@ public sealed class SqliteDatabase : IDisposable
                 updated_utc TEXT NOT NULL,
                 PRIMARY KEY (device_id, key)
             );
+
+            CREATE TABLE IF NOT EXISTS device_reports (
+                device_id        TEXT PRIMARY KEY REFERENCES devices (device_id) ON DELETE CASCADE,
+                sequence         INTEGER NOT NULL,
+                generated_utc    TEXT NOT NULL,
+                loop_state       TEXT NOT NULL,
+                in_sync          INTEGER NOT NULL,
+                drifted          INTEGER NOT NULL,
+                blocked          INTEGER NOT NULL,
+                reboots_expected INTEGER NOT NULL,
+                current_resource TEXT,
+                current_phase    TEXT,
+                payload          TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS device_events (
+                device_id    TEXT NOT NULL REFERENCES devices (device_id) ON DELETE CASCADE,
+                occurred_utc TEXT NOT NULL,
+                kind         TEXT NOT NULL,
+                resource     TEXT,
+                summary      TEXT NOT NULL,
+                delta        TEXT,
+                attempts     INTEGER NOT NULL DEFAULT 0,
+                payload      TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS device_events_device_time
+                ON device_events (device_id, occurred_utc DESC);
+
+            CREATE INDEX IF NOT EXISTS device_events_time
+                ON device_events (occurred_utc);
 
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('schema_version', '1');
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('settings_revision', '0');

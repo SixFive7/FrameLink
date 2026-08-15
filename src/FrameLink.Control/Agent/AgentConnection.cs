@@ -32,6 +32,17 @@ public sealed class AgentConnection(
     /// <summary>When the socket was adopted into the registry.</summary>
     public DateTimeOffset ConnectedUtc { get; } = clock.GetUtcNow();
 
+    /// <summary>
+    /// Invoked for every inbound message that is not a pong.
+    /// </summary>
+    /// <remarks>
+    /// Awaited inside the receive loop rather than fired and forgotten, which serialises the
+    /// telemetry writes for one device against that device's own socket. A drained offline
+    /// buffer arrives as a burst of ordered events (§4.1), and storing them concurrently would
+    /// be the one way to lose that order after the agent went to the trouble of preserving it.
+    /// </remarks>
+    public Func<string, WireEnvelope, CancellationToken, Task>? OnInbound { get; init; }
+
     /// <summary>Sends a payload on a logical channel.</summary>
     /// <remarks>
     /// Serialised through a lock because a WebSocket permits exactly one send at a time, and
@@ -122,11 +133,11 @@ public sealed class AgentConnection(
             // Any inbound traffic proves the socket is alive, not just a pong. A device that
             // is busy streaming telemetry has already answered the question a ping asks.
             Interlocked.Exchange(ref _lastInboundTicks, clock.GetUtcNow().UtcTicks);
-            Dispatch(envelope);
+            await DispatchAsync(envelope, cancellationToken).ConfigureAwait(false);
         }
     }
 
-    private void Dispatch(WireEnvelope envelope)
+    private async Task DispatchAsync(WireEnvelope envelope, CancellationToken cancellationToken)
     {
         if (string.Equals(envelope.Kind, ControlWire.KindPong, StringComparison.Ordinal))
         {
@@ -134,11 +145,15 @@ public sealed class AgentConnection(
             return;
         }
 
-        // Telemetry and events are accepted and logged for M1 — retention and the live
-        // reconciliation screen are §3.5 work for a later milestone. Unknown kinds take the
-        // same path rather than closing the socket: the envelope is frozen so that a newer
-        // peer stays legible, and hanging up on an unrecognised Kind would throw that away.
+        // Unknown kinds reach the handler too and are ignored there rather than closing the
+        // socket: the envelope is frozen so that a newer peer stays legible, and hanging up on
+        // an unrecognised Kind would throw that away.
         logger.InboundMessage(DeviceId, envelope.Kind, envelope.Channel);
+
+        if (OnInbound is { } handler)
+        {
+            await handler(DeviceId, envelope, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private async Task LivenessLoopAsync(CancellationToken cancellationToken)

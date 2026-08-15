@@ -201,6 +201,7 @@ public sealed class ControlAbuseControlTests
         var limiter = new RegistrationRateLimiter(options, fixture.Clock);
         var reaper = new PendingDeviceReaper(
             fixture.Devices,
+            fixture.Telemetry,
             limiter,
             options,
             fixture.Clock,

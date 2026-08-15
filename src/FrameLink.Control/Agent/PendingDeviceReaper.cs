@@ -14,6 +14,7 @@ namespace FrameLink.Control.Agent;
 /// </remarks>
 public sealed class PendingDeviceReaper(
     IDeviceStore devices,
+    IFleetTelemetryStore telemetry,
     RegistrationRateLimiter limiter,
     ControlOptions options,
     TimeProvider clock,
@@ -50,6 +51,18 @@ public sealed class PendingDeviceReaper(
             if (expired > 0)
             {
                 logger.ExpiredPendingDevices(expired);
+            }
+
+            // §3.5: one month of events and reconciliation history, then rolled off. On the same
+            // timer as the pending sweep because both are the same job — keeping a single-volume
+            // SQLite file from growing without an upper bound on a server nobody watches.
+            var rolled = await telemetry
+                .ExpireEventsAsync(now - options.TelemetryRetention, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (rolled > 0)
+            {
+                logger.ExpiredDeviceEvents(rolled);
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

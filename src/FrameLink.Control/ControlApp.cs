@@ -59,6 +59,7 @@ public static class ControlApp
         // a Postgres implementation later is a registration change and nothing else.
         builder.Services.AddSingleton<IDeviceStore, SqliteDeviceStore>();
         builder.Services.AddSingleton<ISettingsStore, SqliteSettingsStore>();
+        builder.Services.AddSingleton<IFleetTelemetryStore, SqliteFleetTelemetryStore>();
 
         builder.Services.AddSingleton<OperatorSessions>();
         builder.Services.AddSingleton<FleetEvents>();
@@ -67,6 +68,7 @@ public static class ControlApp
         builder.Services.AddSingleton<AgentReleaseCatalog>();
         builder.Services.AddSingleton<SettingsPublisher>();
         builder.Services.AddSingleton<DeviceHandshake>();
+        builder.Services.AddSingleton<TelemetryIngest>();
         builder.Services.AddSingleton<AgentSocketHandler>();
         builder.Services.AddHostedService<PendingDeviceReaper>();
 

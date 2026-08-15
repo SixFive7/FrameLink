@@ -18,6 +18,7 @@ public sealed class AgentSocketHandler(
     ISettingsStore settings,
     SettingsPublisher publisher,
     AgentConnectionRegistry registry,
+    TelemetryIngest telemetry,
     ControlOptions options,
     TimeProvider clock,
     ILoggerFactory loggerFactory,
@@ -47,7 +48,10 @@ public sealed class AgentSocketHandler(
             socket,
             options,
             clock,
-            loggerFactory.CreateLogger<AgentConnection>());
+            loggerFactory.CreateLogger<AgentConnection>())
+        {
+            OnInbound = telemetry.HandleAsync,
+        };
 
         var displaced = registry.Register(connection);
         if (displaced is not null)

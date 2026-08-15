@@ -32,6 +32,9 @@ public static class OperatorEndpoints
         app.MapPut("/api/settings/{key}", SetFleetSettingAsync);
         app.MapDelete("/api/settings/{key}", RemoveFleetSettingAsync);
 
+        app.MapGet("/api/devices/{deviceId}/reconcile", GetReconcileAsync);
+        app.MapGet("/api/devices/{deviceId}/events", GetDeviceEventsAsync);
+
         app.MapGet("/api/devices/{deviceId}/settings", GetDeviceSettingsAsync);
         app.MapPut("/api/devices/{deviceId}/settings/{key}", SetDeviceSettingAsync);
         app.MapDelete("/api/devices/{deviceId}/settings/{key}", RemoveDeviceSettingAsync);
@@ -425,6 +428,58 @@ public static class OperatorEndpoints
 
         events.Publish(deviceId);
         return Results.NoContent();
+    }
+
+    /// <summary>A device's live reconciliation state (§3.5).</summary>
+    /// <remarks>
+    /// A 404 only when the device is unknown. A known device with no report yet answers 200 with
+    /// a null report, because "adopted a second ago and has not reported" is a state the screen
+    /// has to render and is not an error.
+    /// </remarks>
+    private static async Task<IResult> GetReconcileAsync(
+        string deviceId,
+        IDeviceStore devices,
+        IFleetTelemetryStore telemetry,
+        AgentConnectionRegistry registry,
+        CancellationToken cancellationToken)
+    {
+        if (await devices.FindAsync(deviceId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            return NotFound(deviceId);
+        }
+
+        var report = await telemetry.GetReportAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+        return Results.Json(
+            new DeviceReconcileResponse
+            {
+                DeviceId = deviceId,
+                Online = registry.IsOnline(deviceId),
+                Report = report,
+            },
+            ControlJson.Default.DeviceReconcileResponse);
+    }
+
+    /// <summary>A device's recent events, newest first.</summary>
+    private static async Task<IResult> GetDeviceEventsAsync(
+        string deviceId,
+        int? limit,
+        IDeviceStore devices,
+        IFleetTelemetryStore telemetry,
+        CancellationToken cancellationToken)
+    {
+        if (await devices.FindAsync(deviceId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            return NotFound(deviceId);
+        }
+
+        var events = await telemetry
+            .ListEventsAsync(deviceId, limit ?? 50, cancellationToken)
+            .ConfigureAwait(false);
+
+        return Results.Json(
+            new DeviceEventsResponse { DeviceId = deviceId, Events = events },
+            ControlJson.Default.DeviceEventsResponse);
     }
 
     private static async Task<IResult> GetFleetSettingsAsync(

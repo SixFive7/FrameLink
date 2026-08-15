@@ -116,6 +116,29 @@ internal static partial class ControlLog
         string? channel);
 
     [LoggerMessage(
+        EventId = 1305,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} sent a '{Kind}' this server could not read. Dropping it.")]
+    public static partial void UnreadableTelemetry(this ILogger logger, string deviceId, string kind);
+
+    [LoggerMessage(
+        EventId = 1306,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} reported '{Kind}' on {Resource}: {Summary}")]
+    public static partial void DeviceEscalated(
+        this ILogger logger,
+        string deviceId,
+        string kind,
+        string? resource,
+        string summary);
+
+    [LoggerMessage(
+        EventId = 1502,
+        Level = LogLevel.Information,
+        Message = "Rolled off {Count} device events older than the retention window.")]
+    public static partial void ExpiredDeviceEvents(this ILogger logger, int count);
+
+    [LoggerMessage(
         EventId = 1400,
         Level = LogLevel.Debug,
         Message = "Could not push settings to {DeviceId}; the socket had already gone.")]
