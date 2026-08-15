@@ -490,12 +490,14 @@ public static class AppConfigCatalog
             FileName = "app.immich-kiosk-url",
             SettingKey = "slideshow.url",
 
-            // The catalog gives this resource `kiosk.listen-address`, which belongs to the Immich
-            // Kiosk block and is not in the compiled catalog yet. The DAG refuses a dependency on
+            // The catalog gives this resource one dependency, `kiosk.listen-address`, and no
+            // adoption edge — the base URL is fixed and `slideshow.interval` has a catalog default
+            // that is correct before adoption, which is exactly the condition the catalog's
+            // dependsOn rule uses to decide the question. `kiosk.listen-address` belongs to the
+            // Immich Kiosk block and is not compiled in yet; the DAG refuses a dependency on
             // something that does not exist — deliberately, since it could never be satisfied — so
-            // the dependency arrives with that block. What is declared here is the half that does
-            // exist: the local origin, which is what serves the app that loads this URL.
-            DependsOn = [AdoptionResource.ResourceName, LocalOriginResource.ResourceName],
+            // that edge arrives with that block rather than being approximated by a different one.
+            DependsOn = [],
             Detected = "This frame does not know where to find its photos.",
             WhyItMatters = "The screen shows a spinner instead of the slideshow.",
             Gloss = "Telling this frame where its photo slideshow comes from.",

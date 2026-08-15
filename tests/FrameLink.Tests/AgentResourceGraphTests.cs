@@ -186,20 +186,26 @@ public sealed class AgentResourceGraphTests
         Assert.True(order.IndexOf(LocalOriginResource.ResourceName)
             < order.IndexOf(ChromiumKioskUnitResource.ResourceName));
 
-        // §3.3: a pending device receives nothing, so every issued value is blocked behind
-        // adoption — but the kiosk stack itself is not, because §2.7's browser stage has to be
-        // able to render the "adopt me" screen.
-        foreach (var spec in AppConfigCatalog.Specs)
+        // The catalog's dependsOn rule: a resource declares agent.adoption when its desired value
+        // is issued by the Fleet Manager and no catalog default is correct before adoption. The
+        // four call values have no possible default — the address of somebody's LiveKit server is
+        // not something this document can hold — so they are gated.
+        foreach (var name in new[] { "app.config.identity", "app.config.room", "app.config.livekit-url" })
         {
-            var resource = graph.Find(spec.ResourceName)!;
-            var reachesAdoption = resource.DependsOn.Contains(AdoptionResource.ResourceName)
-                || resource.DependsOn.Any(name =>
-                    graph.Find(name)!.DependsOn.Contains(AdoptionResource.ResourceName));
-
-            Assert.True(reachesAdoption, $"{spec.ResourceName} must be gated by adoption");
+            Assert.Contains(AdoptionResource.ResourceName, graph.Find(name)!.DependsOn);
         }
 
+        Assert.Equal(
+            ["app.config.identity", "app.config.room", "app.config.livekit-url"],
+            graph.Find("app.config.livekit-token")!.DependsOn);
+
+        // And the slideshow URL is not, because its base is fixed and slideshow.interval has a
+        // catalog default that is correct on an unadopted frame. Nor is the kiosk stack itself:
+        // §2.7's browser stage has to be able to render the "adopt me" screen on exactly the frame
+        // that has not been adopted.
+        Assert.Empty(graph.Find("app.config.immich-kiosk-url")!.DependsOn);
         Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ChromiumKioskUnitResource.ResourceName)!.DependsOn);
+        Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ConsoleAutologinResource.ResourceName)!.DependsOn);
     }
 
     internal static DeviceCatalogContext Context(TemporaryFiles files)

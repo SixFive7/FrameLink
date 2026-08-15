@@ -95,25 +95,36 @@ public sealed class LoginUserSession : IUserSession
     private readonly Func<string> _user;
     private readonly Lock _gate = new();
     private (string User, string Uid)? _resolved;
+    private string? _flashed;
 
     /// <summary>Creates a session over <paramref name="user"/>.</summary>
     /// <param name="processes">How commands are started.</param>
     /// <param name="user">
-    /// The login user, read at call time. Anything empty falls back to
-    /// <see cref="DefaultUser"/> — an unadopted frame receives no settings at all (§3.3), and the
-    /// kiosk stack still has to come up on it so that §2.7's browser stage can show the
-    /// "adopt me" screen.
+    /// The login user from the fleet setting, read at call time. When it says nothing — which is
+    /// the whole of a pending frame's experience (§3.3) — the name falls back to <b>the account
+    /// the image was flashed with, read off the frame itself</b>.
     /// </param>
     public LoginUserSession(IProcessRunner processes, Func<string>? user = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
 
         _processes = processes;
-        _user = user ?? (() => DefaultUser);
+        _user = user ?? (() => string.Empty);
     }
 
     /// <inheritdoc/>
-    public string UserName => _user()?.Trim() is { Length: > 0 } name ? name : DefaultUser;
+    /// <remarks>
+    /// <b>The fallback is read off the frame, not hard-coded, and the catalog is explicit about
+    /// why.</b> <c>boot.autologin.getty-tty1</c> "does not gate on adoption, and that is
+    /// load-bearing rather than a technicality: this file is the root of the whole user-unit
+    /// layer, so an adoption edge here would block the session, labwc and the browser — and §2.7's
+    /// browser stage would then be unavailable to exactly the pending frame that is supposed to be
+    /// rendering its own fingerprint on it." Not gating on adoption only helps if there is a value
+    /// to converge on before adoption, and the frame has one: the account the image was flashed
+    /// with, which on Raspberry Pi OS is the first ordinary user, uid 1000. <see cref="DefaultUser"/>
+    /// is the last resort, for a machine that has no such account at all.
+    /// </remarks>
+    public string UserName => _user()?.Trim() is { Length: > 0 } name ? name : FlashedAccount();
 
     /// <inheritdoc/>
     public string HomeDirectory => HomeRoot + "/" + UserName;
@@ -187,6 +198,46 @@ public sealed class LoginUserSession : IUserSession
         }
 
         return targets;
+    }
+
+    /// <summary>The name behind uid 1000, or <see cref="DefaultUser"/>.</summary>
+    /// <remarks>
+    /// <para>
+    /// <c>getent passwd 1000</c> rather than a scan of <c>/home</c>: a home directory is a
+    /// guess — a leftover one from a previous owner reads exactly like a live account — while the
+    /// passwd database is the thing the login the drop-in performs will actually consult.
+    /// </para>
+    /// <para>
+    /// Resolved once per process. It cannot change under a running agent, and it is consulted on
+    /// every observation of every user-scoped resource on a five-minute sweep.
+    /// </para>
+    /// </remarks>
+    public string FlashedAccount()
+    {
+        lock (_gate)
+        {
+            if (_flashed is { } cached)
+            {
+                return cached;
+            }
+        }
+
+        var result = _processes
+            .RunAsync("getent", ["passwd", "1000"], CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+
+        var name = result.Succeeded && result.StandardOutput.Split(':') is { Length: > 1 } fields
+            && fields[0].Trim() is { Length: > 0 } account
+                ? account
+                : DefaultUser;
+
+        lock (_gate)
+        {
+            _flashed = name;
+        }
+
+        return name;
     }
 
     private async Task<string?> UidAsync(string user, CancellationToken cancellationToken)

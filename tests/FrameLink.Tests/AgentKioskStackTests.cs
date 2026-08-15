@@ -103,6 +103,55 @@ public sealed class AgentKioskStackTests
     }
 
     [Fact]
+    public void With_no_fleet_setting_the_user_is_the_account_the_image_was_flashed_with()
+    {
+        var processes = new RecordingProcessRunner();
+        processes.Answers["getent passwd 1000"] = new ProcessResult(
+            0,
+            "pi:x:1000:1000:,,,:/home/pi:/bin/bash",
+            string.Empty);
+
+        // The catalog makes boot.autologin.getty-tty1 converge *before* adoption, on purpose: an
+        // adoption edge on the root of the user-unit layer would block the session, labwc and the
+        // browser, and §2.7's browser stage would be unavailable to exactly the pending frame that
+        // is supposed to be rendering its own fingerprint. That only works if there is a value to
+        // converge on, and the frame reads it off itself.
+        var session = new LoginUserSession(processes);
+
+        Assert.Equal("pi", session.UserName);
+        Assert.Equal("/home/pi", session.HomeDirectory);
+
+        // Resolved once: it cannot change under a running agent, and every user-scoped resource
+        // asks for it on every five-minute sweep.
+        _ = session.UserName;
+        Assert.Single(processes.Commands);
+
+        // A machine with no such account still gets a name rather than an empty path.
+        Assert.Equal(
+            LoginUserSession.DefaultUser,
+            new LoginUserSession(new RecordingProcessRunner { Default = new ProcessResult(2, string.Empty, string.Empty) })
+                .UserName);
+    }
+
+    [Fact]
+    public void The_home_directory_walk_stops_at_the_home_directory_itself()
+    {
+        // The agent writes as root, so it hands back what it created — the file and every
+        // directory it had to make to reach it. The home directory is not one of those: useradd
+        // made it long before the agent existed.
+        Assert.Equal(
+            ["/home/framelink/.config/systemd/user/chromium-kiosk.service",
+             "/home/framelink/.config/systemd/user",
+             "/home/framelink/.config/systemd",
+             "/home/framelink/.config"],
+            LoginUserSession.SelfAndAncestors(
+                "/home/framelink/.config/systemd/user/chromium-kiosk.service",
+                "/home/framelink"));
+
+        Assert.Empty(LoginUserSession.SelfAndAncestors("/etc/hosts", "/home/framelink"));
+    }
+
+    [Fact]
     public void The_bash_profile_is_guide_5s_118_bytes_with_both_guards()
     {
         var content = BashProfileLabwcResource.DesiredContent;

@@ -208,9 +208,12 @@ public sealed class AgentHost
 
         // The kiosk stack lives in one unprivileged user's session while the agent is root in the
         // system manager (§6.1). One seam covers both the home directory and that user's systemd.
+        // No fallback passed: an unset device.user falls through to the account the image was
+        // flashed with, which the frame reads off itself. The catalog requires the autologin
+        // drop-in to converge before adoption, and it can only do that if it has a value then.
         var session = new LoginUserSession(
             HostProcessRunner.Instance,
-            () => values.Get(LoginUserSession.SettingKey, LoginUserSession.DefaultUser));
+            () => values.Get(LoginUserSession.SettingKey, string.Empty));
 
         // §2.1: the app is inside this binary, and §2.7 wants the repair screen on the same
         // origin. One server answers both, plus the local channel the page checks in over.
