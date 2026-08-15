@@ -14,23 +14,21 @@ namespace FrameLink.Control;
 /// wire therefore appears in this list or in <c>ProtocolJson</c>.
 /// </para>
 /// <para>
-/// This is a second context alongside <c>ProtocolJson</c> rather than an extension of it,
-/// because that project is frozen and is not modified. Both are registered on the HTTP JSON
-/// options, and the resolver chain picks whichever knows the type.
+/// This is a second context alongside <c>ProtocolJson</c> rather than an extension of it, and
+/// the split is the same one as in <c>ControlContracts.cs</c>: what the <i>agent</i> reads is
+/// contract and lives in <c>FrameLink.Protocol</c>; what the operator's <i>browser</i> reads
+/// ships in the same container as this server and lives here. Both are registered on the HTTP
+/// JSON options, and the resolver chain picks whichever knows the type.
 /// </para>
 /// </remarks>
 [JsonSourceGenerationOptions(
     PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
-[JsonSerializable(typeof(AgentPing))]
-[JsonSerializable(typeof(AgentPong))]
-[JsonSerializable(typeof(SettingsPush))]
 [JsonSerializable(typeof(SetupStatus))]
 [JsonSerializable(typeof(LoginRequest))]
 [JsonSerializable(typeof(LoginResponse))]
 [JsonSerializable(typeof(DeviceView))]
 [JsonSerializable(typeof(DeviceListResponse))]
-[JsonSerializable(typeof(AdoptRequest))]
 [JsonSerializable(typeof(SettingValueRequest))]
 [JsonSerializable(typeof(FleetSettingsResponse))]
 [JsonSerializable(typeof(DeviceSettingsResponse))]

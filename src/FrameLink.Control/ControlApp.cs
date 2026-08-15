@@ -61,6 +61,7 @@ public static class ControlApp
         builder.Services.AddSingleton<ISettingsStore, SqliteSettingsStore>();
 
         builder.Services.AddSingleton<OperatorSessions>();
+        builder.Services.AddSingleton<FleetEvents>();
         builder.Services.AddSingleton<AgentConnectionRegistry>();
         builder.Services.AddSingleton<RegistrationRateLimiter>();
         builder.Services.AddSingleton<AgentReleaseCatalog>();

@@ -1,70 +1,14 @@
+using FrameLink.Protocol;
+
 namespace FrameLink.Control;
 
-/// <summary>
-/// Kinds and channels this milestone layers on top of the frozen envelope.
-/// </summary>
-/// <remarks>
-/// <c>WireEnvelope</c> is frozen forever, and the way a protocol version grows is by adding
-/// new <c>Kind</c> values and new payload shapes — never by touching the envelope. These are
-/// those additions for M1. They live here rather than in <c>FrameLink.Protocol</c> because
-/// that project is the frozen contract and is not modified; promoting a kind into it is a
-/// deliberate act once both programs agree on it.
-/// </remarks>
-public static class ControlWire
-{
-    /// <summary>Server to agent, on the control channel. Answered with <see cref="KindPong"/>.</summary>
-    public const string KindPing = "ping";
-
-    /// <summary>Agent to server, on the control channel.</summary>
-    public const string KindPong = "pong";
-
-    /// <summary>Server to agent, on the control channel. Carries <see cref="SettingsPush"/>.</summary>
-    public const string KindSettings = "settings";
-}
-
-/// <summary>
-/// Server-to-agent liveness probe (§3.5).
-/// </summary>
-/// <remarks>
-/// An application-level ping rather than a WebSocket control frame, because the thing that
-/// has to be observable is the <i>answer</i>. A pulled plug leaves a half-open TCP connection
-/// that accepts writes forever; only a reply within a deadline proves the frame is still
-/// there, and only an application-level exchange gives the deadline somewhere to live.
-/// </remarks>
-public sealed record AgentPing
-{
-    /// <summary>Monotonic per-connection counter, echoed back in the pong.</summary>
-    public required long Sequence { get; init; }
-
-    /// <summary>When the server sent it.</summary>
-    public required DateTimeOffset SentUtc { get; init; }
-}
-
-/// <summary>Agent-to-server answer to <see cref="AgentPing"/>.</summary>
-public sealed record AgentPong
-{
-    /// <summary>The sequence number from the ping being answered.</summary>
-    public required long Sequence { get; init; }
-}
-
-/// <summary>
-/// The effective settings pushed to an adopted device on connect and after any change (§3.4).
-/// </summary>
-/// <remarks>
-/// Only ever sent to a device whose handshake answered <c>ok</c>. A pending device receives
-/// nothing (§3.3), and configuration is the largest part of that nothing.
-/// </remarks>
-public sealed record SettingsPush
-{
-    /// <summary>Device the values were resolved for.</summary>
-    public required string DeviceId { get; init; }
-
-    /// <summary>Settings revision, so the agent can ignore a repeat of what it already has.</summary>
-    public required long Revision { get; init; }
-
-    /// <summary>Fleet defaults with per-device overrides applied.</summary>
-    public required IReadOnlyDictionary<string, string> Values { get; init; }
-}
+// The shapes the operator's browser exchanges with this server.
+//
+// Everything in this file is server-to-browser and deliberately NOT frozen: the GUI ships in
+// the same container as the server, so both halves of these contracts move together and a
+// field can be added, dropped or reshaped in one commit. The wire types shared with the AGENT
+// are the opposite case — they live in FrameLink.Protocol, where the two programs meet and
+// nothing may move under a frame that cannot be updated. Nothing device-facing belongs here.
 
 /// <summary>What the GUI needs to render the first-run state (§3.2).</summary>
 public sealed record SetupStatus
@@ -123,6 +67,17 @@ public sealed record DeviceView
     /// <summary>The agent's free-text self-report, verbatim.</summary>
     public string? AgentStatus { get; init; }
 
+    /// <summary>
+    /// The same self-report, classified into <see cref="AgentHealth"/>'s coarse vocabulary.
+    /// </summary>
+    /// <remarks>
+    /// Beside the free text, never instead of it. §3.5's presence ladder needs to know whether
+    /// a connected frame is healthy, and reading that out of a field the protocol documents as
+    /// free text is a guess — one the browser used to make, and got wrong for every real agent.
+    /// The classification happens once, here, against the vocabulary both programs share.
+    /// </remarks>
+    public required string Health { get; init; }
+
     /// <summary>Protocol version the agent last claimed.</summary>
     public int? ProtocolVersion { get; init; }
 
@@ -134,6 +89,25 @@ public sealed record DeviceView
 
     /// <summary>Most recent proven contact. Reads as "offline since" when not online.</summary>
     public required DateTimeOffset LastSeenUtc { get; init; }
+
+    /// <summary>
+    /// When <see cref="State"/> last changed: "adopted on", "blocked since".
+    /// </summary>
+    /// <remarks>
+    /// Also what makes §3.5's <c>Never enrolled</c> rung reachable in its useful sense. The
+    /// literal reading — no row — cannot be rendered, because a row only exists after a proven
+    /// handshake. The reading an operator actually needs is <i>adopted, and not seen since</i>,
+    /// which is exactly <see cref="LastSeenUtc"/> earlier than this.
+    /// </remarks>
+    public required DateTimeOffset StateChangedUtc { get; init; }
+
+    /// <summary>Address the last proven handshake arrived from.</summary>
+    /// <remarks>
+    /// Bench-matching evidence of the same kind as <see cref="HardwareSerial"/>: it answers
+    /// "is this the frame on my desk or the one in my mother's living room" without anyone
+    /// having to walk to either.
+    /// </remarks>
+    public string? LastRemoteAddress { get; init; }
 }
 
 /// <summary>The device list.</summary>
@@ -144,13 +118,6 @@ public sealed record DeviceListResponse
 
     /// <summary>Whether blocked devices were included (§3.3's "show blocked" toggle).</summary>
     public required bool IncludeBlocked { get; init; }
-}
-
-/// <summary>Adoption body.</summary>
-public sealed record AdoptRequest
-{
-    /// <summary>Operator-assigned display name. Optional.</summary>
-    public string? Name { get; init; }
 }
 
 /// <summary>Body of a settings write.</summary>

@@ -119,11 +119,36 @@ public sealed class SqliteDeviceStore(SqliteDatabase database, TimeProvider cloc
     }
 
     /// <inheritdoc/>
-    public Task<DeviceRecord?> AdoptAsync(
+    public async Task<DeviceAdoption> AdoptAsync(
         string deviceId,
         string? displayName,
-        CancellationToken cancellationToken) =>
-        TransitionAsync(deviceId, DeviceState.Adopted, displayName, clearOverrides: false, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        var record = await TransitionAsync(
+            deviceId,
+            DeviceState.Adopted,
+            displayName,
+            clearOverrides: false,
+            cancellationToken).ConfigureAwait(false);
+
+        if (record is not null)
+        {
+            return new DeviceAdoption { Result = DeviceAdoptionResult.Adopted, Record = record };
+        }
+
+        // The UPDATE excludes blocked rows, so nothing changed for two different reasons and
+        // only a read can tell them apart. Doing it after the failed write rather than before
+        // it keeps the ordinary path one round trip and leaves no window where a block landing
+        // between a check and a write would be adopted anyway.
+        var existing = await FindAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+        return new DeviceAdoption
+        {
+            Result = existing is { State: DeviceState.Blocked }
+                ? DeviceAdoptionResult.Blocked
+                : DeviceAdoptionResult.Unknown,
+        };
+    }
 
     /// <inheritdoc/>
     public Task<DeviceRecord?> BlockAsync(string deviceId, CancellationToken cancellationToken) =>
@@ -186,10 +211,20 @@ public sealed class SqliteDeviceStore(SqliteDatabase database, TimeProvider cloc
             // something adoption granted and un-adoption has to take back.
             update.CommandText = state switch
             {
+                // `state <> 'blocked'` is the whole of §3.3's "re-trusting a device is a
+                // separate, deliberate press". Without it, POST /adopt on a blocked frame
+                // adopted it in one step and `UnblockAsync` enforced a rule the route ignored.
+                // Already-adopted rows still match, because writing the name IS renaming.
+                // The CASE keeps "adopted on" meaning adopted on. Adoption doubles as the rename
+                // route, so stamping the timestamp unconditionally would move it every time
+                // somebody corrected a typo — and, worse, would briefly make last-seen older
+                // than state-changed, which is exactly how §3.5's `Never enrolled` rung is read.
                 DeviceState.Adopted => """
                     UPDATE devices
-                    SET state = 'adopted', display_name = $name, state_changed_utc = $now
-                    WHERE device_id = $id;
+                    SET state = 'adopted',
+                        display_name = $name,
+                        state_changed_utc = CASE WHEN state = 'adopted' THEN state_changed_utc ELSE $now END
+                    WHERE device_id = $id AND state <> 'blocked';
                     """,
                 DeviceState.Pending => """
                     UPDATE devices

@@ -13,21 +13,45 @@ namespace FrameLink.Control.Endpoints;
 public static class GuiEndpoints
 {
     /// <summary>Maps the shell, the setup page and a liveness probe.</summary>
+    /// <remarks>
+    /// <para>
+    /// One fallback, and the order inside it is the whole design. The SPA shell wins whenever
+    /// it exists — <b>including while the instance is unconfigured</b> — because §3.2 makes the
+    /// unconfigured experience a designed screen rather than a failure, and the GUI is where
+    /// that screen was designed. <c>/api/status</c> is exempt from the operator gate precisely
+    /// so the shell can ask, with no session, whether there is a password yet.
+    /// </para>
+    /// <para>
+    /// Getting this backwards is not a cosmetic bug and it did happen: checking
+    /// <c>IsConfigured</c> first meant that on an instance carrying the built GUI, an
+    /// unconfigured server served the plain C# page at every path, and the designed setup
+    /// screen — the one an operator meets first, on the day they meet the product — could never
+    /// render at all. Nothing failed. It just quietly served the fallback for the feature.
+    /// </para>
+    /// </remarks>
     public static void MapGuiEndpoints(this WebApplication app)
     {
         ArgumentNullException.ThrowIfNull(app);
 
         app.MapGet("/healthz", static () => Results.Text("ok"));
 
-        // A single fallback, so every GUI route resolves to the SPA shell — or, while the
-        // instance is unconfigured, to the page that explains why there is no GUI yet.
         app.MapFallback(static (HttpContext context, OperatorCredential credential) =>
         {
-            if (!credential.IsConfigured)
+            // An unmatched API call is a 404 in the shape the client asked for, never the SPA
+            // shell. The fallback matches every method and every path, so without this a POST
+            // that misses its route — one missing `Content-Type` is enough — is answered 200
+            // text/html, and the caller's JSON parser reports a syntax error in a document it
+            // never asked for.
+            if (context.Request.Path.StartsWithSegments("/api", StringComparison.OrdinalIgnoreCase))
             {
-                return Results.Content(
-                    SetupPage.Render(credential.Problem),
-                    "text/html; charset=utf-8");
+                return Results.Json(
+                    new ApiError
+                    {
+                        Error = "no-such-route",
+                        Detail = $"Nothing is mapped at {context.Request.Method} {context.Request.Path}.",
+                    },
+                    ControlJson.Default.ApiError,
+                    statusCode: StatusCodes.Status404NotFound);
             }
 
             var shell = Path.Combine(
@@ -35,9 +59,16 @@ public static class GuiEndpoints
                     ?? string.Empty,
                 "index.html");
 
-            return File.Exists(shell)
-                ? Results.File(shell, "text/html; charset=utf-8")
-                : Results.Content(PlaceholderShell, "text/html; charset=utf-8");
+            if (File.Exists(shell))
+            {
+                return Results.File(shell, "text/html; charset=utf-8");
+            }
+
+            // No GUI in this image. SetupPage is then the only thing that can explain an
+            // unconfigured server, which is what it is for and why it is not deleted.
+            return credential.IsConfigured
+                ? Results.Content(PlaceholderShell, "text/html; charset=utf-8")
+                : Results.Content(SetupPage.Render(credential.Problem), "text/html; charset=utf-8");
         });
     }
 

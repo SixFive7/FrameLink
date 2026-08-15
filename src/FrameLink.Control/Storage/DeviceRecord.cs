@@ -13,6 +13,37 @@ public enum DeviceState
     Blocked = 2,
 }
 
+/// <summary>How an adoption request was answered.</summary>
+public enum DeviceAdoptionResult
+{
+    /// <summary>The device is now adopted, under the name that was supplied.</summary>
+    Adopted = 0,
+
+    /// <summary>This Fleet Manager has never met that device.</summary>
+    Unknown = 1,
+
+    /// <summary>The device is blocked, and blocked devices are unblocked before they are adopted.</summary>
+    Blocked = 2,
+}
+
+/// <summary>
+/// The outcome of an adoption attempt.
+/// </summary>
+/// <remarks>
+/// A nullable record was not enough: "no such device" and "that one is blocked" are different
+/// answers an operator needs told apart, and collapsing them into null made the second one
+/// impossible to say.
+/// </remarks>
+public sealed record DeviceAdoption
+{
+    /// <summary>What happened.</summary>
+    public required DeviceAdoptionResult Result { get; init; }
+
+    /// <summary>The adopted row. Present only when <see cref="Result"/> is
+    /// <see cref="DeviceAdoptionResult.Adopted"/>.</summary>
+    public DeviceRecord? Record { get; init; }
+}
+
 /// <summary>
 /// One row of the device table: everything the Fleet Manager knows about a frame that is
 /// not a setting.

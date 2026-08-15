@@ -18,7 +18,12 @@ namespace FrameLink.Control.Agent;
 /// which is more accurate than anything that could have been persisted.
 /// </para>
 /// </remarks>
-public sealed class AgentConnectionRegistry
+/// <param name="events">
+/// Told about every arrival and departure, so an open console sees a frame appear the moment
+/// it is plugged in rather than on its next poll. Optional, because presence is a property of
+/// this dictionary and nothing about it depends on anyone listening.
+/// </param>
+public sealed class AgentConnectionRegistry(FleetEvents? events = null)
 {
     private readonly ConcurrentDictionary<string, AgentConnection> _connections = new(StringComparer.Ordinal);
 
@@ -48,6 +53,7 @@ public sealed class AgentConnectionRegistry
                 return connection;
             });
 
+        events?.Publish(connection.DeviceId);
         return displaced;
     }
 
@@ -55,7 +61,14 @@ public sealed class AgentConnectionRegistry
     public void Remove(AgentConnection connection)
     {
         ArgumentNullException.ThrowIfNull(connection);
-        _connections.TryRemove(new KeyValuePair<string, AgentConnection>(connection.DeviceId, connection));
+
+        // Only the removal that actually took anything out is a presence change. A displaced
+        // connection tidying itself up after a reconnect has not taken the device offline, and
+        // announcing that it had would flicker the console on every ordinary network drop.
+        if (_connections.TryRemove(new KeyValuePair<string, AgentConnection>(connection.DeviceId, connection)))
+        {
+            events?.Publish(connection.DeviceId);
+        }
     }
 
     /// <summary>True while the device holds a live socket.</summary>

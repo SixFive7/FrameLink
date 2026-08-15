@@ -218,10 +218,9 @@ public sealed class AgentControlIntegrationTests
 
     private static async Task AdoptAsync(ControlServer server, string deviceId, string name)
     {
-        var response = await server.Client.PostAsJsonAsync(
-            $"/api/devices/{deviceId}/adopt",
-            new AdoptRequest { Name = name },
-            ControlJson.Default.AdoptRequest,
+        var response = await server.Client.PostAsync(
+            $"/api/devices/{deviceId}/adopt?name={Uri.EscapeDataString(name)}",
+            content: null,
             TestContext.Current.CancellationToken);
 
         response.EnsureSuccessStatusCode();

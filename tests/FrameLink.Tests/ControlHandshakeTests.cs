@@ -95,7 +95,7 @@ public sealed class ControlHandshakeTests
 
         await using var adopted = await server.ConnectAgentAsync(key);
         var pushed = await adopted.ReceiveAsync(TimeSpan.FromSeconds(3));
-        var settings = pushed?.PayloadAs(ControlJson.Default.SettingsPush);
+        var settings = pushed?.PayloadAs(ProtocolJson.Default.SettingsPush);
 
         // The full M1 arc: connects, appears pending, is adopted, and comes back to a
         // configured, named identity.
@@ -360,10 +360,9 @@ public sealed class ControlHandshakeTests
 
     private static async Task AdoptAsync(ControlServer server, string deviceId, string name)
     {
-        var response = await server.Client.PostAsJsonAsync(
-            $"/api/devices/{deviceId}/adopt",
-            new AdoptRequest { Name = name },
-            ControlJson.Default.AdoptRequest,
+        var response = await server.Client.PostAsync(
+            $"/api/devices/{deviceId}/adopt?name={Uri.EscapeDataString(name)}",
+            content: null,
             Token);
 
         response.EnsureSuccessStatusCode();

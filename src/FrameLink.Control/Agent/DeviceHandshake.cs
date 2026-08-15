@@ -14,11 +14,23 @@ namespace FrameLink.Control.Agent;
 /// is a pure function of a hello, a proof and the stored state, so it is tested as one
 /// instead of through a WebSocket.
 /// </remarks>
+/// <param name="devices">The device table.</param>
+/// <param name="credential">The operator password, which decides the outermost rung of §2.6.</param>
+/// <param name="releases">The served agent build, carried on every answer.</param>
+/// <param name="options">Paths and budgets.</param>
+/// <param name="events">
+/// Told whenever a proven contact touches a row. This is the moment §3.3 is designed around —
+/// a frame plugged in on the bench appearing in the list — and it is <i>not</i> the moment the
+/// connection registry sees, because a pending device is answered and closed and never
+/// registers at all.
+/// </param>
+/// <param name="logger">Where refusals are recorded.</param>
 public sealed class DeviceHandshake(
     IDeviceStore devices,
     OperatorCredential credential,
     AgentReleaseCatalog releases,
     ControlOptions options,
+    FleetEvents events,
     ILogger<DeviceHandshake> logger)
 {
     /// <summary>
@@ -84,6 +96,8 @@ public sealed class DeviceHandshake(
                 options.PendingDeviceCap,
                 cancellationToken).ConfigureAwait(false);
 
+            events.Publish(hello.DeviceId);
+
             return new HandshakeDecision
             {
                 Result = Answer(HandshakeStatus.NotConfigured, release, credential.Problem),
@@ -95,6 +109,8 @@ public sealed class DeviceHandshake(
             ContactFrom(hello, remoteAddress),
             options.PendingDeviceCap,
             cancellationToken).ConfigureAwait(false);
+
+        events.Publish(device.DeviceId);
 
         if (device.State is DeviceState.Blocked)
         {

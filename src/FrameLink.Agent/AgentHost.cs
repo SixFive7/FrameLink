@@ -130,7 +130,15 @@ public sealed class AgentHost
             onVerdict: (verdict, token) => OnVerdictAsync(verdict, hub, updates, reconciler, resource, token))
         {
             HardwareSerial = serial,
-            AgentStatusText = $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}",
+
+            // Free text with a vocabulary head, per AgentHealth. The head is what the Fleet
+            // Manager classifies and renders a presence badge from; the parenthesis is for a
+            // person reading the row. `Progressing` is the honest term at this point: the agent
+            // is coming up and has verified nothing yet, so claiming InSync would be a lie the
+            // console would repeat.
+            AgentStatusText = AgentHealth.Describe(
+                AgentResourceStatus.Progressing,
+                $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}"),
         };
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");

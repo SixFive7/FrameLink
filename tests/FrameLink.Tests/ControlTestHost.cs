@@ -188,9 +188,17 @@ public sealed class ControlServer : IAsyncDisposable
     /// Time-shaped behaviours with no timer — expiry, rate limit windows, sessions — use
     /// <see cref="TestClock"/> against their own components.
     /// </remarks>
+    /// <param name="operatorPassword">The operator password, or null to leave it unconfigured.</param>
+    /// <param name="configure">Adjusts the options the server is built with.</param>
+    /// <param name="webRoot">
+    /// Directory to serve static files from, standing in for the built GUI. Omitted, the server
+    /// runs with no <c>wwwroot</c> at all, which is the shape of an image built before the
+    /// Svelte output existed — and the shape every other test in the suite wants.
+    /// </param>
     public static async Task<ControlServer> StartAsync(
         string? operatorPassword,
-        Func<ControlOptions, ControlOptions>? configure = null)
+        Func<ControlOptions, ControlOptions>? configure = null,
+        string? webRoot = null)
     {
         var workspace = new TempWorkspace();
 
@@ -212,17 +220,24 @@ public sealed class ControlServer : IAsyncDisposable
             options = configure(options);
         }
 
-        var app = ControlApp.Build(
-            [
-                "--urls",
-                "http://127.0.0.1:0",
+        string[] args =
+        [
+            "--urls",
+            "http://127.0.0.1:0",
 
-                // The slim builder reads command-line configuration, so this is the whole of
-                // the test logging setup. Kestrel's per-request Information logging would
-                // otherwise bury a failure message under a few hundred lines of transcript.
-                "--Logging:LogLevel:Default=Warning",
-                "--Logging:LogLevel:Microsoft=Warning",
-            ],
+            // The slim builder reads command-line configuration, so this is the whole of
+            // the test logging setup. Kestrel's per-request Information logging would
+            // otherwise bury a failure message under a few hundred lines of transcript.
+            "--Logging:LogLevel:Default=Warning",
+            "--Logging:LogLevel:Microsoft=Warning",
+
+            // Same mechanism: `webroot` is a host configuration key, so passing it here is
+            // how a test gives the server a GUI without one existing beside the test binary.
+            .. webRoot is null ? (string[])[] : ["--webroot", webRoot],
+        ];
+
+        var app = ControlApp.Build(
+            args,
             options,
             OperatorCredential.FromValue(operatorPassword),
             TimeProvider.System);
@@ -450,7 +465,7 @@ public sealed class TestAgent : IAsyncDisposable
             _socket,
             ControlWire.KindPong,
             new AgentPong { Sequence = sequence },
-            ControlJson.Default.AgentPong,
+            ProtocolJson.Default.AgentPong,
             ProtocolConstants.ChannelControl);
 
     /// <summary>
@@ -473,7 +488,7 @@ public sealed class TestAgent : IAsyncDisposable
 
             if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
             {
-                var ping = envelope.PayloadAs(ControlJson.Default.AgentPing);
+                var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
                 await PongAsync(ping?.Sequence ?? 0);
             }
             else

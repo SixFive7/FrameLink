@@ -111,7 +111,7 @@ public sealed class ControlPresenceTests
 
         Assert.NotNull(ping);
         Assert.Equal(ProtocolConstants.ChannelControl, ping.Channel);
-        Assert.NotNull(ping.PayloadAs(ControlJson.Default.AgentPing));
+        Assert.NotNull(ping.PayloadAs(ProtocolJson.Default.AgentPing));
     }
 
     [Fact]
@@ -230,14 +230,14 @@ public sealed class ControlPresenceTests
 
             if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
             {
-                var ping = envelope.PayloadAs(ControlJson.Default.AgentPing);
+                var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
                 await agent.PongAsync(ping?.Sequence ?? 0);
                 continue;
             }
 
             if (string.Equals(envelope.Kind, ControlWire.KindSettings, StringComparison.Ordinal))
             {
-                return envelope.PayloadAs(ControlJson.Default.SettingsPush);
+                return envelope.PayloadAs(ProtocolJson.Default.SettingsPush);
             }
         }
 
@@ -254,10 +254,9 @@ public sealed class ControlPresenceTests
         }
 
         await server.SignInAsync(Password);
-        var response = await server.Client.PostAsJsonAsync(
-            $"/api/devices/{deviceId}/adopt",
-            new AdoptRequest { Name = "Kitchen frame" },
-            ControlJson.Default.AdoptRequest,
+        var response = await server.Client.PostAsync(
+            $"/api/devices/{deviceId}/adopt?name=Kitchen%20frame",
+            content: null,
             Token);
         response.EnsureSuccessStatusCode();
 

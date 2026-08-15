@@ -110,7 +110,9 @@ public sealed class ControlStorageTests
     {
         using var fixture = new StorageFixture();
 
-        Assert.Null(await fixture.Devices.AdoptAsync("ZZZZ-ZZZZ-ZZZZ-ZZZZ", "Ghost", Token));
+        var adoption = await fixture.Devices.AdoptAsync("ZZZZ-ZZZZ-ZZZZ-ZZZZ", "Ghost", Token);
+        Assert.Equal(DeviceAdoptionResult.Unknown, adoption.Result);
+        Assert.Null(adoption.Record);
         Assert.Null(await fixture.Devices.BlockAsync("ZZZZ-ZZZZ-ZZZZ-ZZZZ", Token));
         Assert.False(await fixture.Devices.ForgetAsync("ZZZZ-ZZZZ-ZZZZ-ZZZZ", Token));
     }

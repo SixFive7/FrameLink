@@ -41,9 +41,22 @@ public interface IDeviceStore
     /// <param name="cancellationToken">Cancellation.</param>
     Task<IReadOnlyList<DeviceRecord>> ListAsync(bool includeBlocked, CancellationToken cancellationToken);
 
-    /// <summary>Adopts a device and binds the operator's name to it.</summary>
-    /// <returns>The adopted row, or null if the device is unknown.</returns>
-    Task<DeviceRecord?> AdoptAsync(string deviceId, string? displayName, CancellationToken cancellationToken);
+    /// <summary>
+    /// Adopts a device and binds the operator's name to it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Refuses a <see cref="DeviceState.Blocked"/> device. §3.3 makes unblocking return a frame
+    /// to the adoption queue rather than to service, precisely so that re-trusting something
+    /// somebody deliberately refused takes a second, deliberate press — and an adopt that works
+    /// from any state hands that rule back with one request.
+    /// </para>
+    /// <para>
+    /// Adopting an already-adopted device is <i>not</i> refused: writing the name is what
+    /// renaming is, and there is no separate rename route.
+    /// </para>
+    /// </remarks>
+    Task<DeviceAdoption> AdoptAsync(string deviceId, string? displayName, CancellationToken cancellationToken);
 
     /// <summary>Blocks a device. Its name is kept so the operator can see what they blocked.</summary>
     /// <returns>The blocked row, or null if the device is unknown.</returns>
