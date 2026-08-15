@@ -18,6 +18,20 @@
          trap (MapStaticAssets serving empty 200s) is avoided in ControlApp by using
          UseStaticFiles instead. -->
     <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!--
+      No static web assets pipeline. This server serves wwwroot with UseStaticFiles(), which
+      reads the web root off disk and knows nothing about the manifests, gzip siblings and
+      fingerprinted endpoint tables that pipeline produces — §6.2 rules out MapStaticAssets()
+      here for good, so all of it was dead weight in the image.
+
+      Switching it off is also what makes the GUI build below safe. The pipeline globs
+      wwwroot/** during project evaluation, and `adapter-static` empties wwwroot and writes
+      freshly content-hashed filenames; every GUI change therefore failed the build outright
+      with "No file exists for the asset at ... chunks/<old-hash>.js", from a task that had
+      catalogued files a target later in the same build deleted.
+    -->
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
 
   <!-- §7.1 "Everything floats, the build freezes it". Nothing is pinned; the artifact
@@ -29,5 +43,94 @@
   <ItemGroup>
     <ProjectReference Include="..\FrameLink.Protocol\FrameLink.Protocol.csproj" />
   </ItemGroup>
+
+  <!--
+    ══ The GUI is part of the build ═════════════════════════════════════════════════════════
+
+    `wwwroot` is a committed build artifact — §3.1 ships one container with the Svelte output
+    served by UseStaticFiles(), and §2.1's "no loose asset trees" rule means it belongs inside
+    the image rather than beside it. A committed artifact rots: the first time somebody edits
+    a .svelte file and forgets to rebuild, the repository serves last week's console and
+    nothing looks wrong. That is the failure mode everything below is aimed at.
+
+    Two mechanisms, and the split between them is deliberate:
+
+      1. THIS FILE keeps wwwroot current where Node exists. `npm ci` runs only when the
+         lockfile moved, `npm run build` only when a GUI source moved, and both are ordinary
+         MSBuild Inputs/Outputs so a warm build skips them entirely.
+
+      2. `GuiFreshnessTests` DECIDES whether it matters. It re-hashes every path in
+         gui-build.stamp and fails when the committed wwwroot is not the output of the
+         committed sources. That check needs no Node, so it works identically on a fresh
+         clone, in CI, and on a machine that has never installed npm — which is exactly where
+         mechanism 1 cannot help.
+
+    So a missing or broken Node toolchain is a WARNING here and never a build break, while a
+    stale bundle is a RED TEST everywhere. §7.2 already makes the suite the only gate between
+    a change and a release; this puts the GUI behind that same gate instead of behind a habit.
+
+    Set -p:FrameLinkBuildGui=false to skip mechanism 1. That does not weaken mechanism 2.
+
+    Known limit: MSBuild evaluates wwwroot/** at project load, so a build that regenerates
+    wwwroot in flight publishes the previous file list. Harmless while wwwroot is committed
+    (the files are there at load time) and self-corrects on the next build; worth revisiting
+    when the container publish lands at Mn+2.
+  -->
+  <PropertyGroup>
+    <FrameLinkGuiDirectory>$(MSBuildProjectDirectory)/gui/</FrameLinkGuiDirectory>
+    <FrameLinkGuiStamp>$(MSBuildProjectDirectory)/gui-build.stamp</FrameLinkGuiStamp>
+    <FrameLinkBuildGui Condition="'$(FrameLinkBuildGui)' == ''">true</FrameLinkBuildGui>
+    <FrameLinkNpm Condition="'$(OS)' == 'Windows_NT'">npm.cmd</FrameLinkNpm>
+    <FrameLinkNpm Condition="'$(FrameLinkNpm)' == ''">npm</FrameLinkNpm>
+  </PropertyGroup>
+
+  <!--
+    The Web SDK's default Content glob is **/*.json, which happily swept gui/package.json,
+    gui/package-lock.json and gui/tsconfig.json into the build output. node_modules and
+    .svelte-kit escaped only because the SDK excludes them by convention. None of gui/ is a
+    program file: it is the source the GUI is built FROM, and the build output is wwwroot.
+  -->
+  <ItemGroup>
+    <Content Remove="gui/**" />
+    <None Remove="gui/**" />
+  </ItemGroup>
+
+  <!--
+    Exactly what `vite build` reads. Nothing else under gui/ — mock/, .vscode/ — can change
+    the output, so nothing else may trigger a rebuild or fail a freshness check. The same list
+    appears in gui/tools/stamp.mjs, where it is stated once more with the reasoning.
+  -->
+  <ItemGroup>
+    <FrameLinkGuiSource Include="gui/src/**/*;gui/static/**/*;gui/tools/**/*" />
+    <FrameLinkGuiSource Include="gui/package.json;gui/package-lock.json;gui/vite.config.ts;gui/tsconfig.json" />
+    <FrameLinkGuiSource Include="gui/.npmrc" Condition="Exists('gui/.npmrc')" />
+  </ItemGroup>
+
+  <Target Name="FrameLinkRestoreGui"
+          Condition="'$(FrameLinkBuildGui)' == 'true' AND Exists('$(FrameLinkGuiDirectory)package.json')"
+          Inputs="$(FrameLinkGuiDirectory)package-lock.json"
+          Outputs="$(FrameLinkGuiDirectory)node_modules/.package-lock.json">
+    <Message Importance="high" Text="FrameLink GUI: npm ci (the lockfile moved, or node_modules is not there yet)" />
+    <Exec Command="$(FrameLinkNpm) ci --no-audit --no-fund"
+          WorkingDirectory="$(FrameLinkGuiDirectory)"
+          ContinueOnError="true" />
+  </Target>
+
+  <Target Name="FrameLinkBuildGui"
+          BeforeTargets="BeforeBuild"
+          DependsOnTargets="FrameLinkRestoreGui"
+          Condition="'$(FrameLinkBuildGui)' == 'true' AND Exists('$(FrameLinkGuiDirectory)package.json')"
+          Inputs="@(FrameLinkGuiSource)"
+          Outputs="$(FrameLinkGuiStamp)">
+    <Message Importance="high" Text="FrameLink GUI: npm run build -> wwwroot" />
+    <Exec Command="$(FrameLinkNpm) run build"
+          WorkingDirectory="$(FrameLinkGuiDirectory)"
+          ContinueOnError="true">
+      <Output TaskParameter="ExitCode" PropertyName="FrameLinkGuiExitCode" />
+    </Exec>
+    <Message Importance="high"
+             Condition="'$(FrameLinkGuiExitCode)' != '0'"
+             Text="FrameLink GUI: not rebuilt (npm exit $(FrameLinkGuiExitCode)). The build carries on with the committed wwwroot; GuiFreshnessTests decides whether that is stale." />
+  </Target>
 
 </Project>
