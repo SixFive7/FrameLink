@@ -122,13 +122,69 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        Assert.Equal(DisplayPanelOverlayResource.ResourceName, graph.Ordered[0].Name);
-        Assert.Equal(ConsoleRotationResource.ResourceName, graph.Ordered[1].Name);
+        // Positions 1–3 of the catalog's own ordering table: the agent-version root, then the
+        // display carve-out, ahead of the keypair and adoption. `agent.version` is first in
+        // declaration order and nothing else — it holds no edges, so it cannot block anything.
+        Assert.Equal(AgentVersionResource.ResourceName, graph.Ordered[0].Name);
+        Assert.Equal(DisplayPanelOverlayResource.ResourceName, graph.Ordered[1].Name);
+        Assert.Equal(ConsoleRotationResource.ResourceName, graph.Ordered[2].Name);
 
         // The whole point of moving it: it is gated by nothing. A pending frame has to be able to
         // show its own fingerprint (§3.3), so an adoption dependency here would defeat the change.
         Assert.Empty(graph.Ordered[0].DependsOn);
-        Assert.Equal([DisplayPanelOverlayResource.ResourceName], graph.Ordered[1].DependsOn);
+        Assert.Empty(graph.Ordered[1].DependsOn);
+        Assert.Equal([DisplayPanelOverlayResource.ResourceName], graph.Ordered[2].DependsOn);
+    }
+
+    [Fact]
+    public void The_three_agent_roots_hold_no_edges_so_an_unreachable_server_blocks_nothing()
+    {
+        using var files = new TemporaryFiles();
+        var graph = DeviceCatalog.BuildGraph(Context(files));
+
+        // The catalog writes this chain as agent.version → agent.keypair → agent.adoption, and its
+        // own convention is that `—` *means* "agent.version and nothing else". Materialising those
+        // edges would be the one change that breaks §1.2.2: `agent.version` is unevaluable on a
+        // frame whose Fleet Manager has never answered, so an edge on it would mark every other
+        // resource Blocked and the frame would provision nothing at all.
+        foreach (var root in new[]
+        {
+            AgentVersionResource.ResourceName,
+            AgentKeypairResource.ResourceName,
+            AdoptionResource.ResourceName,
+        })
+        {
+            Assert.Empty(graph.Find(root)!.DependsOn);
+        }
+
+        Assert.DoesNotContain(
+            graph.Ordered,
+            resource => resource.DependsOn.Contains(AgentVersionResource.ResourceName));
+    }
+
+    [Fact]
+    public async Task The_version_root_says_it_does_not_know_rather_than_claiming_a_mismatch()
+    {
+        string? served = null;
+        var converged = 0;
+        var resource = new AgentVersionResource("0.1.0+abc", () => served, () => converged++);
+
+        // Silence is not an answer (§2.6). A frame that cannot ask what version it should be
+        // running must not report "expected x, observed y" of itself.
+        var silent = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ObservationOutcome.Unevaluable, silent.Outcome);
+
+        served = "0.1.0+abc";
+        Assert.True((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        // It matches; it never compares. An *older* served version is ordinary drift, because
+        // reverting the container tag has to revert the fleet (§2.8).
+        served = "0.0.9+old";
+        var drifted = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ObservationOutcome.Drifted, drifted.Outcome);
+
+        await resource.ActAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(1, converged);
     }
 
     [Fact]
@@ -137,17 +193,18 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        // Nine from M2, the catalog's fifteen-resource package block, the sixteen of the session
-        // and kiosk stack (guides 5 and 10, plus the running-command-line check the catalog files
-        // under guide 6 and schedules in this phase), and eleven of guide 4's thirteen — the two
-        // it does not add are `pkg.dfu-util`, already in the package block, and `pkg.git`, which
-        // open question 3's adopted reading deletes. Then eight of guide 6's sixteen, the other
-        // eight being its seven apt packages and the running-command-line check already counted
-        // above; and two from guide 11, which is all the device state that guide leaves behind
-        // once its daemon moves inside the agent. Then guide 9's whole block, which is eight —
-        // and eight is the entire guide, because three of its four steps installed Docker,
-        // described a container and started one.
-        Assert.Equal(69, graph.Count);
+        // <b>The whole catalog.</b> `reference/resource-catalog.md` enumerates 79 resources, one of
+        // which — `pkg.git` — open question 3's adopted reading deletes, because `xvf_host` arrives
+        // as a pinned checksum-verified artifact rather than a clone and guide 10's other use of
+        // git went with the embedded app. That leaves 78 implementable entries, all of them here.
+        // The 79th shipped resource is `agent.device-name`, which is *not* in the catalog: the
+        // display name the Fleet Manager assigns at adoption, which the cross-guide section never
+        // enumerated. 78 catalog entries plus that one is the arithmetic.
+        Assert.Equal(79, graph.Count);
+
+        var names = graph.Ordered.Select(resource => resource.Name).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain(PackageResource.Prefix + "git", names);
+        Assert.Contains("agent.device-name", names);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],
@@ -221,6 +278,55 @@ public sealed class AgentResourceGraphTests
         Assert.DoesNotContain(AdoptionResource.ResourceName, graph.Find(ConsoleAutologinResource.ResourceName)!.DependsOn);
     }
 
+    /// <summary>
+    /// The shipped catalog against the document that specifies it, read rather than remembered.
+    /// </summary>
+    /// <remarks>
+    /// §7.1's "never asserted from memory", applied to the resource enumeration itself. This test
+    /// parses <c>reference/resource-catalog.md</c> — the same headings a reader counts — so a
+    /// resource added to the document and not to the code, or dropped from the code and left in
+    /// the document, fails here rather than being noticed by somebody diffing two lists by eye.
+    /// The one exclusion and the one addition are named individually, so neither can widen quietly.
+    /// </remarks>
+    [Fact]
+    public void The_shipped_catalog_is_exactly_the_catalog_document_minus_its_one_exclusion()
+    {
+        // Open question 3: `xvf_host` arrives as a pinned, checksum-verified upstream artifact
+        // rather than a git clone, and the catalog says outright that "if it does not, this
+        // resource disappears". Guide 10's other use of git went with the embedded app.
+        var excluded = new[] { PackageResource.Prefix + "git" };
+
+        // Not in the document: the display name the Fleet Manager assigns at adoption. The
+        // cross-guide section enumerates the keypair, the version and the adoption record, and
+        // never enumerated this one.
+        var extra = new[] { "agent.device-name" };
+
+        var document = ResourceCatalogDocument.Ids();
+        Assert.Equal(79, document.Count);
+
+        using var files = new TemporaryFiles();
+        var shipped = DeviceCatalog.BuildGraph(Context(files))
+            .Ordered
+            .Select(resource => resource.Name)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var missing = document.Except(excluded, StringComparer.Ordinal)
+            .Where(id => !shipped.Contains(id))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        var unexpected = shipped
+            .Except(document, StringComparer.Ordinal)
+            .Except(extra, StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Empty(missing);
+        Assert.Empty(unexpected);
+        Assert.DoesNotContain(excluded[0], shipped);
+        Assert.Equal(document.Count - excluded.Length + extra.Length, shipped.Count);
+    }
+
     internal static DeviceCatalogContext Context(TemporaryFiles files)
     {
         var channel = new LocalChannel();
@@ -240,6 +346,58 @@ public sealed class AgentResourceGraphTests
             Clock = clock,
             Log = new RecordingLog(),
         };
+    }
+}
+
+/// <summary>
+/// <c>reference/resource-catalog.md</c>, read as the specification it is.
+/// </summary>
+/// <remarks>
+/// The document gives one block per resource, headed by the id in bold code — and where several
+/// resources share a block, by several ids separated by <c>·</c>. Nothing else in the file is a
+/// line made <i>entirely</i> of bold code spans, which is what makes the heading recognisable
+/// without a markdown parser: the ordering table's cells carry the same spelling but sit inside a
+/// row with pipes and prose around them.
+/// </remarks>
+internal static class ResourceCatalogDocument
+{
+    /// <summary>Every resource id the catalog enumerates, in document order.</summary>
+    public static IReadOnlyList<string> Ids()
+    {
+        var path = Path.Combine(GuiFreshnessTests.RepositoryRoot(), "reference", "resource-catalog.md");
+        var ids = new List<string>();
+
+        foreach (var line in File.ReadAllLines(path))
+        {
+            if (!line.StartsWith("**`", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var heading = new List<string>();
+            var rest = line;
+
+            while (rest.StartsWith("**`", StringComparison.Ordinal))
+            {
+                var close = rest.IndexOf("`**", 3, StringComparison.Ordinal);
+                if (close < 0)
+                {
+                    break;
+                }
+
+                heading.Add(rest[3..close]);
+                rest = rest[(close + 3)..].TrimStart(' ', '·');
+            }
+
+            // Only a line that is *nothing but* ids is a heading. Anything left over means this
+            // was prose that happened to begin with one.
+            if (rest.Length == 0)
+            {
+                ids.AddRange(heading);
+            }
+        }
+
+        return ids;
     }
 }
 

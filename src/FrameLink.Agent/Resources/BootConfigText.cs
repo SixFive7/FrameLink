@@ -220,6 +220,144 @@ public static class BootConfigText
     }
 
     /// <summary>
+    /// Sets one kernel parameter: replacing the existing token with <paramref name="prefix"/> if
+    /// there is one, appending it otherwise.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is the "one line-aware editor" the catalog makes a hard requirement.</b> Two
+    /// resources write this single line from opposite ends of the order —
+    /// <c>boot.cmdline.fbcon-rotate</c> at position 2 and <c>boot.cmdline.wifi-regdom</c> at 78 —
+    /// so the late writer has to merge into a file the early one already changed, and neither may
+    /// re-serialise from a read taken before the other's write. Every path here reads the file it
+    /// is handed and rebuilds the whole line from it, so a token added by somebody else survives
+    /// untouched whichever order the two run in.
+    /// </para>
+    /// <para>
+    /// The token keeps its position when it is replaced rather than being moved to the end. That
+    /// is not cosmetic: <see cref="ValidateCmdlineToken"/> proves an edit is minimal by comparing
+    /// the two parameter lists position by position, and a rewrite that also reordered would be
+    /// indistinguishable from one that changed two things.
+    /// </para>
+    /// </remarks>
+    public static string SetToken(string? content, string prefix, string token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+
+        var parameters = ReadCmdline(content).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var replaced = false;
+
+        for (var index = 0; index < parameters.Length; index++)
+        {
+            if (parameters[index].StartsWith(prefix, StringComparison.Ordinal))
+            {
+                parameters[index] = token;
+                replaced = true;
+                break;
+            }
+        }
+
+        return replaced
+            ? string.Join(' ', parameters) + "\n"
+            : AppendToken(content, token);
+    }
+
+    /// <summary>
+    /// Checks a proposed command line whose one intended change is the parameter carrying
+    /// <paramref name="prefix"/> — added or rewritten.
+    /// </summary>
+    /// <remarks>
+    /// The counterpart of <see cref="ValidateCmdline"/> for <see cref="SetToken"/>, and it has to
+    /// exist separately because that method covers two shapes: appending a parameter, and changing
+    /// one already there. The fatal-parameter checks come first for the same reason they do there —
+    /// losing <c>root=</c> is the failure §5.5 is about, and it deserves to be what the refusal
+    /// says rather than being reported as untidiness.
+    /// </remarks>
+    public static BootFileVerdict ValidateCmdlineToken(
+        string? original,
+        string updated,
+        string prefix,
+        string token)
+    {
+        ArgumentNullException.ThrowIfNull(updated);
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+
+        var lines = Lines(updated).Where(line => line.Trim().Length > 0).ToList();
+        if (lines.Count != 1)
+        {
+            return BootFileVerdict.Refuse($"the kernel command line must be a single line, not {lines.Count}");
+        }
+
+        var before = ReadCmdline(original).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var after = ReadCmdline(updated).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+        if (!after.Any(parameter => parameter.StartsWith("root=", StringComparison.Ordinal)))
+        {
+            return BootFileVerdict.Refuse("the result has no root= parameter, so the machine would not boot");
+        }
+
+        if (!after.Any(parameter => parameter.StartsWith("console=", StringComparison.Ordinal)))
+        {
+            return BootFileVerdict.Refuse("the result has no console= parameter, so there would be nothing to narrate on");
+        }
+
+        if (after.Count(parameter => parameter.StartsWith(prefix, StringComparison.Ordinal)) != 1)
+        {
+            return BootFileVerdict.Refuse($"the result would carry the '{prefix}' parameter more than once, or not at all");
+        }
+
+        var appended = after.Length == before.Length + 1;
+        if (!appended && after.Length != before.Length)
+        {
+            return BootFileVerdict.Refuse(
+                $"the edit would change the command line by {after.Length - before.Length} parameters instead of one");
+        }
+
+        if (appended && !string.Equals(after[^1], token, StringComparison.Ordinal))
+        {
+            return BootFileVerdict.Refuse("the added parameter is not the one that was intended");
+        }
+
+        var changed = -1;
+        for (var index = 0; index < before.Length; index++)
+        {
+            if (string.Equals(before[index], after[index], StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (changed >= 0)
+            {
+                return BootFileVerdict.Refuse($"the edit would also change '{before[changed]}'");
+            }
+
+            changed = index;
+        }
+
+        if (changed < 0)
+        {
+            return appended
+                ? BootFileVerdict.Ok
+                : BootFileVerdict.Refuse("the edit would change nothing");
+        }
+
+        if (appended)
+        {
+            return BootFileVerdict.Refuse($"the edit would also change '{before[changed]}'");
+        }
+
+        if (!before[changed].StartsWith(prefix, StringComparison.Ordinal)
+            || !string.Equals(after[changed], token, StringComparison.Ordinal))
+        {
+            return BootFileVerdict.Refuse($"the parameter it would rewrite is '{before[changed]}', not one starting '{prefix}'");
+        }
+
+        return BootFileVerdict.Ok;
+    }
+
+    /// <summary>
     /// The first <c>dtoverlay=</c> line for <paramref name="overlay"/>, with its parameter list
     /// intact, or null.
     /// </summary>

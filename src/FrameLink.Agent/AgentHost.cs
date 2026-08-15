@@ -325,6 +325,18 @@ public sealed class AgentHost
                 Kiosk = kiosk,
                 KioskDownload = new HttpKioskDownload(http, _log),
                 Permissions = PosixFilePermissions.Instance,
+
+                // §2.8's root. The served version is whatever the out-of-band check last learned,
+                // which the hub already holds, and converging is that same check brought forward —
+                // the resource asks, the hourly loop does, and correctness never depends on the ask
+                // arriving.
+                RunningVersion = AgentBuild.Version,
+                ServedVersion = () => hub.Current.ServedAgentVersion,
+                ConvergeVersion = updates.TriggerNow,
+
+                // §2.9. Read live rather than captured, so `agent.keypair` compares against what
+                // this process is running as at the moment it looks.
+                DeviceId = () => identity.DeviceId,
             }),
             Interlock = interlock,
             Journal = journal,

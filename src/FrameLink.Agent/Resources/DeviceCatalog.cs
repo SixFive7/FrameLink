@@ -104,6 +104,36 @@ public sealed record DeviceCatalogContext
     /// target is never briefly non-executable.
     /// </remarks>
     public IFilePermissions Permissions { get; init; } = PosixFilePermissions.Instance;
+
+    /// <summary>The version of the binary that is executing (§2.8).</summary>
+    public string RunningVersion { get; init; } = AgentBuild.Version;
+
+    /// <summary>
+    /// What the Fleet Manager's versionless update endpoint last served, or null if it has never
+    /// answered.
+    /// </summary>
+    /// <remarks>
+    /// A delegate rather than a value, so <c>agent.version</c> notices a fleet rolled back between
+    /// two passes. Null is the honest default off a frame: nothing has answered, so nothing is
+    /// known, and the resource reports that rather than inventing a match.
+    /// </remarks>
+    public Func<string?> ServedVersion { get; init; } = () => null;
+
+    /// <summary>Brings the out-of-band update check forward (§2.8).</summary>
+    /// <remarks>
+    /// Defaults to doing nothing, which is the correct behaviour where there is no update loop to
+    /// wake: the hourly tick is the mechanism and this is only the optimisation, so a catalog built
+    /// without one still describes the resource truthfully.
+    /// </remarks>
+    public Action ConvergeVersion { get; init; } = () => { };
+
+    /// <summary>The identity this process is running as (§2.9, §3.3).</summary>
+    /// <remarks>
+    /// Read through a delegate for the same reason <see cref="FleetAnswer"/> is: the value
+    /// <c>agent.keypair</c> compares against is what the frame <i>is</i> right now, and a catalog
+    /// that captured it at construction could never observe it having moved.
+    /// </remarks>
+    public Func<string> DeviceId { get; init; } = () => "unknown";
 }
 
 /// <summary>
@@ -111,26 +141,47 @@ public sealed record DeviceCatalogContext
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>This is M3 in progress, not the fleet's catalog.</b> The full enumeration is 79 resources
-/// in <c>reference/resource-catalog.md</c>. What was here at M2 is the set that makes every rung
-/// of §2.3's status vocabulary reachable by something that touches a real system; M3 adds the
-/// catalog's blocks to it in dependency order — the package block first, then the session and
-/// kiosk stack of guides 5 and 10, which is where the frame stops showing a console and starts
-/// showing the product.
+/// <b>M3 is complete: this is the whole catalog.</b> <c>reference/resource-catalog.md</c>
+/// enumerates 79 resources, of which <b>78 are implementable</b> and all 78 are here.
+/// <c>pkg.git</c> is the one that is not, and it is an exclusion rather than a gap — open
+/// question 3's adopted reading obtains <c>xvf_host</c> as a pinned, checksum-verified upstream
+/// artifact rather than a clone, and the catalog says outright that "if it does not, this resource
+/// disappears". One resource here is <i>not</i> in the catalog: <c>agent.device-name</c>, the
+/// display name the Fleet Manager assigns at adoption, which the catalog's cross-guide section
+/// never enumerated. So the shipped count is 79, and the arithmetic is 78 catalog entries plus
+/// that one.
 /// </para>
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
-/// is the order a bare frame converges in. The display comes first by explicit decision: §5.5
-/// would schedule a <c>/boot/firmware</c> write last, and the catalog's proposed ordering puts
-/// the panel overlay 76th of 79, but a frame that provisions with a dark panel has no honesty
-/// mechanism at all — measured on the mule 2026-08-15, a stock image has no framebuffer and
-/// every console write succeeds invisibly. §2.7 wins for this one resource, and §5.5's other
-/// three mitigations pay for it (<see cref="BootPartitionGuard"/>).
+/// is the order a bare frame converges in, and it follows the catalog's own proposed ordering
+/// wherever the two can agree. Two places it deliberately does not.
 /// </para>
 /// <para>
-/// The two display resources depend on nothing else, which is the point: lighting the panel
-/// needs no package, no session and no adoption, and a pending frame has to be able to show its
-/// own fingerprint (§3.3).
+/// The first is the display. §5.5 would schedule a <c>/boot/firmware</c> write last, and the
+/// catalog's ordering table puts the panel overlay 76th of 79, but a frame that provisions with a
+/// dark panel has no honesty mechanism at all — measured on the mule 2026-08-15, a stock image has
+/// no framebuffer and every console write succeeds invisibly. §2.7 wins for these two resources,
+/// and §5.5's other three mitigations pay for it (<see cref="BootPartitionGuard"/>). The two
+/// display resources depend on nothing else, which is the point: lighting the panel needs no
+/// package, no session and no adoption, and a pending frame has to be able to show its own
+/// fingerprint (§3.3).
+/// </para>
+/// <para>
+/// The second is <c>journal.storage-persistent</c>, which the catalog schedules 28th and which
+/// runs here as early as it can instead. A volatile journal is what made the August 2026 failure
+/// chain invisible for days, and everything below it is worth having a record of.
+/// </para>
+/// <para>
+/// <b>The three agent roots declare no edges, and that is not an oversight.</b> The catalog gives
+/// <c>agent.version</c> nothing, <c>agent.keypair</c> <c>agent.version</c>, and
+/// <c>agent.adoption</c> <c>agent.keypair</c> — which under the catalog's own convention, where
+/// <c>—</c> <i>means</i> "agent.version and nothing else", is the same statement an empty
+/// <see cref="IResource.DependsOn"/> makes. Materialising them would be actively wrong: a frame
+/// whose Fleet Manager is unreachable cannot evaluate <c>agent.version</c>, so an edge on it would
+/// mark all seventy-eight other resources <see cref="ResourceStatusKind.Blocked"/> and the frame
+/// would provision nothing — the exact opposite of §1.2.2's "a frame must provision and self-heal
+/// with the server unreachable". Declaration order gives the roots their positions; the DAG gives
+/// them no veto.
 /// </para>
 /// </remarks>
 public static class DeviceCatalog
@@ -149,15 +200,28 @@ public static class DeviceCatalog
 
         return
         [
-            // First, so that everything after it can be watched happening.
+            // Position 1, and first for the reason §2.8 gives: the applied version is the root of
+            // the DAG. First in *declaration order* only — no resource declares an edge on it,
+            // because the catalog's `—` already means "agent.version and nothing else" and a
+            // materialised edge would report every other resource Blocked on a frame whose Fleet
+            // Manager is unreachable, which is the opposite of §1.2.2.
+            new AgentVersionResource(context.RunningVersion, context.ServedVersion, context.ConvergeVersion),
+
+            // Positions 2–3, so that everything after them can be watched happening.
             new DisplayPanelOverlayResource(context.Files, guard, context.Display, context.Log),
             new ConsoleRotationResource(context.Files, guard, context.Log),
 
-            // Second, so that if anything below goes wrong there is a record of it. A volatile
-            // journal is what made the August 2026 failures invisible for days.
+            // Position 4. The identity everything the Fleet Manager knows about this frame hangs
+            // off, and the one resource whose failure a person has to resolve rather than the
+            // agent — a regenerated keypair is a new device wearing the old frame's name (§3.3).
+            new AgentKeypairResource(context.Store, context.Files, context.DeviceId),
+
+            // Ahead of its catalog slot, so that if anything below goes wrong there is a record of
+            // it. A volatile journal is what made the August 2026 failures invisible for days.
             new JournalStorageResource(context.Files, context.Values),
 
-            // The root of everything the Fleet Manager supplies a value for (decision 34).
+            // Position 5, the root of everything the Fleet Manager supplies a value for
+            // (decision 34).
             new AdoptionResource(context.Store, context.FleetAnswer),
             new DeviceNameResource(context.Store, context.DesiredDeviceName),
 
@@ -172,7 +236,21 @@ public static class DeviceCatalog
             // `boot.autologin.getty-tty1` has to precede everything user-scoped: the whole
             // user-unit layer hangs off that one drop-in, because there is no `enable-linger`
             // anywhere in this build.
+
+            // Positions 23–24, the head of the phase. Both are `locale.*` values the Fleet Manager
+            // owns and neither has a catalog default — a time zone and a keyboard belong to the
+            // room the frame stands in — so both declare adoption and both leave the frame alone
+            // until a value arrives.
+            new TimeZoneResource(context.Files, context.Processes, context.Values),
+            new LocaleResource(context.Files, context.Processes, context.Values),
+
             new SwapZramResource(context.Processes, context.SystemControl),
+
+            // Position 30, and the negative half of the resource above it. Separate because "there
+            // is no swap" and "swap is eating the card" are different diagnoses with different
+            // fixes; dependent because asserting that nothing swaps to the card is only meaningful
+            // once something else is providing the swap.
+            new NoFileSwapResource(context.Processes, context.SystemControl),
 
             // Position 25, and ahead of the autologin drop-in on purpose: a supplementary group
             // only reaches a process through a *new login session*, so the membership has to be
@@ -184,6 +262,17 @@ public static class DeviceCatalog
                 context.SystemControl,
                 context.Processes,
                 context.Session),
+
+            // Position 27. Ahead of the session and the browser, because Chromium's whole working
+            // profile lives under /tmp and a frame that mounts it at the guide's 100 MB fallback
+            // is a frame the browser fails on in ways nothing explains.
+            new TmpfsMountResource(context.Files, context.Processes, context.SystemControl),
+
+            // Positions 31–32. Both hang off `pkg.unattended-upgrades`, which the package block
+            // already installed: the machinery, then the switch that turns it on, then the policy
+            // that says what it is allowed to install.
+            new AptAutoUpgradesResource(context.Files, context.Processes, context.Values),
+            new UnattendedUpgradesPolicyResource(context.Files, context.Processes, context.Values),
 
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 
@@ -227,6 +316,16 @@ public static class DeviceCatalog
             // writes. It is guide 4's, and it is here rather than beside its siblings because a
             // `/boot/firmware` write is scheduled by risk rather than by subject.
             new HdmiAudioOffResource(context.Files, guard, context.Log),
+
+            // Position 78. The second writer of `cmdline.txt`'s single line — the first is the
+            // console rotation, seventy-five positions earlier — so it goes through the same
+            // line-aware editor and reads the file at Act time rather than re-serialising from
+            // anything older.
+            new WifiRegulatoryDomainResource(context.Files, guard, context.Processes, context.Values, context.Log),
+
+            // Position 79, and last of everything by recovery cost: a bad EEPROM write is the one
+            // change on this frame that no software can put back.
+            new EepromConfigResource(context.Processes, context.Files, context.Store, guard, context.Log),
         ];
     }
 
