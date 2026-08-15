@@ -100,6 +100,33 @@ public sealed record ReconcileJournalState
     /// <summary>The boot the loop last ran in, so a fresh boot can be announced (§4.1 events).</summary>
     public string? LastBootId { get; init; }
 
+    /// <summary>
+    /// When every resource was first verified at once — null while this frame has never been
+    /// green.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The whole input to decision 51</b>, which scopes §2.7's pre-reboot countdown to drift
+    /// repair and keeps it out of initial provisioning. It is a timestamp rather than a flag
+    /// because "when did this frame first come up" is worth having in a post-mortem and costs
+    /// nothing over a boolean; the decision only ever asks whether it is set.
+    /// </para>
+    /// <para>
+    /// It lives here, beside the attempt ledger, for the same reason the ledger does: it has to
+    /// survive the reboot every resource takes (§2.4) and the version change every update brings
+    /// (§2.8). Inferred from anything transient — a field on the loop, the hub's current
+    /// condition, the presence of a link — it would reset on every boot, and a frame in a living
+    /// room would silently drop back to provisioning behaviour for the one repair a person was
+    /// standing there to watch.
+    /// </para>
+    /// <para>
+    /// Set once and never cleared. A frame that has been green and later drifts is still a frame
+    /// that has been green; the countdown is owed to the viewer it acquired, not to its current
+    /// health.
+    /// </para>
+    /// </remarks>
+    public DateTimeOffset? FirstInSyncUtc { get; init; }
+
     /// <summary>Monotonic telemetry sequence, so a drained buffer can be ordered server-side.</summary>
     public long TelemetrySequence { get; init; }
 }

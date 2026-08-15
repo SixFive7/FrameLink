@@ -614,7 +614,7 @@ public sealed class ReconcileLoop
 
         var skipped = await _services.Countdown
             .RunAsync(
-                _services.Options.CurrentCountdown(),
+                CountdownForThisReboot(),
                 state => PublishNarration(resource, "reboot", attempt, entry, change, gloss, state),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -722,6 +722,50 @@ public sealed class ReconcileLoop
                     cancellationToken).ConfigureAwait(false);
             }
         }
+    }
+
+    /// <summary>
+    /// How long this reboot pauses first — the single decision point of decision 51.
+    /// </summary>
+    /// <remarks>
+    /// The whole of "the countdown is for drift repair, not for initial provisioning" is this one
+    /// call. It is deliberately not a condition spread through the loop: nothing else in here
+    /// asks whether the frame has been green, so putting the rule back is an edit to
+    /// <see cref="CountdownScope.ForReboot"/> and nothing more.
+    /// </remarks>
+    private TimeSpan CountdownForThisReboot() => CountdownScope.ForReboot(
+        _services.Options.CurrentCountdown(),
+        _services.Journal.Read().FirstInSyncUtc is not null);
+
+    /// <summary>
+    /// Records the first moment this frame had everything verified at once (decision 51).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Convergence is the honest in-loop reading of §2.6's <c>InSync</c> rung. Adoption is a
+    /// resource (decision 34) and so is the applied agent version (§2.8), so a converged pass has
+    /// already cleared <c>NotAdopted</c> and <c>VersionMismatch</c> along with everything else.
+    /// The two rungs it does not speak for — <c>NoContact</c> and <c>ControlNotConfigured</c> —
+    /// are properties of the link at this instant rather than of the frame, which is exactly what
+    /// a durable "has this frame ever been green" must not be built on.
+    /// </para>
+    /// <para>
+    /// Written once and then left alone: the read guards the write, so a frame that stays
+    /// converged does not rewrite the journal on every pass of a five-minute drift sweep.
+    /// </para>
+    /// </remarks>
+    private void MarkGreen()
+    {
+        if (_services.Journal.Read().FirstInSyncUtc is not null)
+        {
+            return;
+        }
+
+        var at = _services.Clock.UtcNow;
+        _services.Journal.Update(state => state with { FirstInSyncUtc = at });
+
+        _services.Log.Info(
+            "Every resource is verified. This frame has been green, so repairs from here on pause for the countdown before the verifying reboot (§2.7).");
     }
 
     /// <summary>The escalation ladder of §2.5, one rung at a time.</summary>
@@ -979,6 +1023,13 @@ public sealed class ReconcileLoop
         string? detail,
         CancellationToken cancellationToken)
     {
+        if (result is PassResult.Converged)
+        {
+            // Every pass funnels through here and only WalkAsync can produce Converged, so this
+            // is the one place the frame can be observed turning green.
+            MarkGreen();
+        }
+
         await PublishStatusesAsync(result, statuses, next, cancellationToken).ConfigureAwait(false);
 
         return new PassOutcome

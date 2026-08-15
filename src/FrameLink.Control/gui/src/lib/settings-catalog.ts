@@ -126,11 +126,11 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 	'repair.countdownSeconds': {
 		label: 'Repair countdown',
 		hint:
-			'How long the frame shows what it is about to do before rebooting to verify it. ' +
-			'Development units run 0; a frame in a living room should not.',
+			'How long a working frame shows what it is about to do before rebooting to verify it. ' +
+			'Setting up a new frame never counts down; left unset, a repair pauses for 60 seconds.',
 		kind: 'duration',
 		group: 'Behaviour',
-		example: '25'
+		example: '60'
 	},
 	'update.enabled': {
 		label: 'Automatic updates',

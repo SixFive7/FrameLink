@@ -20,8 +20,11 @@ namespace FrameLink.Agent.Reconcile;
 /// does not know or care which.
 /// </para>
 /// <para>
-/// A zero-length countdown returns immediately without publishing anything, which is what
-/// decision 25 means by "development runs use 0": not a fast countdown, no countdown.
+/// A zero-length countdown returns immediately without publishing anything: not a fast
+/// countdown, no countdown. Two things reach that path — §2.7's "development runs use 0", now
+/// carried by <see cref="CountdownDuration.DevelopmentFlag"/>, and decision 51's initial
+/// provisioning, where <see cref="CountdownScope"/> withholds the pause because no reader
+/// exists yet to spend it on.
 /// </para>
 /// </remarks>
 public sealed class RebootCountdown

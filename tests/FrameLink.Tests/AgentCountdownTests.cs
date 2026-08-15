@@ -195,6 +195,11 @@ public sealed class AgentCountdownTests
             new ReconcileOptions { Countdown = CountdownDuration.Default },
             resource);
 
+        // Green first, then drift. Decision 51 means the countdown belongs to a repair on a frame
+        // that has been working, so a provisioning reboot is no longer a place to look for it.
+        await harness.ConvergeAsync();
+        resource.Drift();
+
         var frames = new List<string>();
         using var subscription = harness.Hub.Subscribe(status =>
         {
@@ -209,7 +214,162 @@ public sealed class AgentCountdownTests
         Assert.NotEmpty(frames);
         Assert.Contains(frames, frame => frame.Contains("Restarting", StringComparison.Ordinal));
         Assert.Contains(frames, frame => frame.Contains("Restart now", StringComparison.Ordinal));
-        Assert.Single(harness.Boundary.Crossings);
+    }
+}
+
+/// <summary>
+/// Decision 51 — the countdown applies to drift repair, not to initial provisioning (§2.7).
+/// </summary>
+/// <remarks>
+/// <para>
+/// The arithmetic that forced it: 79 resources at decision 48's 60 s default is 79 minutes of
+/// countdown against 29 minutes of measured reboot, so roughly three quarters of a bare provision
+/// would be spent holding a screen still for somebody who is not there. §2.7's reason for the
+/// pause is a viewer in front of a working frame watching a repair, and a frame that has never
+/// displayed anything has neither the viewer nor the product being interrupted.
+/// </para>
+/// <para>
+/// The rule is one function, <see cref="CountdownScope.ForReboot"/>, reading one durable field.
+/// Both halves are asserted here: the decision on its own, and the loop actually obeying it
+/// across the reboot and the process restart that the field has to survive.
+/// </para>
+/// </remarks>
+public sealed class AgentCountdownScopeTests
+{
+    [Fact]
+    public void A_frame_that_has_never_been_green_gets_no_countdown()
+    {
+        Assert.Equal(TimeSpan.Zero, CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: false));
+        Assert.Equal(TimeSpan.Zero, CountdownScope.ForReboot(TimeSpan.FromMinutes(10), hasEverBeenInSync: false));
+    }
+
+    [Fact]
+    public void A_frame_that_has_been_green_gets_the_configured_countdown_unchanged()
+    {
+        // Scope only ever removes the pause. Whatever decision 48's chain resolved to is passed
+        // through untouched, including a fleet value the operator deliberately set to zero.
+        Assert.Equal(CountdownDuration.Default, CountdownScope.ForReboot(CountdownDuration.Default, hasEverBeenInSync: true));
+        Assert.Equal(TimeSpan.FromSeconds(25), CountdownScope.ForReboot(TimeSpan.FromSeconds(25), hasEverBeenInSync: true));
+        Assert.Equal(TimeSpan.Zero, CountdownScope.ForReboot(TimeSpan.Zero, hasEverBeenInSync: true));
+    }
+
+    [Fact]
+    public void The_development_switch_still_forces_zero_on_a_frame_that_has_been_green()
+    {
+        // §2.7 keeps `--development` as the local debugging switch, and scope sits below it: the
+        // flag has already collapsed the duration to zero before this is asked anything.
+        Assert.Equal(
+            TimeSpan.Zero,
+            CountdownScope.ForReboot(CountdownDuration.Resolve(fleetValue: "60", development: true), hasEverBeenInSync: true));
+    }
+
+    [Fact]
+    public async Task Provisioning_a_bare_frame_never_waits_out_a_countdown()
+    {
+        var resources = new[]
+        {
+            new ScriptedResource("first", "want", "have-not"),
+            new ScriptedResource("second", "want", "have-not"),
+            new ScriptedResource("third", "want", "have-not"),
+        };
+
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = CountdownDuration.Default },
+            resources);
+
+        var countdowns = 0;
+        using var subscription = harness.Hub.Subscribe(status =>
+        {
+            if (status.Reconcile.Countdown is not null)
+            {
+                countdowns++;
+            }
+        });
+
+        var outcome = await harness.ConvergeAsync();
+
+        Assert.Equal(PassResult.Converged, outcome.Result);
+        Assert.Equal(0, countdowns);
+        Assert.Empty(harness.Clock.Delays);
+        Assert.Equal(3, harness.Boundary.Crossings.Count);
+    }
+
+    [Fact]
+    public async Task Repairing_drift_on_a_frame_that_has_been_green_waits_out_the_countdown()
+    {
+        var resource = new ScriptedResource("spy", "want", "have-not");
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = CountdownDuration.Default },
+            resource);
+
+        await harness.ConvergeAsync();
+        Assert.Empty(harness.Clock.Delays);
+
+        resource.Drift();
+        await harness.PassAsync();
+
+        // §2.7's pause, in the only place it is owed: a repair on a frame somebody is looking at.
+        Assert.NotEmpty(harness.Clock.Delays);
+        Assert.Equal(CountdownDuration.Default, harness.Clock.Delays.Aggregate(TimeSpan.Zero, (total, step) => total + step));
+    }
+
+    [Fact]
+    public async Task Being_green_is_recorded_in_the_journal_and_survives_a_restart()
+    {
+        var resource = new ScriptedResource("spy", "want", "have-not");
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = CountdownDuration.Default },
+            resource);
+
+        Assert.Null(harness.Journal.Read().FirstInSyncUtc);
+
+        await harness.ConvergeAsync();
+        var greenAt = harness.Journal.Read().FirstInSyncUtc;
+        Assert.NotNull(greenAt);
+
+        // A second journal over the same directory is what an agent restart, an agent update, or
+        // the next boot actually looks like. If the field were process state, this is where the
+        // frame would forget it had ever worked and hand the next repair the provisioning
+        // behaviour.
+        var reopened = new ReconcileJournal(harness.Store, harness.Log);
+        Assert.Equal(greenAt, reopened.Read().FirstInSyncUtc);
+    }
+
+    [Fact]
+    public async Task The_first_green_moment_is_recorded_once_and_never_moved()
+    {
+        var resource = new ScriptedResource("spy", "want", "have-not");
+        using var harness = new ReconcileHarness(resource);
+
+        await harness.ConvergeAsync();
+        var first = harness.Journal.Read().FirstInSyncUtc;
+        Assert.NotNull(first);
+
+        harness.Clock.UtcNow += TimeSpan.FromHours(6);
+        await harness.PassAsync();
+        resource.Drift();
+        await harness.ConvergeAsync();
+
+        Assert.Equal(first, harness.Journal.Read().FirstInSyncUtc);
+    }
+
+    [Fact]
+    public async Task A_frame_that_never_converges_never_claims_to_have_been_green()
+    {
+        // The countdown must not appear because a *different* resource went in sync. Nothing is
+        // owed to a viewer until the frame has actually shown something, which is every resource
+        // at once and not a majority of them.
+        var good = new ScriptedResource("good", "want", "have-not");
+        var bad = new ScriptedResource("bad", "want", "have-not") { ActHasNoEffect = true };
+
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = CountdownDuration.Default, AttemptBudget = 2 },
+            good,
+            bad);
+
+        await harness.ConvergeAsync();
+
+        Assert.Null(harness.Journal.Read().FirstInSyncUtc);
     }
 }
 

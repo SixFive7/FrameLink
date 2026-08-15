@@ -184,7 +184,8 @@ honesty mechanism.
 3. **What is being done** — the exact command or change, plus a plain-language gloss.
 4. **A countdown bar** before the verifying reboot (default 60 s), with a **"Reboot now"**
    button to skip once read — a tap on the touchscreen, and the same skip is available
-   remotely. This is the one screen where v1's touch shield must *not* block input.
+   remotely. This is the one screen where v1's touch shield must *not* block input. It runs on
+   drift repair only; initial provisioning does not count down (decision 51).
 5. **Attempt number** when retrying ("Attempt 2 of 5").
 6. **Backoff state** including remaining wait, so a pause never looks like a hang.
 7. **Escalation state** when the budget is exhausted and the operator has been notified.
@@ -196,10 +197,28 @@ flag and boot-partition file decision 25 put above them are **gone**: the operat
 that channel and removed it, and the boot file went with it rather than surviving alone, because
 it existed only as the flag's local, pre-adoption sibling.
 
+**Scope: the countdown is for drift repair, not for initial provisioning** (decision 51). The
+pause exists so that a person can read what is being done before the screen changes, and that is
+an argument about a viewer standing in front of a working frame while a repair takes their photos
+away. Initial provisioning has neither half of it — the frame has never displayed anything, nobody
+is waiting in front of it, and nothing is being interrupted. A frame that has never reached
+`InSync` therefore reboots as soon as a resource is applied; once a frame has been green, every
+later repair gets the full countdown, because then the transparency argument above holds
+completely. The condition is *has this device ever been `InSync`*, persisted in the agent's
+progress journal beside the attempt ledger (§2.1) so that it survives the reboot every resource
+takes and the version change every update brings, and it is never cleared — a frame that has been
+green and later drifts is still a frame with a viewer. What made the scope worth stating is the
+arithmetic: 79 resources at 60 s is 79 minutes of countdown against 29 minutes of measured reboot,
+so three quarters of a bare provision would have been spent pausing for nobody.
+
 One consequence follows, and it is stated rather than worked around. §3.3 gives a pending device
-*nothing* — no configuration at all — so an unadopted frame always counts down from 60 s, and
-"development runs use 0" is no longer reachable through configuration. What serves it instead is
-`--development`, a switch on the agent binary that forces the countdown to zero. That is a local
+*nothing* — no configuration at all — so the built-in 60 s is the whole chain an unadopted frame
+has, and "development runs use 0" is not reachable through configuration. Decision 51 answers that
+for provisioning — adoption is itself a resource (decision 34), so an unadopted frame has never
+been green and does not count down at all — but it does not answer it for a mule that has already
+converged once. That mule *is* a frame that has been green, and every repair on it pauses like any
+other. What serves it is `--development`, a switch on the agent binary that forces the countdown
+to zero. That is a local
 debugging switch and deliberately not a settings channel: it is an argument chosen by whoever
 starts the process on the machine they are sitting at, nothing writes or persists it, no operator
 can push it from the Fleet Manager, and it lasts exactly as long as that process. Removing the
@@ -850,9 +869,10 @@ The record of *what was decided and why*, in the order decided.
 | 45 | First run | Unconfigured server explains itself on every surface |
 | 46 | Display ordering | Overlay + console rotation go **first**, ahead of adoption — §2.7 outranks §5.5's brick-capable-last for this one group; every §5.5 mitigation kept, brick risk accepted |
 | 47 | Supervision | A **second agent responsibility beside reconciliation**, not a kind of resource (§2.10). Memory watchdog, 03:00 restart, 90 s kiosk liveness and per-call camera recycle are health- or event-triggered repairs of correctly-configured things, so they never stop the product — modelling them as drift would collide with §2.6. Reports on `events`; escalates by *rate*, not §2.5's budget; annotates the §2.6 ladder rather than adding a rung; the measured constants become `supervision.*` fleet settings |
-| 48 | Countdown resolution | **Per-device override → fleet default → 60 s**, most specific first (§2.7). **Supersedes decision 25**, which stays above as history. The install flag is removed outright — considered and rejected — and the boot-partition file goes with it, since it existed only as the flag's local pre-adoption sibling and keeping it would preserve exactly what was deleted. Both surviving levels are Fleet Manager settings, so §3.3's "a pending device receives nothing" means an unadopted frame can only ever get 60 s. `--development` is **kept** as a local debugging switch that forces 0: an argument to the binary, not a setting, and therefore not a reintroduction of the flag |
+| 48 | Countdown resolution | **Per-device override → fleet default → 60 s**, most specific first (§2.7). **Supersedes decision 25**, which stays above as history. The install flag is removed outright — considered and rejected — and the boot-partition file goes with it, since it existed only as the flag's local pre-adoption sibling and keeping it would preserve exactly what was deleted. Both surviving levels are Fleet Manager settings, so §3.3's "a pending device receives nothing" means an unadopted frame can only ever get 60 s. `--development` is **kept** as a local debugging switch that forces 0: an argument to the binary, not a setting, and therefore not a reintroduction of the flag. **Scoped by decision 51**, which leaves this chain intact and narrows which reboots it applies to |
 | 49 | Halt scope | `Halted` is **device-level, not resource-level**. One resource exhausting its escalation budget stops the loop touching *everything* on that device — including resources ordered ahead of the halted one, and across process restarts. Continuing to reboot a frame an administrator has been told about twice is the same damage under another resource's name |
 | 50 | Display granularity | The display is **two resources**, panel overlay and console rotation, so a dark panel and a sideways one are different diagnoses (§2.2). The dependency runs one way only — rotation depends on the overlay, never the reverse — so a failed cosmetic rotation can never keep the panel dark or mark it `Blocked`. A sideways console is a strictly better state than a dark one, which is what makes the split affordable under decision 46's early scheduling |
+| 51 | Countdown scope | The countdown applies to **drift repair, not to initial provisioning** (§2.7). It does not supersede decision 48 — that chain still decides *how long*; this decides *whether at all*. §2.7's reason for the pause is a viewer in front of a working frame reading what a repair is about to do before it takes their photos away, and initial provisioning has no viewer and no product to interrupt: the frame has never displayed anything and nobody is standing there. At decision 48's 60 s that pause costs 79 minutes across 79 resources against 29 minutes of measured reboot — three quarters of a bare provision spent waiting for nobody. So a frame that has never reached `InSync` reboots as soon as a resource is applied; once it has been green, every later repair pauses in full. The condition is durable state — first-green is written to the progress journal beside the attempt ledger (§2.1), never inferred from the link, the hub or anything else that resets at boot — and it is never cleared. `--development` is unaffected and still forces 0, which is what covers the mule *after* its first convergence, since by this decision it is then a frame that has been green. One function decides it, so reverting is one edit |
 
 ## Appendix B — Open items
 

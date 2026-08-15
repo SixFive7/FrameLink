@@ -1079,13 +1079,20 @@ need a reboot — the exact reasoning [§2.4](../version2.md) blames for v1's go
 real cost is under half what was assumed. [Decision 26](../version2.md) gets cheaper without
 changing.
 
-**One term this figure deliberately excludes, so nobody double-counts it.** [§2.7](../version2.md)
-puts a countdown bar before each verifying reboot, defaulting to 60 s under
-[decision 48](../version2.md). That is *deliberate pacing for a human reading the screen*, not
-machine time, and it is skippable per reboot, settable per fleet or device, and forced to zero by
-`--development`. At its default it would dominate everything above, so a provision's wall-clock time
-is the 30 minutes here plus whatever pacing the operator has configured — two numbers that must be
-quoted separately, because only one of them is a cost of the reboot rule.
+**The countdown is not a term in a provision's budget at all, and that is a decision rather than an
+omission.** [§2.7](../version2.md) puts a countdown bar before each verifying reboot, defaulting to
+60 s under [decision 48](../version2.md). Across 79 resources that is **79 minutes** — it would
+dominate everything above, and roughly three quarters of a bare provision would be spent holding a
+screen still for a reader who does not exist yet, since a frame being provisioned has never
+displayed anything and nobody is standing in front of it.
+[Decision 51](../version2.md) therefore scopes the pause to **drift repair**: a frame that has never
+reached `InSync` reboots as soon as a resource is applied, so **a bare provision is the 30 minutes
+above plus apply time, and nothing else**. The pause returns the moment the frame has been green
+once — a drift repair on a live frame pays its full duration per reboot, because then there is
+somebody watching and something being taken away. Two budgets, quoted separately: provisioning is
+machine time; repair is machine time plus deliberate pacing, skippable per reboot and settable per
+fleet or device. `--development` still forces zero, which is what keeps the pacing off the mule
+after its first convergence.
 
 **The carve-out does not change that total — it changes who can watch it.** The resource count and
 the per-cycle cost are untouched, so the 30 minutes stands. What moves is the dark window: under

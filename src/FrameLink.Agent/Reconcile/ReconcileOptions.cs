@@ -187,3 +187,57 @@ public static class CountdownDuration
                 : null;
     }
 }
+
+/// <summary>
+/// <b>Which reboots the countdown applies to</b> — §2.7, decision 51.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <see cref="CountdownDuration"/> answers <i>how long</i>; this answers <i>whether at all</i>.
+/// The two are separate because they have different reasons: the duration is configuration and
+/// moves per fleet and per device, while the scope is a property of what the countdown is for.
+/// </para>
+/// <para>
+/// <b>The countdown is a pause for a reader.</b> §2.7 item 4 puts it before the verifying reboot
+/// so a person can read what is being done before the screen changes, with a "Reboot now" button
+/// to skip once read. That argument is about somebody standing in front of a working frame
+/// watching a repair — there is a viewer, and there is a product being taken away from them.
+/// </para>
+/// <para>
+/// <b>Initial provisioning has neither.</b> A frame that has never been green has never displayed
+/// anything, nobody is waiting in front of it, and no product is being interrupted. Sixty seconds
+/// of reading time per resource is a pause with no reader, and at 79 resources it is 79 minutes
+/// of it — roughly three quarters of the whole provision spent waiting for nobody. So a frame
+/// that has never reached <c>InSync</c> reboots as soon as a resource is applied; once it has
+/// been green, every later repair gets the full countdown, because then §2.7's transparency
+/// argument holds completely.
+/// </para>
+/// <para>
+/// <b>The condition is durable, not inferred.</b> It reads
+/// <see cref="ReconcileJournalState.FirstInSyncUtc"/> — persisted beside the attempt ledger under
+/// <c>/var/lib/fl-agent</c> — so it survives the reboot every resource takes and the version
+/// change every update brings. Anything derived from process state would reset on every boot and
+/// hand a living-room frame the provisioning behaviour.
+/// </para>
+/// <para>
+/// <b>Reverting is one line.</b> Everything this decision changes is
+/// <see cref="ForReboot"/>; returning its configured duration unconditionally restores the
+/// behaviour decision 48 described, with no other edit anywhere.
+/// </para>
+/// </remarks>
+public static class CountdownScope
+{
+    /// <summary>The countdown this reboot actually gets.</summary>
+    /// <param name="configured">
+    /// What decision 48's chain resolved to — the effective fleet value, the built-in 60 s, or
+    /// zero when <see cref="CountdownDuration.DevelopmentFlag"/> was passed. That switch already
+    /// forces zero upstream of this, and keeps doing so: this can only ever take a countdown
+    /// away, never add one.
+    /// </param>
+    /// <param name="hasEverBeenInSync">
+    /// Whether this frame has ever had every resource verified at once — <see
+    /// cref="ReconcileJournalState.FirstInSyncUtc"/> being set.
+    /// </param>
+    public static TimeSpan ForReboot(TimeSpan configured, bool hasEverBeenInSync) =>
+        hasEverBeenInSync ? configured : TimeSpan.Zero;
+}
