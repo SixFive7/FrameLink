@@ -1,2 +1,19 @@
 TODO.md
 CLAUDE.md
+
+# .NET build output
+bin/
+obj/
+artifacts/
+
+# Node / SvelteKit (Fleet Manager GUI)
+node_modules/
+.svelte-kit/
+
+# Agent binaries staged for deployment by the harness
+build/out/
+
+# Harness run artifacts: screenshots, journal captures, console dumps.
+# The resumable progress file is deliberately NOT ignored — it is the record that
+# lets a fresh session pick up mid-milestone (version2.md §5.5).
+tools/harness/runs/

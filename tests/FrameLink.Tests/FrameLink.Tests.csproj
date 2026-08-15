@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FrameLink.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!--
+      Run the suite with `dotnet run --project tests/FrameLink.Tests`, not `dotnet test`.
+
+      xunit v3 test projects are executables whose entry point IS the runner, so `dotnet run`
+      is the documented path and it reports proper exit codes (0 pass, non-zero fail). As of
+      xunit.v3 4.0.0 on the .NET 10 SDK, `dotnet test` additionally negotiates over the
+      Microsoft.Testing.Platform v2 bridge and discovers nothing — it reports "Zero tests ran"
+      against an assembly that runs all of them directly. The harness therefore calls
+      `dotnet run`, which is one less moving part between a change and its verdict.
+
+      Also note the property that must NOT be set here: TestingPlatformDotnetTestSupport
+      imports the VSTest override targets, and VSTest is the path the .NET 10 SDK refuses
+      outright.
+    -->
+    <UseMicrosoftTestingPlatformRunner>true</UseMicrosoftTestingPlatformRunner>
+
+    <!-- The test host is not published AOT, and the analysers would flag the runner's own
+         reflection rather than anything in the code under test. The projects being tested
+         keep the analysers on, which is where the constraint actually needs enforcing. -->
+    <IsAotCompatible>false</IsAotCompatible>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!-- §7.1 "Everything floats, the build freezes it": dependencies resolve to latest at
+       restore time and are frozen into the artifact by the lock the build produces.
+       Nothing here is pinned to work around a break. -->
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" Version="*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FrameLink.Protocol\FrameLink.Protocol.csproj" />
+  </ItemGroup>
+
+</Project>

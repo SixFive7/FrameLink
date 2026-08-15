@@ -1,0 +1,41 @@
+root = true
+
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{json,jsonc,yml,yaml,svelte,ts,js,mjs,css,html,xml,csproj,props,targets,slnx}]
+indent_size = 2
+
+[*.{sh,bash}]
+end_of_line = lf
+
+[*.cs]
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_first = true
+csharp_prefer_braces = true:warning
+csharp_style_prefer_primary_constructors = true:suggestion
+
+# ---------------------------------------------------------------------------
+# Analyser scoping.
+#
+# Project policy §7.2: "Analyzers run at error severity and are never weakened to
+# make code pass." Everything below is a scoping decision — a rule switched off
+# where its premise does not hold — not a severity reduction taken to get a build
+# green. Each one names the premise it fails.
+# ---------------------------------------------------------------------------
+
+[tests/**/*.cs]
+# CA1707 (no underscores in member names) exists so that public API surface reads
+# consistently. A test method is not API: it is a sentence, and the underscore
+# convention is what makes `A_valid_key_cannot_claim_another_devices_identity`
+# legible in a failure report. The rule's premise does not apply here.
+dotnet_diagnostic.CA1707.severity = none
+
+# CA1861 (avoid constant arrays as arguments) targets hot paths that re-allocate
+# per call. Test bodies run once.
+dotnet_diagnostic.CA1861.severity = none

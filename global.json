@@ -1,0 +1,11 @@
+{
+  "$comment": [
+    "Deliberately contains no 'sdk' section. Project policy §7.1 is 'everything floats, the",
+    "build freezes it' — pinning an SDK band here would contradict it. The only thing",
+    "declared is which test runner `dotnet test` uses: the .NET 10 SDK dropped the VSTest",
+    "bridge that xunit v3 relied on, and this is where that choice is read from."
+  ],
+  "test": {
+    "runner": "Microsoft.Testing.Platform"
+  }
+}

@@ -1,0 +1,60 @@
+<Project>
+
+  <!--
+    Shared build settings for every FrameLink v2 project.
+
+    Two project policies from version2.md are enforced here rather than per-project,
+    so that a new project cannot silently opt out of them:
+
+      §7.1 "Everything floats, the build freezes it" — no global.json, no pinned SDK
+           band. Dependencies resolve at build time and are frozen into the artifact.
+
+      §7.2 "Analyzers run at error severity and are never weakened to make code pass."
+           TreatWarningsAsErrors makes every analyser diagnostic build-breaking.
+           AnalysisLevel is 'latest-recommended' rather than 'latest-all' deliberately:
+           the -all set turns on micro-performance rules (CA1848 logger delegates,
+           CA1861 constant arrays) whose only realistic resolution in a codebase this
+           size is bulk suppression — and bulk suppression IS weakening. Recommended
+           at error severity is the honest reading of the rule.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Undocumented public member. The agent and control apps are executables, not
+         libraries; XML docs on every public symbol there is ceremony, not safety.
+         FrameLink.Protocol re-enables it, because that IS the published contract. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+
+  <!-- Native AOT is the delivery format for both programs (§2.1, §3.1), so every
+       project is held to AOT-compatibility rules even when it is not itself published
+       AOT. IL2026/IL3050 then fire at compile time, which is what forces the
+       source-generated JSON contract instead of reflection. -->
+  <PropertyGroup>
+    <IsAotCompatible>true</IsAotCompatible>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>FrameLink</Product>
+    <Company>FrameLink</Company>
+    <Copyright>Copyright (c) Jori Huisman</Copyright>
+    <!-- Bespoke five-year FSL variant (§7.3). Never the bare FSL-1.1-MIT identifier. -->
+    <PackageLicenseExpression>LicenseRef-FrameLink-FSL-1.1-MIT-5yr</PackageLicenseExpression>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>FrameLink.Protocol</RootNamespace>
+    <!-- This project IS the published contract between the two programs, so the
+         "undocumented public member" warning suppressed in Directory.Build.props is
+         put back. Every wire member carries a doc comment stating whether it is
+         frozen. -->
+    <NoWarn>$(NoWarn.Replace(';CS1591', ''))</NoWarn>
+  </PropertyGroup>
+
+</Project>
