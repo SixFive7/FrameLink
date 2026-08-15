@@ -55,10 +55,10 @@ public sealed record DeviceCatalogContext
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>This is M2's subset, not the fleet's catalog.</b> The full enumeration is 79 resources in
-/// <c>reference/resource-catalog.md</c> and migrating it is M3. What is here is the set that
-/// makes every rung of §2.3's status vocabulary reachable by something that touches a real
-/// system, and it is chosen for that rather than for coverage.
+/// <b>This is M3 in progress, not the fleet's catalog.</b> The full enumeration is 79 resources
+/// in <c>reference/resource-catalog.md</c>. What was here at M2 is the set that makes every rung
+/// of §2.3's status vocabulary reachable by something that touches a real system; M3 adds the
+/// catalog's blocks to it in dependency order, and the package block is the first of them.
 /// </para>
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
@@ -102,6 +102,13 @@ public static class DeviceCatalog
             // The root of everything the Fleet Manager supplies a value for (decision 34).
             new AdoptionResource(context.Store, context.FleetAnswer),
             new DeviceNameResource(context.Store, context.DesiredDeviceName),
+
+            // Positions 6–22 of the catalog's own ordering: the package block, after the agent
+            // roots and ahead of system configuration. None of these depends on adoption, so a
+            // pending frame still builds its kiosk stack — which is what §2.7's browser stage
+            // needs in order to render the repair screen the pending frame is showing.
+            .. PackageCatalog.Build(new AptPackages(context.Processes)),
+
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 
             // The three-level chain that makes Blocked(dependency) and the escalation ladder

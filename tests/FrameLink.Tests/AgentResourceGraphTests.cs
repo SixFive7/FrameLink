@@ -136,7 +136,8 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        Assert.Equal(9, graph.Count);
+        // Nine from M2 plus the catalog's fifteen-resource package block (M3's first migration).
+        Assert.Equal(24, graph.Count);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],
