@@ -182,15 +182,28 @@ honesty mechanism.
    should be").
 2. **Why it matters** — one short sentence.
 3. **What is being done** — the exact command or change, plus a plain-language gloss.
-4. **A countdown bar** before the verifying reboot (default 25 s), with a **"Reboot now"**
+4. **A countdown bar** before the verifying reboot (default 60 s), with a **"Reboot now"**
    button to skip once read — a tap on the touchscreen, and the same skip is available
    remotely. This is the one screen where v1's touch shield must *not* block input.
 5. **Attempt number** when retrying ("Attempt 2 of 5").
 6. **Backoff state** including remaining wait, so a pause never looks like a hang.
 7. **Escalation state** when the budget is exhausted and the operator has been notified.
 
-Countdown duration is configurable at three levels, most specific winning: install-flag/boot
-file → fleet default → per-device override. Development runs use 0.
+Countdown duration resolves in one order, most specific first: **per-device override → fleet
+default → 60 seconds** (decision 48). Both configured levels are Fleet Manager settings (§3.4)
+and both are resolved server-side, so a frame is told one already-effective value. The install
+flag and boot-partition file decision 25 put above them are **gone**: the operator considered
+that channel and removed it, and the boot file went with it rather than surviving alone, because
+it existed only as the flag's local, pre-adoption sibling.
+
+One consequence follows, and it is stated rather than worked around. §3.3 gives a pending device
+*nothing* — no configuration at all — so an unadopted frame always counts down from 60 s, and
+"development runs use 0" is no longer reachable through configuration. What serves it instead is
+`--development`, a switch on the agent binary that forces the countdown to zero. That is a local
+debugging switch and deliberately not a settings channel: it is an argument chosen by whoever
+starts the process on the machine they are sitting at, nothing writes or persists it, no operator
+can push it from the Fleet Manager, and it lasts exactly as long as that process. Removing the
+install flag and keeping this are therefore not in tension.
 
 **Two-stage rendering, with a hard rule against blank screens:**
 
@@ -614,7 +627,8 @@ environment runs the Fleet Manager in development, so the server is not needed u
 Supplied in-session, never written to any file (repo rule §1.2):
 
 1. **Frame SSH** — hostname/IP and password. ✅ available
-2. **Home Assistant** + the frame's plug entity and authorisation to switch it. ✅ available
+2. **Home Assistant** at `http://10.20.30.250:8123` — port verified against the live instance
+   2026-08-15 (§6.1) — plus the frame's plug entity and authorisation to switch it. ✅ available
 3. **Docker Desktop running** (ideally auto-starting) — unlocks both the build container and
    the development Fleet Manager. ⚠ was not running; started manually
 4. **GitHub push access.** ✅ working
@@ -658,6 +672,10 @@ Supplied in-session, never written to any file (repo rule §1.2):
 | Frame → workstation | ✅ HTTP 200 in 1.3 ms; Docker-published port 2 ms — firewall not an obstacle |
 | Frame → internet | ✅ Debian repos and GitHub reachable |
 | Smart plug | ✅ controllable, 9.24 W idle |
+| **Home Assistant** | ✅ **`http://10.20.30.250:8123`**, verified 2026-08-15: `GET /api/` answers `{"message":"API running."}`. **The harness had the wrong port.** It defaulted to `:8086`, which is a different service on the same host (an MCP server) answering HTTP **404 for every path, including `/api/`** — so an entity lookup returned a 404 that the harness reported as *"Home Assistant does not know `switch.wall_plug_25`"* while that entity was live and drawing **3.54 W**. A misleading diagnostic costs more than none: it sends the reader to check the one thing that was never wrong. `tools/harness` now defaults to 8123 and, on any 404, probes `/api/` first so the message distinguishes a wrong entity from a server that is not Home Assistant at all. |
+| Reboot cost | ✅ **22.3 s** relay-on to SSH-ready, measured twice 2026-08-15 (22.3 s and ~20 s) with loss of port 22 confirmed between them. Materially cheaper than the ~57 s per resource the resource catalog's 75–80 minute budget for 79 resources implies — that budget should be re-derived before it is planned against. |
+| `POWER_OFF_ON_HALT` | ✅ **set to 1** in this Pi's EEPROM, so `halt`/`poweroff` genuinely cut power rather than leaving the board idling. A silent frame on a live relay therefore has three explanations, not two: booting, hung, or halted and drawing nothing. |
+| Own-hostname resolution | ⚠️ **stale `/etc/hosts` after a rename, 2026-08-15.** `hostnamectl set-hostname` does **not** maintain `/etc/hosts`, so `127.0.1.1` still named the shipped hostname; resolution fell through to DNS and the search domain answered `getent hosts framelink-mule` with `217.61.253.65 framelink-mule.huisman.io` — **the frame resolved its own name to a public internet address.** Anything that resolves its own name (a service bind, a certificate, an advertised media address) is pointed at a machine that is not this one. `sudo`'s "unable to resolve host" warning is the only signal, and the harness had been suppressing it as benign; it now reports it once per connection. Belongs with Appendix B's cloud-init hostname trap: the hostname resource must own `/etc/hosts` too. |
 | Portainer API / LiveKit | ✅ verified |
 | **SD card reader** | ⚠️ **not attached** |
 
@@ -809,7 +827,7 @@ The record of *what was decided and why*, in the order decided.
 | 22 | Notifications | Home Assistant |
 | 23 | Branching | None — everything on `main` |
 | 24 | Guide fate | Deep parity check, then reduce to the minimum set |
-| 25 | Countdown duration | Install flag → fleet default → per-device override; 0 in development |
+| 25 | Countdown duration | Install flag → fleet default → per-device override; 0 in development — **superseded by decision 48**, kept here as the record of what was decided first |
 | 26 | Reboot rule | Every resource reboots; no per-resource cleverness |
 | 27 | Drift during a call | The call is killed |
 | 28 | Diagnostics allowlist | Screenshot + journal tail only; the rest is telemetry or the shell |
@@ -832,6 +850,9 @@ The record of *what was decided and why*, in the order decided.
 | 45 | First run | Unconfigured server explains itself on every surface |
 | 46 | Display ordering | Overlay + console rotation go **first**, ahead of adoption — §2.7 outranks §5.5's brick-capable-last for this one group; every §5.5 mitigation kept, brick risk accepted |
 | 47 | Supervision | A **second agent responsibility beside reconciliation**, not a kind of resource (§2.10). Memory watchdog, 03:00 restart, 90 s kiosk liveness and per-call camera recycle are health- or event-triggered repairs of correctly-configured things, so they never stop the product — modelling them as drift would collide with §2.6. Reports on `events`; escalates by *rate*, not §2.5's budget; annotates the §2.6 ladder rather than adding a rung; the measured constants become `supervision.*` fleet settings |
+| 48 | Countdown resolution | **Per-device override → fleet default → 60 s**, most specific first (§2.7). **Supersedes decision 25**, which stays above as history. The install flag is removed outright — considered and rejected — and the boot-partition file goes with it, since it existed only as the flag's local pre-adoption sibling and keeping it would preserve exactly what was deleted. Both surviving levels are Fleet Manager settings, so §3.3's "a pending device receives nothing" means an unadopted frame can only ever get 60 s. `--development` is **kept** as a local debugging switch that forces 0: an argument to the binary, not a setting, and therefore not a reintroduction of the flag |
+| 49 | Halt scope | `Halted` is **device-level, not resource-level**. One resource exhausting its escalation budget stops the loop touching *everything* on that device — including resources ordered ahead of the halted one, and across process restarts. Continuing to reboot a frame an administrator has been told about twice is the same damage under another resource's name |
+| 50 | Display granularity | The display is **two resources**, panel overlay and console rotation, so a dark panel and a sideways one are different diagnoses (§2.2). The dependency runs one way only — rotation depends on the overlay, never the reverse — so a failed cosmetic rotation can never keep the panel dark or mark it `Blocked`. A sideways console is a strictly better state than a dark one, which is what makes the split affordable under decision 46's early scheduling |
 
 ## Appendix B — Open items
 
