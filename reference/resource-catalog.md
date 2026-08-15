@@ -960,8 +960,8 @@ Each line names the guide content excluded and what supersedes it.
 
 **FrameLink code that moves inside the agent binary**
 
-- **Guide 11 step 1** (`python3-gpiozero`, `python3-lgpio`, `python3-websockets`) and **step 3** (`framelink-gpio.service`, `framelink-gpio.py`) — superseded by agent-internal GPIO handling and the agent's own local channel. The WebSocket server on `127.0.0.1:8889` is an internal detail of the v1 split between daemon and SPA; with both inside one binary there is no port. Three behaviours from the daemon must be **reimplemented, not dropped**: camera-service restart after every call-end, the 90 s/300 s/15 s kiosk-liveness watchdog, and `SIGUSR1`-equivalent simulated press for testing.
-- **Guide 12 step 2** (`~/chromium-watchdog.sh`) and **steps 3–4** (`chromium-watchdog.service`/`.timer`, `chromium-restart.service`/`.timer`) — superseded by agent supervision. The measured constants survive as fleet settings: tree RSS ceiling `1843200` kB, `MemAvailable` floor `358400` kB, five-minute interval, `OnCalendar=*-*-* 03:00:00` with `Persistent=true`. See open question 5 — v2 currently names no home for this behaviour.
+- **Guide 11 step 1** (`python3-gpiozero`, `python3-lgpio`, `python3-websockets`) and **step 3** (`framelink-gpio.service`, `framelink-gpio.py`) — superseded by agent-internal GPIO handling and the agent's own local channel. The WebSocket server on `127.0.0.1:8889` is an internal detail of the v1 split between daemon and SPA; with both inside one binary there is no port. Three behaviours from the daemon must be **reimplemented, not dropped**: camera-service restart after every call-end, the 90 s/300 s/15 s kiosk-liveness watchdog, and `SIGUSR1`-equivalent simulated press for testing. The first two are supervision, specified in [§2.10](../version2.md).
+- **Guide 12 step 2** (`~/chromium-watchdog.sh`) and **steps 3–4** (`chromium-watchdog.service`/`.timer`, `chromium-restart.service`/`.timer`) — superseded by agent supervision. The measured constants survive as fleet settings: tree RSS ceiling `1843200` kB, `MemAvailable` floor `358400` kB, five-minute interval, `OnCalendar=*-*-* 03:00:00` with `Persistent=true`. Their home is [§2.10](../version2.md), which names them `supervision.browserTreeRssCeilingKb`, `supervision.memAvailableFloorKb`, `supervision.memoryCheckInterval` and `supervision.dailyRestartTime`; see open question 4.
 - **v1 inventory items that follow:** user units `chromium-watchdog.service`/`.timer`, `chromium-restart.service`/`.timer`, `framelink-gpio.service`, `framelink-spa.service`; `~/chromium-watchdog.sh`.
 
 **Verification-only steps (they become Observe/Verify implementations, not resources)**
@@ -1161,8 +1161,8 @@ be confirmed rather than assumed, because `machine-id` is the path component of 
 ## Open questions
 
 Genuine ambiguities in the specification. Each carries the reading this catalog adopted; none is
-settled by the guides. Item 1 has since been settled by an operator decision and is kept here with
-its resolution rather than removed, so the reasoning is not re-derived later.
+settled by the guides. Items 1 and 4 have since been settled by operator decisions and are kept here
+with their resolutions rather than removed, so the reasoning is not re-derived later.
 
 1. **The display overlay is brick-capable but is also the precondition for any visible output.**
    **— DECIDED 2026-08-15, in favour of [§2.7](../version2.md).**
@@ -1206,16 +1206,35 @@ its resolution rather than removed, so the reasoning is not re-derived later.
    under `/var/lib/fl-agent`), which makes `pkg.git` unnecessary. If the operator prefers the clone,
    `pkg.git` stays and `tool.xvf-host.installed` gains a git dependency.
 
-4. **Where does browser and camera supervision live?** [§2.2](../version2.md)'s loop is
-   level-triggered convergence of *declared state*. "Chromium's process tree exceeds 1.8 GB", "the
-   SPA socket has been silent for 90 seconds", "the camera node wedged after a call" and "restart the
-   browser every day at 03:00" are none of them drift of a declared setting, yet all four are
-   load-bearing and measured. v2 names no home for them.
-   *Reading adopted:* they are **supervision**, a second agent responsibility alongside
-   reconciliation, with their constants exposed as fleet settings. They are excluded from the
-   resource catalog on that basis. If instead they are meant to be resources, they need a status
-   vocabulary that distinguishes "converging" from "supervising", because a browser restart is not
-   drift and should not stop the product under [§2.6](../version2.md).
+4. **Where does browser and camera supervision live?**
+   **— DECIDED 2026-08-15, as supervision.**
+   [§2.2](../version2.md)'s loop is level-triggered convergence of *declared state*. "Chromium's
+   process tree exceeds 1.8 GB", "the SPA socket has been silent for 90 seconds", "the camera node
+   wedged after a call" and "restart the browser every day at 03:00" are none of them drift of a
+   declared setting, yet all four are load-bearing and measured. v2 named no home for them.
+   *Reading previously adopted:* they are **supervision**, a second agent responsibility alongside
+   reconciliation, with their constants exposed as fleet settings — excluded from this catalog on
+   that basis. If instead they were meant to be resources, they would need a status vocabulary
+   distinguishing "converging" from "supervising", because a browser restart is not drift and should
+   not stop the product under [§2.6](../version2.md).
+   *Decided:* the operator adopted that reading, and it is now [§2.10](../version2.md) and
+   [decision 47](../version2.md). Supervision is a second agent responsibility standing beside the
+   reconciliation loop, distinguished by one question — *is the desired state wrong, or is a
+   correctly-configured thing misbehaving?* The deciding argument is the collision the alternative
+   creates: [§2.6](../version2.md) says any drift stops the product, including an active call, and a
+   routine browser restart must not, so keeping the two separate lets each rule stay absolute
+   instead of forcing one to yield. Consequences the catalog depends on: the four behaviours stay
+   **out** of this catalog (they are not resources); the measured constants become `supervision.*`
+   fleet settings under [§3.4](../version2.md); the camera recycle is the same responsibility on an
+   event trigger rather than a health check; supervision never reboots; a supervised restart while
+   `InSync` leaves the device `InSync`, annotating the [§2.6](../version2.md) ladder rather than
+   adding a rung; and an unrecovered supervision action becomes ordinary drift once
+   `supervision.recoveryDeadline` expires, which is the handoff back to reconciliation.
+   *Still open:* the interlock is specified but unbuilt — [§2.10](../version2.md) requires
+   supervision to skip anything the reconciler is `Progressing`, `AwaitingReboot` or `Blocked` on,
+   and requires the reconciler to treat an open supervision window as expected rather than drift.
+   Both need the M2 engine to expose per-resource state to the supervisor; verify it when the kiosk
+   and camera resources first come under supervision.
 
 5. **Are agent-internal tunables resources?** Countdown duration, watchdog thresholds, the 03:00
    restart time, the button pin, backoff parameters. [§2.8](../version2.md) makes the applied *version*
@@ -1223,7 +1242,10 @@ its resolution rather than removed, so the reasoning is not re-derived later.
    independent drift surface, which argues no.
    *Reading adopted:* fleet settings, not resources — except where they have an observable on-device
    footprint, which is why `gpio.button.line` is a resource (the claimed GPIO line is visible in
-   `gpioinfo`) and the watchdog thresholds are not.
+   `gpioinfo`) and the watchdog thresholds are not. **Confirmed for the watchdog constants and the
+   03:00 restart by [decision 47](../version2.md)**, on exactly this reasoning: [§2.10](../version2.md)
+   makes them `supervision.*` fleet settings because nothing on disk holds them. The countdown
+   duration, backoff parameters and the rest of the tunables are unaffected and stay as read above.
 
 6. **Does the frame still need a `framelink` user session at all?** Every kiosk-layer unit in v1 is a
    `--user` unit whose entire lifetime depends on the tty1 autologin — there is no

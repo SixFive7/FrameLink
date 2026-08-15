@@ -108,6 +108,9 @@ Adapted from the Kubernetes controller model, minus the cluster machinery.
   topologically and marks dependents `Blocked(dependency)` rather than letting them fail
   confusingly on their own.
 - **Sequential and single-threaded.** Determinism beats throughput on a 2 GB appliance.
+- **Convergence is the whole job.** Keeping a correctly-configured system running — restarting a
+  bloated browser, recycling a wedged camera node — is *supervision*, a second agent responsibility
+  standing beside this loop with opposite rules about interrupting the product (§2.10).
 
 ### 2.3 Resource contract
 
@@ -161,7 +164,8 @@ dropped. The photo library is deliberately offline-capable, and an outage in the
 house must never blank a frame in someone else's.
 
 **Any drift stops the product**, including an active call. Correctness and transparency outrank
-call continuity; in normal operation nothing drifts, and when it does, everyone can see why.
+call continuity; in normal operation nothing drifts, and when it does, everyone can see why. A
+supervised restart is not drift and never triggers this rule (§2.10).
 
 **Conflict drift** — a change that keeps returning after correction (something is actively
 fighting the desired state), or a desired-value change pushed from the Fleet Manager — is
@@ -231,6 +235,168 @@ file → fleet default → per-device override. Development runs use 0.
 Device keypair and issued tokens live in root-only files under `/var/lib/fl-agent`, never in
 the repository and never in logs. The keypair is generated on first boot and is the device's
 permanent identity (§3.3).
+
+### 2.10 Supervision
+
+The agent has two jobs, not one. §2.2's loop converges *declared state*; supervision keeps a
+correctly-configured system *running*. They are separate responsibilities because they answer
+different questions and, as §2.6 shows, must obey opposite rules about interrupting the product.
+
+**The distinguishing question: is the desired state wrong, or is a correctly-configured thing
+misbehaving?** Reconciliation owns the first, supervision the second. A mixer control that no
+longer reads what it should, a `config.txt` line someone deleted, a unit file whose hash moved —
+declared and observed disagree, and the loop converges them. A browser renderer that has leaked
+900 MB, a camera node hung in shutdown while its unit still reports `active`, a page that stopped
+answering — every declared setting is exactly right and the running system is sick anyway. No
+amount of level-triggered convergence finds those, because there is nothing to compare against:
+the fault is in behaviour, not in state. The test generalises to cases not on the list below. If
+you can name the file, value or unit content that is wrong, it is a resource; if the honest answer
+is "nothing is wrong with the configuration, it just stopped working", it is supervision.
+
+**The four supervised behaviours**, all carried over from v1, all measured on this hardware:
+
+| Behaviour | Trigger | Action |
+|---|---|---|
+| **Memory watchdog** | Chromium process tree over 1.8 GB RSS, **or** system `MemAvailable` under 350 MB, sampled every five minutes | Restart the browser |
+| **Daily restart** | 03:00 local, catching a missed run up once after an outage | Restart the browser |
+| **Kiosk liveness** | The app's local channel silent for 90 s, evaluated every 15 s, five-minute cooldown | Restart the browser |
+| **Camera recycle** | Every call-end | Restart the camera node |
+
+The numbers are evidence, not preference:
+
+- **Sum the whole process tree, never the main process.** A leaking renderer grew past 1.4 GB and
+  was OOM-killed while the main process sat at an innocent 130 MB. A watchdog that reads the main
+  process never fires.
+- **1.8 GB is deliberately high.** After hours of slideshow the healthy tree legitimately reaches
+  ~1.7 GB of iframe image cache — released the instant the iframe unloads — and a full six-way call
+  runs a lean ~1.3 GB, so any lower ceiling restarts healthy frames. The measured pathologies cross
+  it quickly regardless: a dead slideshow iframe leaked 50 MB/min, and an expired token's
+  connect-reject-retry loop 15 MB/min.
+- **The 350 MB floor is the sharper instrument.** System-wide multi-second stalls began once free
+  memory fell into the low hundreds of megabytes, whatever was consuming it; the browser is always
+  this machine's largest tenant, so restarting it is the right answer to pressure from any source.
+- **90 s catches what systemd cannot.** An OOM-killed renderer leaves an "Aw, Snap!" tab while the
+  unit stays `active`, so `Restart=` never fires — the app's dropped local channel is the only
+  honest liveness signal. Validated live: a SIGKILLed renderer healed in exactly 90 s. Restarting
+  the browser is deliberately the *first* recovery action anywhere on the frame, because it frees
+  the renderer's memory and on a starved system nothing else can run until that happens.
+- **The daily restart bounds age where the watchdog bounds size.** A session left up for weeks
+  accumulates staleness no threshold measures.
+- **The camera recycle is a workaround with a known expiry.** `gstpipewiresink` in PipeWire 1.4.x
+  (Trixie ships 1.4.2) raises a fatal element error when a consumer tears down abruptly and can then
+  hang in shutdown, leaving the unit `active` with a dead stream — measured, the third acquisition
+  on one node instance failed, and `Restart=always` cannot fire on a hung process. PipeWire ≥ 1.6.0
+  guards that path; when the OS carries it, this behaviour is switched off by setting, then deleted.
+
+**The camera recycle is the same responsibility, not a second one.** Its trigger is a product event
+rather than a health check, but what it fixes is identical in kind — a correctly-configured unit
+misbehaving in a way its own restart policy cannot catch — and v1 demonstrates the unity by having
+implemented it in the same daemon as the liveness watchdog. Supervision therefore has two trigger
+kinds, **health-triggered** and **event-triggered**, sharing one reporting path, one interlock and
+one settings mechanism. One asymmetry follows and is worth stating: the recycle is prophylactic and
+fires whether or not anything is wrong, so one restart per call is the *healthy* rate — which is
+why the fault counter below is per behaviour and never a fleet-wide total.
+
+**Supervision does not stop the product, and that is the whole reason it is not a resource.** §2.6
+holds that any drift stops the product, including an active call, and that is correct for drift: a
+drifted frame is not the frame the operator declared, and running a product on top of an unknown
+configuration is worse than showing the reason. But a supervised restart is not a departure from
+the declared state — it *is* the declared state being kept alive, and what comes back comes back
+into the same configuration it left. Modelling supervision as drift would force the two rules into
+collision and one of them would have to yield: either drift stops being absolute (correctness lost)
+or a routine browser blink blanks the frame, kills the call and shows a repair screen every morning
+at 03:00 (continuity lost). Keeping them separate lets each rule stay absolute in its own domain —
+drift always interrupts, supervision never does.
+
+Two consequences follow directly. **Supervision never reboots the device**: its entire vocabulary
+is restarting a supervised process, and a reboot blanks the frame for a minute, which is exactly
+the product-stopping behaviour it must not have. When restarting is not enough, the handoff below
+gives the problem to reconciliation, which may reboot with the full §2.7 narration. And
+**supervision defers only what can wait**: the daily restart stands down while a call is active and
+runs at the next opportunity, exactly as v1's `Persistent=true` catches a missed run up, while the
+memory watchdog defers for nothing — the alternative to acting during a call is an OOM kill or a
+hardware-watchdog reset, which ends that call anyway and takes the frame with it.
+
+**The interlock with the reconciler.** Both actors can touch the same unit and each can misread the
+other's work, so one rule covers both directions: **the reconciler holds a lock on what it is
+applying, and a supervision action opens a window on what it touches.**
+
+1. Supervision does not act on anything the reconciler is `Progressing`, `AwaitingReboot` or
+   `Blocked` on. Restarting a browser the reconciler is deliberately holding down, or racing an
+   apply, produces exactly the interference that makes "which change broke it" unanswerable (§1.2
+   principle 5).
+2. While a supervision window is open, the transient wrongness it causes — a kiosk process that is
+   briefly not running — is expected rather than drift, so it never trips §2.6.
+3. The window closes when the supervised thing is healthy again, or when
+   `supervision.recoveryDeadline` expires. **If the deadline expires the condition becomes ordinary
+   drift**, and everything §2.6 and §2.7 prescribe takes over: the device leaves `InSync`, the
+   product stops, the screen narrates, and a browser that will not render at all falls to console
+   narration under §2.7's fallback rule. Supervision owns the transient, drift owns the persistent,
+   and the deadline is the boundary between them.
+
+Supervision runs at full strength in `NoContact` — that is the case where no help is coming, and it
+is the offline half of §1.2 principle 2. It stands down in every state where the product is not
+running, because the agent owns the screen then and restarting a browser that is deliberately not
+showing the product repairs nothing.
+
+**What supervision reports.** Nothing is repaired invisibly (§1.2 principle 3). Every action emits
+on the `events` channel — which behaviour fired, the measured value against its threshold, what was
+restarted, how long recovery took — and lands in the Fleet Manager's per-device history beside
+reconciliation events, under the same one-month retention (§3.5). It buffers offline like
+everything else on that channel (§4.1), so a frame that spent the night restarting itself tells the
+whole story when it reconnects.
+
+**Repeated supervision is itself a fault, and it does not reuse §2.5's ladder.** That ladder is
+budget-based and ends in `Halted` — stop touching it — which is the right terminal state for a
+resource that cannot be applied and the wrong one for a frame that needs restarting to stay alive:
+giving up there means a dark frame. Supervision's signal is a *rate*, not a budget, because each
+action is individually legitimate and the abnormality is the frequency. More than
+`supervision.faultRateThreshold` actions of one behaviour within `supervision.faultRateWindow`
+raises a **supervision fault**, which notifies the operator through the same §3.5 path as an
+escalation. The fault never inhibits supervision — the restarts continue, because a frame
+restarting every ten minutes still beats a dark one — so escalation here is diagnostic where
+§2.5's is inhibitory. A frame that keeps needing repair is a broken frame someone has to look at,
+even though every individual repair was correct.
+
+**Against the device state ladder: an annotation, not a rung.** §2.6's rungs answer exactly one
+question — does the product run? — and a supervision action does not change that answer, so it
+cannot become a rung without either duplicating `InSync` or stopping the product. **A supervised
+restart while `InSync` leaves the device `InSync`.** The one addition proposed is an annotation any
+state can carry — `Supervision(behaviour, last action, rate)` — surfaced in telemetry and on the
+Fleet Manager's device row. Below fault level it is operator-facing only. At fault level it also
+renders on the frame as the small persistent overlay §2.6 gives `NoContact`, because a frame
+visibly blinking every ten minutes is an abnormal condition and principle 3 says abnormal
+conditions are named on the frame's own screen. The overlay does not stop the product; that is the
+point of it being an annotation.
+
+**The constants are fleet settings** under §3.4's fleet-default-plus-per-device-override mechanism,
+so a threshold can be retuned across the fleet, or on one struggling frame, without a release. They
+are settings rather than resources because they have no independent on-device drift surface —
+nothing on disk holds them, the agent holds them in memory.
+
+| Setting | Default | Governs |
+|---|---|---|
+| `supervision.browserTreeRssCeilingKb` | `1843200` | Chromium tree RSS ceiling |
+| `supervision.memAvailableFloorKb` | `358400` | System available-memory floor |
+| `supervision.memoryCheckInterval` | `5m` | Sampling interval for both memory limits |
+| `supervision.dailyRestartTime` | `03:00` | Scheduled browser restart; empty disables it |
+| `supervision.kioskSilenceTimeout` | `90s` | Local-channel silence that triggers a restart |
+| `supervision.kioskCheckInterval` | `15s` | How often that silence is evaluated |
+| `supervision.kioskRestartCooldown` | `5m` | Minimum spacing between liveness restarts |
+| `supervision.cameraRestartOnCallEnd` | `true` | Per-call camera recycle; off at PipeWire ≥ 1.6 |
+| `supervision.recoveryDeadline` | `2m` | When an unrecovered supervision action becomes drift |
+| `supervision.faultRateThreshold` | `3` | Actions of one behaviour that raise a fault |
+| `supervision.faultRateWindow` | `1h` | The window that count is taken over |
+
+**Two v1 self-heal behaviours do not come along.** `docker-selfheal` is moot: §2.1 removes Docker
+from the frame, which deletes the corrupt-network-store failure class rather than repairing it. Its
+shape *was* supervision — a correctly-configured daemon refusing to start because of damaged
+runtime state, healed by a narrow signature match that deliberately left every other failure to a
+human — and that classification is worth keeping even though the behaviour has nothing left to act
+on. `sshd-mute-monitor` was never product: its own unit description calls it testbed diagnostics,
+and what it improvised — noticing that a frame had entered system-wide stalls — is what continuous
+telemetry and offline alerting (§3.5) now do by design, with the underlying symptom covered
+directly by the `MemAvailable` floor. Neither is reimplemented.
 
 ---
 
@@ -364,8 +530,8 @@ GUI routes behind Authelia; `/agent` authenticated by device keypair instead.
 requirement at every household; nothing is ever dialled inward.
 
 Logical channels: `telemetry` (loop state, counts, per-resource status), `events` (drift,
-escalation, boot), `control` (reconcile now, retry resource, maintenance mode, open shell), and
-`shell` (only while a session is open).
+escalation, supervision, boot), `control` (reconcile now, retry resource, maintenance mode, open
+shell), and `shell` (only while a session is open).
 
 **Reconnect discipline:** capped exponential backoff, retry forever, cleanup per failed attempt
 — the v1 LiveKit post-mortem lesson (a retry loop that leaks is worse than an outage) applies
@@ -665,6 +831,7 @@ The record of *what was decided and why*, in the order decided.
 | 44 | Call rooms | Single room, fleet-controlled |
 | 45 | First run | Unconfigured server explains itself on every surface |
 | 46 | Display ordering | Overlay + console rotation go **first**, ahead of adoption — §2.7 outranks §5.5's brick-capable-last for this one group; every §5.5 mitigation kept, brick risk accepted |
+| 47 | Supervision | A **second agent responsibility beside reconciliation**, not a kind of resource (§2.10). Memory watchdog, 03:00 restart, 90 s kiosk liveness and per-call camera recycle are health- or event-triggered repairs of correctly-configured things, so they never stop the product — modelling them as drift would collide with §2.6. Reports on `events`; escalates by *rate*, not §2.5's budget; annotates the §2.6 ladder rather than adding a rung; the measured constants become `supervision.*` fleet settings |
 
 ## Appendix B — Open items
 
