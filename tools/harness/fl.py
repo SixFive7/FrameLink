@@ -91,7 +91,7 @@ def _parser() -> argparse.ArgumentParser:
             "Optional overrides:\n"
             "  FL_HOST       mule address             (default 10.20.30.53)\n"
             "  FL_USER       mule username            (default framelink)\n"
-            "  FL_HA_URL     Home Assistant base URL  (default http://10.20.30.250:8086)\n"
+            "  FL_HA_URL     Home Assistant base URL  (default http://10.20.30.250:8123)\n"
             f"  FL_HA_ENTITY  plug entity id           (default {HA_ENTITY})\n"
             "\n"
             "Typical loop:\n"

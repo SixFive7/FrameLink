@@ -23,7 +23,7 @@ Optional, with defaults that match the current bench setup:
 
     FL_HOST         mule address                (default 10.20.30.53)
     FL_USER         mule username               (default framelink)
-    FL_HA_URL       Home Assistant base URL     (default http://10.20.30.250:8086)
+    FL_HA_URL       Home Assistant base URL     (default http://10.20.30.250:8123)
     FL_HA_ENTITY    smart plug entity id        (default switch.wall_plug_25)
 """
 
@@ -71,6 +71,17 @@ MULE_HOST = os.environ.get("FL_HOST", "10.20.30.53")
 MULE_USER = os.environ.get("FL_USER", "framelink")
 MULE_SSH_PORT = 22
 
+# Measured on the mule 2026-08-15, and recorded because several waits below and in power.py
+# are set against them rather than guessed:
+#
+#   * A full reboot to SSH-ready is **22.3 s**, taken twice (22.3 s and ~20 s) with loss of
+#     port 22 confirmed in between. Every wait ceiling here is a margin over that number, not
+#     an estimate of it - `power.on(wait_s=120)` is roughly five boots, `power.cycle(
+#     wait_s=180)` roughly eight. Anything that starts reading them as the cost of a boot will
+#     budget a provision several times too pessimistically.
+#   * **POWER_OFF_ON_HALT=1** is set in this Pi's EEPROM, so `halt` and `poweroff` genuinely
+#     cut power rather than leaving the board idling. A silent frame on a live relay therefore
+#     has three explanations, not two: booting, hung, or halted and drawing nothing.
 REMOTE_STAGE = "/tmp/fl-agent.staged"
 REMOTE_BIN = "/usr/local/bin/fl-agent"
 REMOTE_UNIT = "/etc/systemd/system/fl-agent.service"
@@ -82,8 +93,18 @@ UNIT_NAME = "fl-agent.service"
 REMOTE_UNIT_STAGE = "/tmp/fl-agent.service.staged"
 
 # --- home assistant --------------------------------------------------------
-HA_URL = os.environ.get("FL_HA_URL", "http://10.20.30.250:8086").rstrip("/")
+# 8123 is Home Assistant's port, verified against the live instance 2026-08-15: GET /api/
+# answers {"message":"API running."}. The previous default of 8086 was a different service on
+# the same host (an MCP server) which answers HTTP 404 for *every* path, including /api/ - so
+# a state lookup came back 404 and read exactly like "that entity does not exist" while the
+# entity was fine and drawing 3.54 W. HA_API_PROBE below is what tells those two apart now.
+HA_URL = os.environ.get("FL_HA_URL", "http://10.20.30.250:8123").rstrip("/")
 HA_ENTITY = os.environ.get("FL_HA_ENTITY", "switch.wall_plug_25")
+
+#: The cheapest question that distinguishes "wrong entity" from "not a Home Assistant".
+#: Home Assistant answers 200 with {"message": "API running."}; anything else answering on
+#: this URL almost certainly does not.
+HA_API_PROBE = "/api/"
 
 # --- relay safety ----------------------------------------------------------
 # A previous session wore roughly 350 relay operations before any of these guards existed

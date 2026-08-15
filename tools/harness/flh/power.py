@@ -7,6 +7,15 @@ from the standard library - two endpoints, no dependency worth adding for them.
     GET  {FL_HA_URL}/api/states/{entity}          -> current relay state
     POST {FL_HA_URL}/api/services/switch/turn_on  -> {"entity_id": entity}
     POST {FL_HA_URL}/api/services/switch/turn_off
+    GET  {FL_HA_URL}/api/                         -> is this a Home Assistant at all?
+
+The last one is only ever asked on the error path, and it exists because the other three
+cannot answer it. Measured 2026-08-15: the harness pointed at port 8086, which is a different
+service on the same host and answers HTTP 404 for every path. A state lookup therefore failed
+with a 404 that the harness reported as "Home Assistant does not know 'switch.wall_plug_25'" -
+while the entity existed and was drawing 3.54 W. ``/api/`` separates the two: Home Assistant
+answers it with ``{"message": "API running."}``, and anything that does not is not the server
+the 404 should be blamed on.
 
 Safety rules, carried over from v1
 ----------------------------------
@@ -46,6 +55,7 @@ from typing import Any
 
 from . import progress, ssh, ui
 from .config import (
+    HA_API_PROBE,
     HA_ENTITY,
     HA_URL,
     MULE_HOST,
@@ -64,6 +74,54 @@ from .config import (
 # --------------------------------------------------------------------------
 # Home Assistant
 # --------------------------------------------------------------------------
+def _api_is_home_assistant() -> tuple[bool, str]:
+    """Ask ``GET /api/`` whether ``FL_HA_URL`` is a Home Assistant at all.
+
+    Returns ``(verdict, evidence)``. Home Assistant answers this route with 200 and
+    ``{"message": "API running."}``; that one request is the whole difference between "the
+    entity id is wrong" and "this is not Home Assistant", which are otherwise the same 404.
+
+    Deliberately not routed through :func:`_request` - it is called *from* that function's
+    error path and must not be able to recurse into it.
+    """
+    url = f"{HA_URL}{HA_API_PROBE}"
+    request = urllib.request.Request(url, method="GET")  # noqa: S310 - fixed http(s) base
+    request.add_header("Authorization", f"Bearer {require_ha_token()}")
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310
+            body = response.read().decode("utf-8", errors="replace")[:200]
+        return "API running" in body, f"GET {HA_API_PROBE} answered {body.strip()!r}"
+    except urllib.error.HTTPError as exc:
+        # 401 means something IS Home Assistant and rejected the token; every other code on
+        # this route means the thing answering does not serve Home Assistant's API.
+        return exc.code == 401, f"GET {HA_API_PROBE} answered HTTP {exc.code}"
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return False, f"GET {HA_API_PROBE} could not be reached: {exc}"
+
+
+def _diagnose_404(path: str) -> str:
+    """The remedy for a 404, after asking whether this is even Home Assistant.
+
+    A 404 on ``/api/states/<entity>`` has two completely different causes and the harness used
+    to assert the wrong one flatly. Saying "Home Assistant does not know 'switch.wall_plug_25'"
+    when the port belongs to another service entirely sends the reader off to check an entity
+    that was never the problem - a misleading diagnostic is worse than no diagnostic.
+    """
+    is_ha, evidence = _api_is_home_assistant()
+    if is_ha:
+        return (
+            f"{HA_URL} is Home Assistant ({evidence}), so the 404 is about {path} rather than "
+            f"the server: it does not know {HA_ENTITY!r}. Check the entity id and override it "
+            "with FL_HA_ENTITY."
+        )
+    return (
+        f"{HA_URL} does not look like a Home Assistant: {evidence}, where Home Assistant "
+        "answers 200 with {\"message\": \"API running.\"}. The 404 is the wrong-server kind, "
+        f"not the wrong-entity kind, so {HA_ENTITY!r} is probably fine. Home Assistant's "
+        "default port is 8123 - set FL_HA_URL to the right base URL."
+    )
+
+
 def _request(path: str, *, method: str = "GET", body: dict[str, Any] | None = None) -> Any:
     token = require_ha_token()
     url = f"{HA_URL}{path}"
@@ -80,8 +138,9 @@ def _request(path: str, *, method: str = "GET", body: dict[str, Any] | None = No
         if exc.code == 401:
             remedy = "FL_HA_TOKEN is set but rejected - the long-lived token is wrong or revoked."
         elif exc.code == 404:
-            remedy = f"Home Assistant does not know {HA_ENTITY!r}. Override with FL_HA_ENTITY."
-        raise HarnessError(f"Home Assistant returned HTTP {exc.code} for {method} {path}: {detail}",
+            remedy = _diagnose_404(path)
+        # Neutral about who answered, because at this point that is exactly what is in doubt.
+        raise HarnessError(f"{HA_URL} returned HTTP {exc.code} for {method} {path}: {detail}",
                            exit_code=5, remedy=remedy) from exc
     except urllib.error.URLError as exc:
         raise HarnessError(
@@ -389,7 +448,15 @@ def status() -> dict[str, Any]:
     }
     ui.kv(info)
     if state == "on" and not alive:
-        ui.warn("relay is on but the frame is silent - it is powered and not answering (booting, or hung)")
+        # Three explanations, not two. POWER_OFF_ON_HALT=1 is set in this Pi's EEPROM
+        # (measured 2026-08-15), so a `halt` or `poweroff` really does cut power and leaves
+        # exactly this picture: relay on, frame drawing nothing. And a boot is 22.3 s
+        # measured, so silence much past half a minute is not "still booting".
+        ui.warn(
+            "relay is on but the frame is silent - the relay is feeding it and it is not "
+            "answering. Booting (22.3 s measured), hung, or halted: POWER_OFF_ON_HALT=1 in "
+            "this unit's EEPROM means halt/poweroff genuinely cuts power."
+        )
     if state == "off" and alive:
         ui.warn(
             "relay reports off yet the frame answers - FL_HA_ENTITY may name the wrong switch. "
