@@ -17,3 +17,7 @@ build/out/
 # The resumable progress file is deliberately NOT ignored — it is the record that
 # lets a fresh session pick up mid-milestone (version2.md §5.5).
 tools/harness/runs/
+
+# Python bytecode, written beside the harness sources the moment it is run from source
+# (tools/harness/__pycache__ and tools/harness/flh/__pycache__).
+__pycache__/
