@@ -12,6 +12,32 @@ the password handling non-negotiable:
 
 Every entry point checks for ``FL_PW`` before opening a socket, so the failure is a named
 error in the first second rather than a hang on a password prompt.
+
+Elevation
+---------
+The harness logs in as ``framelink``, an ordinary user, and several of the things it must do
+need root: installing a binary into ``/usr/local/bin``, writing a unit into
+``/etc/systemd/system``, reading ``/dev/fb0``, tailing the system journal.
+:meth:`Mule.run_privileged` is the single path for all of it, and it adapts to the unit in
+front of it rather than assuming a sudo policy:
+
+* ``sudo -n -k true`` is probed **once per connection** and the answer cached. ``-n`` refuses
+  to prompt and ``-k`` ignores any cached sudo timestamp, so the answer is a fact about
+  ``/etc/sudoers`` rather than a side effect of some sudo that ran five minutes ago.
+* If that succeeds a NOPASSWD rule exists, and plain ``sudo`` is used.
+* If it does not, ``sudo -S -k -p ''`` is used and ``FL_PW`` is written to the command's
+  **stdin**. ``-S`` makes sudo read the password from there, ``-p ''`` suppresses the prompt
+  so it can never be mistaken for command output, and ``-k`` means the credential is
+  genuinely exercised on every call rather than a stale timestamp being trusted.
+
+The password therefore never appears in the command text, which is what keeps it out of the
+mule's ``ps`` table, its shell history and its auth log. Section 1.2 allows no other channel.
+
+A stock Raspberry Pi OS Lite image is the second case, measured on the mule 2026-08-15: the
+first user is in the ``sudo`` group, ``/etc/sudoers.d`` holds no NOPASSWD drop-in, and
+``sudo -n true`` answers ``sudo: a password is required``. This is a harness concern only -
+``assets/fl-agent.service`` sets ``User=root``, so systemd starts the agent as root and it
+never invokes sudo at all.
 """
 
 from __future__ import annotations
@@ -20,13 +46,31 @@ import socket
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from . import ui
 from .config import (
     MULE_HOST,
     MULE_SSH_PORT,
     MULE_USER,
+    ElevationError,
     HarnessError,
     require_password,
 )
+
+#: Asks sudo what the *policy* is, with no prompting (``-n``) and no credit for a cached
+#: timestamp (``-k``). Exit 0 means a NOPASSWD rule covers this user.
+SUDO_PROBE = "sudo -n -k true"
+
+#: Prefix for a privileged command on a unit that wants a password. The password follows on
+#: stdin; nothing about it is in this string.
+SUDO_WITH_PASSWORD = "sudo -S -k -p ''"
+
+#: Prefix for a privileged command on a unit with a NOPASSWD rule.
+SUDO_PASSWORDLESS = "sudo"
+
+#: sudo prints this on stderr whenever ``/etc/hosts`` does not resolve the machine's own
+#: hostname - routine on a freshly flashed Pi that has just been renamed, and harmless: the
+#: command still runs and still exits 0. It must never be read as an elevation failure.
+SUDO_BENIGN_STDERR = ("unable to resolve host",)
 
 
 @dataclass(frozen=True)
@@ -60,6 +104,10 @@ class Mule:
         self._client = client
         self.host = host
         self.user = user
+        # None until the first privileged command asks. Cached for the lifetime of the
+        # connection: the answer is a property of /etc/sudoers, which nothing the harness
+        # does changes, and probing once per command would triple the round trips.
+        self._sudo_needs_password: bool | None = None
 
     def run(self, command: str, *, timeout: float = 120.0) -> Result:
         """Run a command and capture its stdout and stderr as text.
@@ -85,6 +133,135 @@ class Mule:
         err = stderr.read().decode("utf-8", errors="replace")
         status = stdout.channel.recv_exit_status()
         return status, data, err
+
+    # --- elevation ---------------------------------------------------------
+    def sudo_needs_password(self) -> bool:
+        """Whether elevating on this unit needs the login password. Probed once, cached.
+
+        Three outcomes, and the third is the one worth naming: a user who cannot elevate at
+        all is a different problem from one who must type a password, and no amount of
+        password answering will fix it. Saying so here means the diagnosis appears once, at
+        the first privileged command, rather than as a puzzling failure of whichever
+        ``install`` or ``systemctl`` happened to run first.
+        """
+        if self._sudo_needs_password is None:
+            probe = self.run(SUDO_PROBE, timeout=30.0)
+            if probe.ok:
+                self._sudo_needs_password = False
+                ui.info("sudo: a NOPASSWD rule covers this login - elevating without a password")
+            elif "password" in (probe.stderr + probe.stdout).lower():
+                self._sudo_needs_password = True
+                ui.info("sudo: this login must authenticate - answering on stdin from FL_PW")
+            else:
+                complaint = (probe.stderr or probe.stdout).strip() or "(no output)"
+                raise ElevationError(
+                    f"{self.user}@{self.host} cannot elevate at all: {complaint}",
+                    exit_code=3,
+                    remedy=(
+                        "The harness needs root on the mule to install a binary, write a unit "
+                        "and read /dev/fb0. A stock Raspberry Pi OS image puts the first user "
+                        "in the sudo group; check FL_USER names that user, or add this one to "
+                        "the sudo group on the frame."
+                    ),
+                )
+        return self._sudo_needs_password
+
+    def _exec_privileged(self, command: str, *, timeout: float):
+        """Start ``command`` under sudo, answering the password read if there is one.
+
+        Returns the wrapped command text and paramiko's stdout/stderr handles, so both the
+        text and the binary variants share one elevation decision and one stdin dance.
+        """
+        if command.lstrip().startswith("sudo"):
+            # A bare sudo inside a privileged command means two sudo invocations in one
+            # line, and only the first would find the password on stdin. Caught here rather
+            # than left to fail confusingly on the mule.
+            raise ValueError(
+                f"run_privileged adds sudo itself; pass the bare command, not {command!r}"
+            )
+
+        password: str | None = None
+        if self.sudo_needs_password():
+            # Read FL_PW *before* the channel is opened. An unset variable must produce the
+            # named credential error, not a remote sudo sitting on a stdin that will never
+            # carry an answer.
+            password = require_password()
+            wrapped = f"{SUDO_WITH_PASSWORD} {command}"
+        else:
+            wrapped = f"{SUDO_PASSWORDLESS} {command}"
+
+        stdin, stdout, stderr = self._client.exec_command(wrapped, get_pty=False, timeout=timeout)
+        if password is not None:
+            try:
+                stdin.write(password + "\n")
+                stdin.flush()
+            except OSError:
+                # The remote end can close stdin before this lands - a command that never
+                # reads it, or a sudo that already gave up. The exit status is the real
+                # signal, so this is not itself the failure.
+                pass
+            finally:
+                # Closing the write side matters: sudo allows three attempts, and with the
+                # stream left open a rejected password would sit waiting for a second one
+                # that is never coming. EOF turns that hang into an immediate, named exit.
+                try:
+                    stdin.channel.shutdown_write()
+                except OSError:
+                    pass
+        return wrapped, stdout, stderr
+
+    def run_privileged(self, command: str, *, timeout: float = 120.0) -> Result:
+        """Run one command as root and capture its stdout and stderr as text.
+
+        Pass the bare command - ``install -m 0755 a b``, not ``sudo install ...``. Exactly
+        one sudo invocation per call, because only the first one in a shell line can be
+        answered on stdin.
+        """
+        wrapped, stdout, stderr = self._exec_privileged(command, timeout=timeout)
+        out = stdout.read().decode("utf-8", errors="replace")
+        err = stderr.read().decode("utf-8", errors="replace")
+        status = stdout.channel.recv_exit_status()
+        result = Result(command=wrapped, exit_status=status, stdout=out, stderr=err)
+        self._raise_if_elevation_failed(result)
+        return result
+
+    def run_privileged_binary(self, command: str, *, timeout: float = 120.0) -> tuple[int, bytes, str]:
+        """:meth:`run_privileged` for a command whose stdout is binary - a framebuffer read."""
+        wrapped, stdout, stderr = self._exec_privileged(command, timeout=timeout)
+        data = stdout.read()
+        err = stderr.read().decode("utf-8", errors="replace")
+        status = stdout.channel.recv_exit_status()
+        self._raise_if_elevation_failed(
+            Result(command=wrapped, exit_status=status, stdout="", stderr=err)
+        )
+        return status, data, err
+
+    def _raise_if_elevation_failed(self, result: Result) -> None:
+        """Separate "sudo refused" from "the command ran as root and failed".
+
+        Both arrive as a non-zero exit status, and conflating them is expensive: a wrong
+        password would be reported as ``systemctl restart failed`` and send the reader
+        looking at the unit. sudo prefixes its own complaints with ``sudo:``, so a non-zero
+        exit carrying such a line is an elevation failure and nothing else.
+        """
+        if result.ok:
+            return
+        for line in result.stderr.splitlines():
+            text = line.strip()
+            if not text.startswith("sudo:"):
+                continue
+            if any(benign in text for benign in SUDO_BENIGN_STDERR):
+                continue
+            raise ElevationError(
+                f"sudo refused on {self.user}@{self.host}: {text}",
+                exit_code=3,
+                remedy=(
+                    "FL_PW must be the login password of this user on this unit - the harness "
+                    "answers sudo with it on stdin. Check it is right for this frame, and that "
+                    "FL_USER names a user in the sudo group. The password is never stored, so "
+                    "a stale one can only come from the environment of this session."
+                ),
+            )
 
     def put(self, local_path, remote_path: str, *, mode: int = 0o644) -> int:
         """Upload a file over SFTP. Returns the byte count written."""

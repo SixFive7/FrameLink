@@ -476,7 +476,7 @@ Supplied in-session, never written to any file (repo rule §1.2):
 | Workstation | 32 cores, 128 GB RAM, 506 GB free, WSL2 + Hyper-V |
 | Toolchain | .NET SDK 10.0.302, Node v26.7.0 / npm 11.19.0, Git 2.55.0 |
 | Frame | Pi 5 Model B Rev 1.0, Trixie, aarch64, kernel 6.12.75, 107 GB free of 119 GB |
-| `sudo` NOPASSWD | ✅ (the agent depends on it) |
+| `sudo` NOPASSWD | ❌ **Not present, and not depended on.** Re-measured on a stock image 2026-08-15: the first user is in the `sudo` group, `/etc/sudoers.d` carries only the packaged drop-ins, and `sudo -n true` answers `sudo: a password is required`. The earlier ✅ was taken on the hand-built v1 frame and does not survive a reflash — which is the case that counts, since v2 bootstraps from a stock image. **The agent needs no `sudo` at all:** `fl-agent.service` sets `User=root`, so systemd starts it as root. Only the harness elevates, and it answers on stdin (`sudo -S`, probed once per connection). |
 | FUSE | ✅ `/dev/fuse`, setuid `/usr/bin/fusermount3`, module loaded |
 | glibc / systemd | 2.41 / 257 |
 | Frame → workstation | ✅ HTTP 200 in 1.3 ms; Docker-published port 2 ms — firewall not an obstacle |

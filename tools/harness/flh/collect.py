@@ -47,7 +47,7 @@ from pathlib import Path
 from typing import Any
 
 from . import png, progress, ssh, ui
-from .config import RUNS_DIR, UNIT_NAME, HarnessError
+from .config import RUNS_DIR, UNIT_NAME, ElevationError, HarnessError
 
 #: Cap on a single framebuffer read. 1280x800x4 is 4 MB; this leaves generous headroom for
 #: a larger panel while still refusing to stream something pathological over the session.
@@ -69,13 +69,16 @@ def journal(mule: ssh.Mule, *, unit: str | None = UNIT_NAME, lines: int = 200,
             boot: bool = False, since: str | None = None) -> str:
     """Tail the journal. ``unit=None`` takes the whole system journal.
 
-    ``sudo`` is used unconditionally: the mule has passwordless sudo (version2.md section 6.1),
-    and whether the login user can read the system journal depends on group membership that
-    a reflash may not reproduce. Guide 12 step 5 made the journal persistent and capped it
-    at 64 MB, so a tail after a crash still has history - the whole reason that decision
-    was made.
+    Elevation is used unconditionally because whether the login user can read the system
+    journal depends on ``adm``/``systemd-journal`` group membership that a reflash may not
+    reproduce, and a tail that silently returns nothing is worse than one that costs a sudo.
+    It goes through :meth:`ssh.Mule.run_privileged`, which answers the password on stdin: a
+    stock Raspberry Pi OS Lite image has **no** NOPASSWD drop-in, so the plain ``sudo`` this
+    used to run would have failed here with ``sudo: a password is required``. Guide 12 step 5
+    made the journal persistent and capped it at 64 MB, so a tail after a crash still has
+    history - the whole reason that decision was made.
     """
-    parts = ["sudo", "journalctl", "--no-pager", "-o", "short-iso"]
+    parts = ["journalctl", "--no-pager", "-o", "short-iso"]
     if unit:
         parts += ["-u", unit]
     if boot:
@@ -83,7 +86,7 @@ def journal(mule: ssh.Mule, *, unit: str | None = UNIT_NAME, lines: int = 200,
     if since:
         parts += ["--since", f"'{since}'"]
     parts += ["-n", str(int(lines))]
-    result = mule.run(" ".join(parts), timeout=90)
+    result = mule.run_privileged(" ".join(parts), timeout=90)
     if not result.ok:
         raise HarnessError(
             f"journalctl failed (exit {result.exit_status}): {(result.stderr or result.stdout).strip()}",
@@ -166,7 +169,7 @@ def screenshot_framebuffer(mule: ssh.Mule, destination: Path, *, pixel_format: s
     # dd without iflag=fullblock silently stops at the first one, producing a truncated
     # image that looks like a half-drawn screen rather than a truncated read. head -c keeps
     # reading until it has the byte count asked for.
-    status, raw, err = mule.run_binary(f"sudo head -c {expected} /dev/fb0", timeout=120)
+    status, raw, err = mule.run_privileged_binary(f"head -c {expected} /dev/fb0", timeout=120)
     if status != 0 or len(raw) < expected:
         raise HarnessError(
             f"reading /dev/fb0 returned {len(raw)} of {expected} bytes (exit {status}) {err.strip()}",
@@ -244,6 +247,11 @@ def screenshot(mule: ssh.Mule, destination: Path, *, method: str = "auto",
         if facts.get("fb0") == "present" or method == "framebuffer":
             try:
                 return screenshot_framebuffer(mule, destination, pixel_format=pixel_format, rotate=rotate)
+            except ElevationError:
+                # Not a screenshot problem, and no second path can route around it. Letting
+                # it fall into `attempts` would end in "No screenshot path succeeded" with a
+                # remedy about the vc4-kms-v3d overlay, which is the wrong subject entirely.
+                raise
             except HarnessError as exc:
                 attempts.append(f"framebuffer: {exc}")
         else:
@@ -286,6 +294,11 @@ def collect(*, unit: str | None = UNIT_NAME, lines: int = 200, boot: bool = Fals
                 ui.ok(f"journal: {captured} lines -> {path.name}")
                 if captured == 0:
                     ui.warn(f"journal is empty - {unit or 'the system journal'} has logged nothing")
+            except ElevationError:
+                # One diagnostic failing must not cost the other, which is why the rest of
+                # this is absorbed. An elevation failure is different in kind: it fails both
+                # for one reason, and reporting it twice as two problems would read as two.
+                raise
             except HarnessError as exc:
                 problems.append(str(exc))
                 ui.fail(f"journal: {exc}")
@@ -297,6 +310,8 @@ def collect(*, unit: str | None = UNIT_NAME, lines: int = 200, boot: bool = Fals
                 meta["path"] = str(path)
                 result["screenshot"] = meta
                 ui.ok(f"screenshot: {meta['method']} {meta['bytes']:,} bytes -> {path.name}")
+            except ElevationError:
+                raise
             except HarnessError as exc:
                 problems.append(str(exc))
                 ui.fail(f"screenshot: {exc}")

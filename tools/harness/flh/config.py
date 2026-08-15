@@ -76,6 +76,11 @@ REMOTE_BIN = "/usr/local/bin/fl-agent"
 REMOTE_UNIT = "/etc/systemd/system/fl-agent.service"
 UNIT_NAME = "fl-agent.service"
 
+# The unit is written to /tmp as the login user and then installed into place as root.
+# Writing it directly with `sudo tee` would put the heredoc on sudo's stdin, which is
+# exactly where the password has to go on an image with no NOPASSWD rule (ssh.py).
+REMOTE_UNIT_STAGE = "/tmp/fl-agent.service.staged"
+
 # --- home assistant --------------------------------------------------------
 HA_URL = os.environ.get("FL_HA_URL", "http://10.20.30.250:8086").rstrip("/")
 HA_ENTITY = os.environ.get("FL_HA_ENTITY", "switch.wall_plug_25")
@@ -122,6 +127,17 @@ class HarnessError(RuntimeError):
         super().__init__(message)
         self.exit_code = exit_code
         self.remedy = remedy
+
+
+class ElevationError(HarnessError):
+    """sudo on the mule refused, or cannot be used by this login at all.
+
+    Its own type because callers that deliberately absorb a failed step - `collect` tries a
+    second screenshot path when the first one fails - must not absorb this one. An image the
+    harness cannot elevate on fails every root-shaped step for the same reason, so folding it
+    into a per-step failure list would bury the one sentence that explains all of them and
+    replace it with a remedy about the wrong subject entirely.
+    """
 
 
 def require_password() -> str:

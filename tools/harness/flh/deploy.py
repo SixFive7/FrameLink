@@ -19,6 +19,16 @@ The upload itself is staged and renamed rather than written in place. A running 
 be opened for writing (``ETXTBSY``), but it *can* be replaced by ``rename(2)``, which is
 also atomic - so there is no instant at which ``/usr/local/bin/fl-agent`` is a half-written
 file, even if the link drops mid-deploy.
+
+Elevation
+---------
+Everything root-shaped here goes through :meth:`ssh.Mule.run_privileged`, which answers
+sudo's password prompt on stdin where the image needs one. Two consequences shape the code:
+each privileged step is its own call rather than an ``&&`` chain, because only the first
+sudo in a shell line can be answered that way; and the unit file is staged to ``/tmp`` as
+the login user and then installed as root, because a ``sudo tee`` heredoc would occupy the
+very stdin the password needs. Neither is a workaround - both read better than what they
+replaced, since a failure now names the step it happened in.
 """
 
 from __future__ import annotations
@@ -32,6 +42,7 @@ from .config import (
     REMOTE_BIN,
     REMOTE_STAGE,
     REMOTE_UNIT,
+    REMOTE_UNIT_STAGE,
     UNIT_NAME,
     UNIT_TEMPLATE,
     HarnessError,
@@ -80,11 +91,16 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         "binaryChanged": False,
         "unitChanged": False,
         "restarted": False,
+        "sudoMode": None,
     }
 
     with ssh.connect() as mule:
         outcome["host"] = mule.host
         ui.step(f"Deploying {release['version']} to {mule.user}@{mule.host}")
+
+        # Probed up front rather than at the first root-shaped step, so an image the
+        # harness cannot elevate on is diagnosed before anything has been uploaded.
+        outcome["sudoMode"] = "sudo -S (password on stdin)" if mule.sudo_needs_password() else "NOPASSWD"
 
         # --- binary ---------------------------------------------------------
         probe = mule.run(f"sha256sum {REMOTE_BIN} 2>/dev/null | cut -d' ' -f1")
@@ -106,10 +122,17 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
                     exit_code=5,
                 )
 
-            mule.run(
-                f"sudo install -m 0755 -o root -g root {REMOTE_STAGE} {REMOTE_BIN}.new "
-                f"&& sudo mv -f {REMOTE_BIN}.new {REMOTE_BIN} && rm -f {REMOTE_STAGE}"
+            # Three steps where there was one `&&` chain. The atomic-rename property is
+            # unchanged - install to .new, then rename over - but each root step is now its
+            # own sudo, and .check() names which one failed instead of reporting the whole
+            # chain's exit status.
+            mule.run_privileged(
+                f"install -m 0755 -o root -g root {REMOTE_STAGE} {REMOTE_BIN}.new"
             ).check("installing the binary")
+            mule.run_privileged(f"mv -f {REMOTE_BIN}.new {REMOTE_BIN}").check(
+                "renaming the binary into place"
+            )
+            mule.run(f"rm -f {REMOTE_STAGE}")
             outcome["binaryChanged"] = True
             ui.ok(f"installed {REMOTE_BIN}")
 
@@ -119,18 +142,24 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
             ui.ok(f"{UNIT_NAME} already current")
         else:
             # Heredoc with a quoted delimiter: the shell performs no expansion, so the unit
-            # arrives byte-identical to the template no matter what it contains.
+            # arrives byte-identical to the template no matter what it contains. It is
+            # written unprivileged to /tmp because the heredoc *is* stdin, and on an image
+            # without a NOPASSWD rule stdin is where sudo reads the password from.
             mule.run(
-                f"sudo tee {REMOTE_UNIT} > /dev/null << 'FL_UNIT_EOF'\n{wanted_unit}FL_UNIT_EOF"
+                f"cat > {REMOTE_UNIT_STAGE} << 'FL_UNIT_EOF'\n{wanted_unit}FL_UNIT_EOF"
+            ).check("staging the unit file")
+            mule.run_privileged(
+                f"install -m 0644 -o root -g root {REMOTE_UNIT_STAGE} {REMOTE_UNIT}"
             ).check("writing the unit file")
-            mule.run("sudo systemctl daemon-reload").check("systemctl daemon-reload")
+            mule.run(f"rm -f {REMOTE_UNIT_STAGE}")
+            mule.run_privileged("systemctl daemon-reload").check("systemctl daemon-reload")
             outcome["unitChanged"] = True
             ui.ok(f"wrote {REMOTE_UNIT} and reloaded systemd")
 
         # --- enablement -----------------------------------------------------
         enabled = mule.run(f"systemctl is-enabled {UNIT_NAME} 2>/dev/null").stdout.strip()
         if enabled != "enabled":
-            mule.run(f"sudo systemctl enable {UNIT_NAME}").check("enabling the unit")
+            mule.run_privileged(f"systemctl enable {UNIT_NAME}").check("enabling the unit")
             ui.ok(f"{UNIT_NAME} enabled")
         else:
             ui.ok(f"{UNIT_NAME} already enabled")
@@ -138,7 +167,9 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         # --- restart --------------------------------------------------------
         changed = outcome["binaryChanged"] or outcome["unitChanged"]
         if restart and (changed or force):
-            mule.run(f"sudo systemctl restart {UNIT_NAME}", timeout=90).check("restarting the service")
+            mule.run_privileged(f"systemctl restart {UNIT_NAME}", timeout=90).check(
+                "restarting the service"
+            )
             outcome["restarted"] = True
             ui.ok("service restarted")
         elif restart:
@@ -171,8 +202,8 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         )
 
         if journal_lines:
-            tail = mule.run(
-                f"sudo journalctl -u {UNIT_NAME} -n {int(journal_lines)} --no-pager -o short-iso"
+            tail = mule.run_privileged(
+                f"journalctl -u {UNIT_NAME} -n {int(journal_lines)} --no-pager -o short-iso"
             )
             if tail.stdout.strip():
                 ui.block(f"journal: {UNIT_NAME} (last {journal_lines})", tail.stdout)
@@ -187,6 +218,7 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
             "sha256": outcome["verifiedSha256"],
             "isActive": outcome["isActive"],
             "isEnabled": outcome["isEnabled"],
+            "sudoMode": outcome["sudoMode"],
             "deployedUtc": progress.utcnow(),
         },
     )
@@ -196,7 +228,7 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         by="fl.py deploy",
         detail=(
             f"{outcome['version']} verified on {outcome['host']} by remote sha256sum; "
-            f"unit {outcome['isActive']}/{outcome['isEnabled']}"
+            f"unit {outcome['isActive']}/{outcome['isEnabled']}; elevation {outcome['sudoMode']}"
         ),
     )
 

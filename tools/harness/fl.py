@@ -25,6 +25,13 @@ fallback. Every mule-touching subcommand fails in its first second with a named 
 ``FL_PW`` is absent, rather than hanging on a prompt or quietly authenticating as someone
 else. ``FL_HA_TOKEN`` is held to the same rule.
 
+``FL_PW`` also answers ``sudo``. A stock Raspberry Pi OS Lite image has no NOPASSWD rule, so
+`deploy` and `collect` - which must install a binary, write a unit and read /dev/fb0 - send
+the password on the command's **stdin** (``sudo -S``), never in the command text. Whether a
+password is needed is probed once per connection, so a frame that *has* been given NOPASSWD
+works unchanged. The agent is unaffected either way: its unit runs as root and never calls
+sudo.
+
 State
 -----
 ``tools/harness/progress.json`` is written continuously by every subcommand and is not
@@ -37,7 +44,8 @@ Exit codes
     0  success
     1  a harness error with no more specific code
     2  a required environment variable is missing (FL_PW, FL_HA_TOKEN)
-    3  something expected does not exist (project, artifact, host unreachable)
+    3  something expected does not exist, or a credential was refused (project, artifact,
+       host unreachable, SSH login rejected, sudo refused on the mule)
     4  a required tool is missing (docker, dotnet, paramiko)
     5  a remote command or an HTTP call failed
     6  the build failed
@@ -77,7 +85,8 @@ def _parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "Credentials come from the environment only and are never stored:\n"
-            "  FL_PW         mule SSH password        (required by deploy / collect)\n"
+            "  FL_PW         mule SSH password, and the answer to sudo where the image\n"
+            "                needs one       (required by deploy / collect)\n"
             "  FL_HA_TOKEN   Home Assistant token     (required by power)\n"
             "Optional overrides:\n"
             "  FL_HOST       mule address             (default 10.20.30.53)\n"

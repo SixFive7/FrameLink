@@ -16,7 +16,7 @@ Module map
 :mod:`flh.collect`   the two allowlisted diagnostics: screenshot and journal tail
 :mod:`flh.testrun`   the test suite, with telemetry off and the exit code propagated
 :mod:`flh.png`       dependency-free PNG writer for the framebuffer screenshot path
-:mod:`flh.ssh`       paramiko session handling; the only place a password is ever passed
+:mod:`flh.ssh`       paramiko session handling and elevation; the only place a password is passed
 :mod:`flh.ui`        console output
 
 Everything that touches the mule is Python with paramiko, per CLAUDE.md section 1.3. The
