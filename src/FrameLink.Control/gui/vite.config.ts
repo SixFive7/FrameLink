@@ -2,6 +2,8 @@ import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 
+import pkg from './package.json';
+
 /**
  * The Fleet Manager GUI build.
  *
@@ -17,6 +19,19 @@ import { defineConfig } from 'vite';
 export default defineConfig({
 	plugins: [
 		sveltekit({
+			version: {
+				// SvelteKit defaults this to a build timestamp, and inlines it into the entry
+				// chunks — so every build produced different content hashes, a different
+				// index.html and a different version.json for identical sources. With wwwroot
+				// committed (see gui-build.stamp) that made an ordinary `dotnet build` dirty
+				// the working tree with pure churn, which trains people to discard the bundle
+				// reflexively and defeats the freshness check it exists to feed.
+				//
+				// Pinning it to the package version makes the build byte-reproducible and keeps
+				// the field meaningful: it moves when the GUI is versioned, not when the clock is.
+				name: pkg.version
+			},
+
 			compilerOptions: {
 				// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
 				runes: ({ filename }) =>
