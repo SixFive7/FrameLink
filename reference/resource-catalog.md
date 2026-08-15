@@ -218,7 +218,7 @@ attached to them:
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' dfu-util`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed.
+- **Value source** — fixed, under the same presence-plus-floor rule as the kiosk block; the reviewed version is in that block's table.
 - **Risk** — —
 
 **`firmware.xvf3800.version`**
@@ -330,9 +330,32 @@ attached to them:
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' <pkg>`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed. Versions float and are frozen by the build per [§7.1](../version2.md); the catalog pins the *presence*, not the version.
+- **Value source** — fixed. The catalog asserts **presence**, and records a **reviewed version as a floor** (see the table below): at or above it the package is in sync however far ahead it has moved, below it or absent is drift.
 - **Risk** — —
-- **Notes** — **The `dpkg-query` format string above is the one every package resource in this document uses**, `pkg.` and `pkg.*.absent` alike. It carries `${Version}` because the version costs nothing to read and a delta that names it is worth more; nothing compares it, which is §7.1 and the presence-not-version rule immediately above. The catalog previously gave two spellings, with and without `${Version}`, and left an implementer to pick — they are now one. One package = one resource is explicit in [§2.2](../version2.md). ~215 dependencies, ~256 MB download, ~750 MB on disk; apt resolves the transitive set, which is not enumerated here. On Trixie the browser package is `chromium`, not `chromium-browser`, and the binary is `/usr/bin/chromium`. `pkg.chromium` also drags in `rpi-chromium-mods`, which injects flags from `/etc/chromium.d/` — relevant to `unit.chromium-kiosk.running-matches-content`. The order above is the dependency ordering's, which is the order the reconciler converges them in; guide 5's own single `apt install` line names them `labwc chromium pipewire-alsa wireplumber wlr-randr`, and the two do not have to agree because apt installs its five arguments as one transaction while the reconciler applies five resources one reboot at a time. The heading used to carry the guide's order and the ordering table the reconciler's, which read as a contradiction rather than as two different things.
+- **Notes** — **The `dpkg-query` format string above is the one every package resource in this document uses**, `pkg.` and `pkg.*.absent` alike. It carries `${Version}` because the version is now compared — **in one direction only**. Decision 55 states the rule and the reason: the frame has no inbound port and is left running Debian's security-only automatic updates, so packages are *expected* to move forward on their own, and a literal pin would read one of those as drift, downgrade the package back, and under [§2.6](../version2.md) stop the product until it had. So forward is in sync and is merely reported; backward, or absent, is ordinary drift, and the Act is the ordinary `apt-get install`, which moves the package *up* to whatever the archive offers rather than down to the recorded level. Every package's version — all ~930 on the frame, not the fifteen here — is additionally reported to the Fleet Manager, which computes drift against this baseline and across the fleet. The catalog previously gave two spellings, with and without `${Version}`, and left an implementer to pick — they are now one. One package = one resource is explicit in [§2.2](../version2.md). ~215 dependencies, ~256 MB download, ~750 MB on disk; apt resolves the transitive set, which is not enumerated here. On Trixie the browser package is `chromium`, not `chromium-browser`, and the binary is `/usr/bin/chromium`. `pkg.chromium` also drags in `rpi-chromium-mods`, which injects flags from `/etc/chromium.d/` — relevant to `unit.chromium-kiosk.running-matches-content`. The order above is the dependency ordering's, which is the order the reconciler converges them in; guide 5's own single `apt install` line names them `labwc chromium pipewire-alsa wireplumber wlr-randr`, and the two do not have to agree because apt installs its five arguments as one transaction while the reconciler applies five resources one reboot at a time. The heading used to carry the guide's order and the ordering table the reconciler's, which read as a contradiction rather than as two different things.
+
+**Reviewed versions for the whole package block.** Transcribed from the `PACKAGES` block of
+[the v1 state inventory](v1-state-inventory.txt), the frozen v1 reference of version2.md's Precondition zero, and
+*Verified 2026-08-15* against it by a test that reads that file rather than by anybody's memory ([§7.1](../version2.md)).
+These are floors, not pins — see the rule above. The implementation carries them in `AptPackageSpec.ReviewedVersion`.
+
+| Resource | Reviewed version |
+| --- | --- |
+| `pkg.labwc` | `0.9.2-1+rpt4` |
+| `pkg.chromium` | `1:146.0.7680.164-1~deb13u1+rpt1` |
+| `pkg.wireplumber` | `0.5.8-2` |
+| `pkg.pipewire-alsa` | `1.4.2-1+rpt3` |
+| `pkg.wlr-randr` | `0.4.1-1` |
+| `pkg.xdg-desktop-portal` | `1.20.3+ds-1` |
+| `pkg.xdg-desktop-portal-gtk` | `1.15.3-1` |
+| `pkg.gstreamer1.0-tools` | `1.26.2-2` |
+| `pkg.gstreamer1.0-plugins-base` | `1.26.2-1+rpt3+deb13u1` |
+| `pkg.gstreamer1.0-libcamera` | `0.7.0+rpt20260205-1` |
+| `pkg.gstreamer1.0-pipewire` | `1.4.2-1+rpt3` |
+| `pkg.libspa-0.2-libcamera.absent` | — (asserts absence; there is no version to record) |
+| `pkg.dfu-util` | `0.11-3` |
+| `pkg.grim` | `1.4.0+ds-2+b2` |
+| `pkg.unattended-upgrades` | — (**not installed on the v1 frame at all**, open question 9, so its floor is genuinely unknown rather than merely unwritten; the resource asserts presence alone) |
 
 **`boot.autologin.getty-tty1`**
 
@@ -432,7 +455,7 @@ attached to them:
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' <pkg>`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed.
+- **Value source** — fixed, under the same presence-plus-floor rule as the kiosk block above; the reviewed versions are in that block's table.
 - **Risk** — —
 - **Notes** — `xdg-desktop-portal-gtk` is not cosmetic: the portal frontend only registers the Camera interface when a backend implementing the `Access` permission service is present.
 
@@ -443,7 +466,7 @@ attached to them:
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' libspa-0.2-libcamera` → absent/not-installed.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed.
+- **Value source** — fixed. No reviewed version and none possible: this resource asserts the package's *absence*, so there is nothing to record a floor for.
 - **Risk** — —
 - **Notes** — Confirmed absent in the v1 reference (the inventory carries `libspa-0.2-modules`, which is a different package). The measured failure it causes: a camera node hard-capped near 30 fps that advertises no framerates, rejects sizes outside its own menu, and that Chromium cannot acquire above 720p. Absence is a real, actionable, independently verifiable state — hence a resource, not a note. `wireplumber.conf.camera-monitors-disabled` is the belt to this braces, for the case where a future dependency drags the plugin back in.
   **Its slot in the package block is decided rather than incidental: 12th, immediately after the camera chain, not last.** The question is real — an install ordered *after* this one that pulled the plugin back in would leave the block converging on a state it had already asserted, and the repair would cost an extra reboot. It is decided on what actually follows it. The three installs after it are `dfu-util` (libusb), `grim` (wayland, pixman) and `unattended-upgrades` (python3-apt); none of them can pull a PipeWire SPA plugin, so the claim "after everything in this block that might drag it in" holds as the block stands. Against that, keeping it beside the camera chain it exists for is worth something to a reader, and if Debian ever re-cuts a dependency so that one of those three *can* pull it in, the result is ordinary drift and level-triggered convergence repairs it — for the price of one reboot, through the same mechanism the whole design already leans on rather than through a special case. Moving it last was the alternative and would have been free; it was declined because the exposure it removes does not exist today and the grouping it breaks is read by every person who opens this section. This is also the order the implementation declares.
@@ -565,7 +588,7 @@ API secret, room, per-frame token) survive as fleet settings consumed by `app.co
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' grim`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — fixed.
+- **Value source** — fixed, under the same presence-plus-floor rule as the kiosk block; the reviewed version is in that block's table.
 - **Risk** — —
 - **Notes** — Present in the v1 reference (`grim 1.4.0+ds-2+b2`). Capture requires the session environment: `WAYLAND_DISPLAY=wayland-0 XDG_RUNTIME_DIR=/run/user/1000 grim <path>`. The rest of guide 8 is a one-time hardware go/no-go and contributes no device state.
 
@@ -811,7 +834,7 @@ itself and the group membership that reaches it.
 - **Observe** — `dpkg-query -W -f='${db:Status-Status} ${Version}\n' unattended-upgrades`.
 - **Verify** — identical.
 - **dependsOn** — —
-- **Value source** — **fixed: this package is installed on every frame, always.** The on/off fleet setting that [Appendix B item 4](../version2.md) calls for is `updates.osSecurityAuto`, and it is attached to `apt.auto-upgrades-enabled`, not to this resource.
+- **Value source** — **fixed: this package is installed on every frame, always.** The on/off fleet setting that [Appendix B item 4](../version2.md) calls for is `updates.osSecurityAuto`, and it is attached to `apt.auto-upgrades-enabled`, not to this resource. It records **no reviewed version**, and that is a fact rather than an omission: the v1 frame does not have this package at all (open question 9), so there is no reviewed level to hold it above and the resource asserts presence alone.
 - **Risk** — —
 - **Notes** — **Turning the feature off therefore leaves the package installed with the two `APT::Periodic` switches at `0`.** That is the intended shape and it is stated here because it was previously only implicit: the package is inert with the switches off, `unattended-upgrades` is a dependency of nothing else the frame needs, and making the *package* the on/off resource would mean a purge-and-reinstall cycle every time an operator toggled the setting — an apt transaction, and under [§2.4](../version2.md) a reboot, to change two characters in a config file. It also keeps one diagnosis per resource: "the machinery is missing" and "the machinery is switched off" are different faults with different fixes, and the second is the one an operator chose. **Not present in the v1 reference.** Guide 12 step 6 was never applied to the frame that defines parity, so this resource has no v1 counterpart to diff against. See open question 9.
 

@@ -202,6 +202,7 @@ public sealed class ControlAbuseControlTests
         var reaper = new PendingDeviceReaper(
             fixture.Devices,
             fixture.Telemetry,
+            fixture.Packages,
             limiter,
             options,
             fixture.Clock,

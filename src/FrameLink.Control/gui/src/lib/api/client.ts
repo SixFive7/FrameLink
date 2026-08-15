@@ -15,8 +15,10 @@
 
 import type {
 	DeviceListResponse,
+	DevicePackagesResponse,
 	DeviceSettingsResponse,
 	DeviceView,
+	FleetPackagesResponse,
 	FleetSettingsResponse,
 	LoginResponse,
 	SetupStatus
@@ -183,6 +185,26 @@ export const api = {
 	/** `DELETE /api/devices/{id}` — forgets the row entirely. The device reappears as pending. */
 	forget: (deviceId: string) =>
 		request<void>(`/api/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
+
+	/**
+	 * `GET /api/packages` — the fleet-wide package comparison.
+	 *
+	 * Answers with *differences*, never with the sets. Ten frames carrying ~930 packages each
+	 * would be nine thousand facts across the wire to render a screen about the handful they
+	 * disagree on, so the comparison happens on the server where the sets already are.
+	 */
+	fleetPackages: (signal?: AbortSignal) => request<FleetPackagesResponse>('/api/packages', { signal }),
+
+	/**
+	 * `GET /api/devices/{id}/packages` — one frame's standing and what moved on it recently.
+	 *
+	 * 200 with an absent `summary` for a frame that has never reported, because "adopted and
+	 * has not reported yet" is a state the screen renders rather than an error.
+	 */
+	devicePackages: (deviceId: string, signal?: AbortSignal) =>
+		request<DevicePackagesResponse>(`/api/devices/${encodeURIComponent(deviceId)}/packages`, {
+			signal
+		}),
 
 	fleetSettings: (signal?: AbortSignal) => request<FleetSettingsResponse>('/api/settings', { signal }),
 

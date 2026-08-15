@@ -34,6 +34,8 @@ namespace FrameLink.Control;
 [JsonSerializable(typeof(DeviceSettingsResponse))]
 [JsonSerializable(typeof(DeviceReconcileResponse))]
 [JsonSerializable(typeof(DeviceEventsResponse))]
+[JsonSerializable(typeof(FleetPackagesResponse))]
+[JsonSerializable(typeof(DevicePackagesResponse))]
 [JsonSerializable(typeof(ImageRequest))]
 [JsonSerializable(typeof(ImageStatusResponse))]
 [JsonSerializable(typeof(ApiError))]

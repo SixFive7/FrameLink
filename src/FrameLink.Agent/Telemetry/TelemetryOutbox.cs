@@ -24,6 +24,13 @@ namespace FrameLink.Agent.Telemetry;
 /// them would fill the card with pictures nobody will ever look at, and the one that matters is
 /// the one that says where the frame stands now.
 /// </description></item>
+/// <item><description>
+/// <b>The package inventory is a picture too</b>, and a much larger one — ~30 kB against a
+/// report's few. It buffers exactly like a report, one file replaced in place, because a frame
+/// that was offline while apt ran twice should deliver the set it ended with rather than both
+/// sets it passed through. Ringing it would put a megabyte of superseded package lists on the SD
+/// card to say something one file already says.
+/// </description></item>
 /// </list>
 /// <para>
 /// Bounded is not a nicety here. The frame that began the August 2026 incident chain had a
@@ -31,13 +38,16 @@ namespace FrameLink.Agent.Telemetry;
 /// the SD card while nobody is watching.
 /// </para>
 /// </remarks>
-public sealed class TelemetryOutbox : IReconcileTelemetry
+public sealed class TelemetryOutbox : IReconcileTelemetry, IPackageTelemetry
 {
     /// <summary>Buffered events, one JSON object per line.</summary>
     public const string EventsFileName = "telemetry-events.jsonl";
 
     /// <summary>The latest undelivered report.</summary>
     public const string ReportFileName = "telemetry-report.json";
+
+    /// <summary>The latest undelivered package inventory.</summary>
+    public const string PackagesFileName = "telemetry-packages.json";
 
     private readonly AgentUplink _uplink;
     private readonly IStateStore _store;
@@ -95,6 +105,31 @@ public sealed class TelemetryOutbox : IReconcileTelemetry
             else
             {
                 _store.WriteText(ReportFileName, payload);
+            }
+        }
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask InventoryAsync(PackageInventory inventory, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(inventory);
+
+        var payload = JsonSerializer.Serialize(inventory, ProtocolJson.Default.PackageInventory);
+        var sent = await SendAsync(
+            ControlWire.KindPackageInventory,
+            payload,
+            ProtocolConstants.ChannelTelemetry,
+            cancellationToken).ConfigureAwait(false);
+
+        lock (_gate)
+        {
+            if (sent)
+            {
+                _store.Delete(PackagesFileName);
+            }
+            else
+            {
+                _store.WriteText(PackagesFileName, payload);
             }
         }
     }
@@ -169,16 +204,27 @@ public sealed class TelemetryOutbox : IReconcileTelemetry
             _log.Info($"Drained {delivered} buffered device events to the Fleet Manager.");
         }
 
-        await DrainReportAsync(cancellationToken).ConfigureAwait(false);
+        await DrainPictureAsync(ReportFileName, ControlWire.KindReconcileReport, cancellationToken)
+            .ConfigureAwait(false);
+
+        await DrainPictureAsync(PackagesFileName, ControlWire.KindPackageInventory, cancellationToken)
+            .ConfigureAwait(false);
+
         return delivered;
     }
 
-    private async Task DrainReportAsync(CancellationToken cancellationToken)
+    /// <summary>Delivers one buffered latest-only picture, and forgets it once it lands.</summary>
+    /// <remarks>
+    /// Shared by the report and the package inventory because they buffer identically: one file,
+    /// replaced rather than appended, sent as the bytes that were stored so a buffered message is
+    /// byte-identical to the live one it stands in for.
+    /// </remarks>
+    private async Task DrainPictureAsync(string fileName, string kind, CancellationToken cancellationToken)
     {
         string? stored;
         lock (_gate)
         {
-            stored = _store.ReadText(ReportFileName);
+            stored = _store.ReadText(fileName);
         }
 
         if (string.IsNullOrWhiteSpace(stored))
@@ -186,15 +232,12 @@ public sealed class TelemetryOutbox : IReconcileTelemetry
             return;
         }
 
-        if (await SendAsync(
-                ControlWire.KindReconcileReport,
-                stored,
-                ProtocolConstants.ChannelTelemetry,
-                cancellationToken).ConfigureAwait(false))
+        if (await SendAsync(kind, stored, ProtocolConstants.ChannelTelemetry, cancellationToken)
+                .ConfigureAwait(false))
         {
             lock (_gate)
             {
-                _store.Delete(ReportFileName);
+                _store.Delete(fileName);
             }
         }
     }

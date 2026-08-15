@@ -35,6 +35,7 @@ namespace FrameLink.Protocol;
 [JsonSerializable(typeof(ResourceReport))]
 [JsonSerializable(typeof(ReconcileReport))]
 [JsonSerializable(typeof(DeviceEvent))]
+[JsonSerializable(typeof(PackageInventory))]
 public sealed partial class ProtocolJson : JsonSerializerContext;
 
 /// <summary>Envelope construction and payload extraction, shared by both programs.</summary>

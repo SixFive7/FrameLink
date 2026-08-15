@@ -147,6 +147,15 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		kind: 'boolean',
 		group: 'Behaviour'
 	},
+	'packages.reportInterval': {
+		label: 'Package check interval',
+		hint:
+			'How often a frame re-reads its own installed software. It only sends anything when ' +
+			'something has actually changed, so this is cheap. Six hours if unset.',
+		kind: 'duration',
+		group: 'Behaviour',
+		example: '06:00:00'
+	},
 	'locale.timezone': {
 		label: 'Time zone',
 		hint: 'IANA zone name. Drives the backlight schedule and every clock on the frame.',

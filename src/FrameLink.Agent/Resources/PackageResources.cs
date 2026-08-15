@@ -1,4 +1,5 @@
 using FrameLink.Agent.Reconcile;
+using FrameLink.Protocol;
 
 namespace FrameLink.Agent.Resources;
 
@@ -30,6 +31,37 @@ public sealed record AptPackageSpec
     /// <summary>Whether the desired state is the package's <i>absence</i>.</summary>
     public bool MustBeAbsent { get; init; }
 
+    /// <summary>
+    /// The version a human last reviewed, or null when there is none to record.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A record, not a pin.</b> Nothing installs this version, nothing downgrades to it, and
+    /// a package sitting above it is exactly as in sync as one sitting on it. It is a
+    /// <i>floor</i>: the level a person checked, below which the package must not be found.
+    /// </para>
+    /// <para>
+    /// The distinction is the whole design of package versioning on a frame behind NAT. Debian
+    /// security updates are the one sanctioned source of change (Appendix B item 4), and a
+    /// literal pin would see one arrive and treat it as drift — undoing the update, and under
+    /// §2.6 stopping the product until it had. So forward movement is expected and reported;
+    /// only a package that has moved <i>backward</i> from the reviewed level, or gone missing
+    /// altogether, is drift.
+    /// </para>
+    /// <para>
+    /// The values come from <c>reference/v1-state-inventory.txt</c>, the frozen v1 reference
+    /// that Precondition zero exists to produce, and <c>AgentPackageTests</c> reads that file to
+    /// prove they still agree — so this is §7.1's "never asserted from memory" applied to a
+    /// fifteen-line list rather than to one dependency.
+    /// </para>
+    /// <para>
+    /// Null is a real answer and not an omission. <c>unattended-upgrades</c> is not installed on
+    /// the v1 frame at all, so there is no reviewed version to record and the resource asserts
+    /// presence alone.
+    /// </para>
+    /// </remarks>
+    public string? ReviewedVersion { get; init; }
+
     /// <summary>The catalog id this spec produces.</summary>
     public string ResourceName => MustBeAbsent
         ? PackageResource.Prefix + Package + PackageResource.AbsentSuffix
@@ -57,9 +89,22 @@ public sealed record AptPackageSpec
 /// <see cref="ObservationOutcome.Unevaluable"/>.
 /// </para>
 /// <para>
-/// <b>Versions float (§7.1).</b> The observed value carries the installed version because it is
-/// free and a delta that names it is worth more, but nothing compares it. The catalog says the
-/// same thing in its own words: it "pins the presence, not the version".
+/// <b>Versions float upward, and only upward.</b> §7.1's "everything floats" governs what a
+/// <i>build</i> resolves; a frame that has been running for six months is a different question,
+/// because §4.1 gives it no inbound port and Appendix B item 4 leaves Debian's security-only
+/// automatic updates switched on. Those updates are therefore the one sanctioned source of
+/// package change on a live frame, and treating one as drift would mean undoing it — and, under
+/// §2.6, stopping the product until it had been undone.
+/// </para>
+/// <para>
+/// So the comparison is one-sided. <see cref="AptPackageSpec.ReviewedVersion"/> is a floor: at or
+/// above it the package is in sync however far ahead it has moved, and every installed version is
+/// reported whatever it is. Below it — or absent — is drift, because a package that went
+/// <i>backward</i> is not something an update does. The Act for that case is the ordinary
+/// <c>apt-get install</c>, which brings the package up to whatever the archive now offers rather
+/// than down to the recorded level; if the archive cannot offer at least the reviewed version,
+/// the resource escalates on the §2.5 ladder and a person is told, which is the correct end for a
+/// frame whose package sources are wrong.
 /// </para>
 /// <para>
 /// <b>The transitive set is apt's problem, not the catalog's.</b> Guide 5's five packages pull in
@@ -103,6 +148,9 @@ public sealed class PackageResource : IResource
     /// <summary>Whether the desired state is absence rather than presence.</summary>
     public bool MustBeAbsent => _spec.MustBeAbsent;
 
+    /// <summary>The reviewed version this resource holds as a floor, or null.</summary>
+    public string? ReviewedVersion => _spec.ReviewedVersion;
+
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
@@ -113,12 +161,31 @@ public sealed class PackageResource : IResource
         // configuration left behind. The raw state still travels in the observed value, so a
         // frame sitting in `rc` is visible in telemetry rather than quietly equated with a clean
         // one. The Act purges, so the agent's own path never produces that state anyway.
-        var inSync = _spec.MustBeAbsent ? !status.IsPresent : status.IsInstalled;
+        if (_spec.MustBeAbsent)
+        {
+            return new ResourceObservation(
+                !status.IsPresent,
+                $"{_spec.Package} not installed",
+                $"{_spec.Package} {status.Describe()}");
+        }
+
+        // One-sided against the reviewed floor. At or above it the package is in sync however far
+        // ahead it has moved, because moving ahead is what a security update does and this frame
+        // has no other way to receive one.
+        var behind = status.IsInstalled
+            && _spec.ReviewedVersion is { Length: > 0 } reviewed
+            && DebianVersion.Compare(status.Version, reviewed) < 0;
+
+        var expected = _spec.ReviewedVersion is { Length: > 0 } floor
+            ? $"{_spec.Package} installed, at {floor} or newer"
+            : $"{_spec.Package} installed";
 
         return new ResourceObservation(
-            inSync,
-            $"{_spec.Package} {(_spec.MustBeAbsent ? "not installed" : "installed")}",
-            $"{_spec.Package} {status.Describe()}");
+            status.IsInstalled && !behind,
+            expected,
+            behind
+                ? $"{_spec.Package} {status.Describe()}, which is older than the reviewed version"
+                : $"{_spec.Package} {status.Describe()}");
     }
 
     /// <inheritdoc/>
@@ -175,6 +242,14 @@ public sealed class PackageResource : IResource
 /// governor bug. At the 22.3 s measured on this hardware that is about five and a half minutes,
 /// before download time.
 /// </para>
+/// <para>
+/// <b>Every <see cref="AptPackageSpec.ReviewedVersion"/> below is transcribed from
+/// <c>reference/v1-state-inventory.txt</c></b>, the frozen v1 reference of Precondition zero, and
+/// is <i>Verified 2026-08-15</i> against it by a test that reads that file rather than by anyone's
+/// memory (§7.1). Thirteen of the fifteen have one. <c>libspa-0.2-libcamera</c> asserts absence
+/// and has no version to record; <c>unattended-upgrades</c> is not installed on the v1 frame at
+/// all, so its floor is genuinely unknown rather than merely unwritten.
+/// </para>
 /// </remarks>
 public static class PackageCatalog
 {
@@ -185,6 +260,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "labwc",
+            ReviewedVersion = "0.9.2-1+rpt4",
             Detected = "The program that arranges what appears on this frame's screen is missing.",
             WhyItMatters = "Nothing at all can be shown on the screen until it is there.",
             Gloss = "Installing the program that puts things on this frame's screen.",
@@ -192,6 +268,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "chromium",
+            ReviewedVersion = "1:146.0.7680.164-1~deb13u1+rpt1",
             Detected = "The web browser this frame shows everything through is missing.",
             WhyItMatters = "The photos and the video call are both web pages, so without it there is nothing to show.",
             Gloss = "Installing the browser this frame shows the photos and the video call in.",
@@ -199,6 +276,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "wireplumber",
+            ReviewedVersion = "0.5.8-2",
             Detected = "The part of the sound system that decides where sound goes is missing.",
             WhyItMatters = "Without it this frame has no working speaker and no working microphone.",
             Gloss = "Installing the part of the sound system that routes sound to the speaker and the microphone.",
@@ -206,6 +284,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "pipewire-alsa",
+            ReviewedVersion = "1.4.2-1+rpt3",
             Detected = "The link between the sound system and this frame's speaker and microphone is missing.",
             WhyItMatters = "Without it the sound system cannot reach the hardware, so a call is silent.",
             Gloss = "Installing the link that lets the sound system reach this frame's speaker and microphone.",
@@ -213,6 +292,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "wlr-randr",
+            ReviewedVersion = "0.4.1-1",
             Detected = "The tool that turns the picture the right way round is missing.",
             WhyItMatters = "Without it the screen stays sideways.",
             Gloss = "Installing the tool that turns this frame's picture the right way round.",
@@ -222,6 +302,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "xdg-desktop-portal",
+            ReviewedVersion = "1.20.3+ds-1",
             Detected = "The part that lets the browser ask for the camera is missing.",
             WhyItMatters = "Without it the browser can never find this frame's camera.",
             Gloss = "Installing the part the browser asks for the camera through.",
@@ -229,6 +310,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "xdg-desktop-portal-gtk",
+            ReviewedVersion = "1.15.3-1",
             Detected = "The half of the camera permission system that answers the request is missing.",
             WhyItMatters = "Without it the browser's request for the camera is never answered and the picture stays black.",
             Gloss = "Installing the half of the camera permission system that answers the browser.",
@@ -236,6 +318,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "gstreamer1.0-tools",
+            ReviewedVersion = "1.26.2-2",
             Detected = "The program that runs this frame's camera is missing.",
             WhyItMatters = "Without it the camera never starts.",
             Gloss = "Installing the program that runs this frame's camera.",
@@ -243,6 +326,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "gstreamer1.0-plugins-base",
+            ReviewedVersion = "1.26.2-1+rpt3+deb13u1",
             Detected = "The basic video building blocks the camera needs are missing.",
             WhyItMatters = "Without them the camera cannot produce a picture the rest of the frame understands.",
             Gloss = "Installing the basic video building blocks the camera is assembled from.",
@@ -250,6 +334,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "gstreamer1.0-libcamera",
+            ReviewedVersion = "0.7.0+rpt20260205-1",
             Detected = "The part that reads pictures out of this frame's camera is missing.",
             WhyItMatters = "Without it nothing can get a picture from the camera at all.",
             Gloss = "Installing the part that reads pictures out of this frame's camera.",
@@ -257,6 +342,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "gstreamer1.0-pipewire",
+            ReviewedVersion = "1.4.2-1+rpt3",
             Detected = "The part that hands the camera's picture to the rest of the frame is missing.",
             WhyItMatters = "Without it the camera runs and nothing can see what it produces.",
             Gloss = "Installing the part that hands the camera's picture to the rest of this frame.",
@@ -280,6 +366,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "dfu-util",
+            ReviewedVersion = "0.11-3",
             Detected = "The tool that updates the microphone-and-speaker unit is missing.",
             WhyItMatters = "Without it that unit cannot be brought to the version this frame is built around.",
             Gloss = "Installing the tool that updates the microphone-and-speaker unit's own software.",
@@ -289,6 +376,7 @@ public static class PackageCatalog
         new AptPackageSpec
         {
             Package = "grim",
+            ReviewedVersion = "1.4.0+ds-2+b2",
             Detected = "The tool that takes a picture of this frame's screen is missing.",
             WhyItMatters = "Without it nobody can see from elsewhere what this frame is showing.",
             Gloss = "Installing the tool that takes a picture of this frame's screen for you to look at remotely.",

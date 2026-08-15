@@ -59,6 +59,18 @@ public static class ControlWire
     /// </summary>
     public const string KindDeviceEvent = "device-event";
 
+    /// <summary>
+    /// Agent to server, on <see cref="ProtocolConstants.ChannelTelemetry"/>. Every installed
+    /// package and its version, sent only when the set has changed.
+    /// </summary>
+    /// <remarks>
+    /// The first exercise of the growth rule this class documents: a new <c>Kind</c> and a new
+    /// payload shape (<see cref="PackageInventory"/>), with nothing above it moved. An older
+    /// server ignores the kind and an older agent never sends it; neither case is a broken
+    /// socket, which is the whole point of the envelope being frozen and the vocabulary not.
+    /// </remarks>
+    public const string KindPackageInventory = "package-inventory";
+
     /// <summary>Property name carrying the ping's sequence number on the wire.</summary>
     private const string SequenceProperty = "sequence";
 

@@ -168,6 +168,18 @@ public sealed class AptPackages
     /// </remarks>
     public const string QueryFormat = "-f=${db:Status-Status} ${Version}\\n";
 
+    /// <summary>
+    /// The same query widened to name the package, for reading the whole database at once.
+    /// </summary>
+    /// <remarks>
+    /// <c>${binary:Package}</c> rather than <c>${Package}</c>, and the difference only shows on a
+    /// multi-arch system: the binary form appends <c>:arch</c> for a foreign-architecture package,
+    /// which is what keeps the name unique when the same package is installed twice. The frames
+    /// this project builds are single-architecture and the two forms agree there, so the choice
+    /// costs nothing today and prevents two entries silently collapsing into one later.
+    /// </remarks>
+    public const string ListFormat = "-f=${db:Status-Status} ${binary:Package} ${Version}\\n";
+
     private static readonly string[] LockSignatures =
     [
         "Could not get lock",
@@ -199,6 +211,8 @@ public sealed class AptPackages
         "has no installation candidate",
         "Couldn't find any package by",
     ];
+
+    private static readonly SortedDictionary<string, string> ReadOnlyEmpty = new(StringComparer.Ordinal);
 
     private readonly IProcessRunner _processes;
 
@@ -239,6 +253,77 @@ public sealed class AptPackages
         }
 
         return Parse(result.StandardOutput);
+    }
+
+    /// <summary>
+    /// Reads dpkg's whole database and returns every package it reports as <c>installed</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// One process for the whole system rather than ~930 of them. <c>dpkg-query -W</c> with no
+    /// package argument reads <c>/var/lib/dpkg/status</c> once and prints a line per entry, so
+    /// this costs the same as a single-package query and is the only shape in which reading the
+    /// full set several times a day is reasonable at all.
+    /// </para>
+    /// <para>
+    /// <b>Only <c>installed</c> survives the filter.</b> The database also holds <c>rc</c>
+    /// entries — removed, configuration kept — and dpkg prints a version for them, so a caller
+    /// that took every line would report software that is not on the disk. The same distinction
+    /// <see cref="PackageStatus"/> exists to preserve, applied to the whole system.
+    /// </para>
+    /// <para>
+    /// An empty result is returned for a failed query rather than a throw. The caller reports;
+    /// it does not converge anything, and there is nothing to escalate — a frame whose dpkg
+    /// cannot be read has a much larger problem that the package resources will find on their
+    /// own.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<string, string>> ListInstalledAsync(CancellationToken cancellationToken)
+    {
+        var result = await _processes
+            .RunAsync(DpkgQuery, ["-W", ListFormat], cancellationToken)
+            .ConfigureAwait(false);
+
+        return result.Succeeded ? ParseList(result.StandardOutput) : ReadOnlyEmpty;
+    }
+
+    /// <summary>Reads the multi-package form of <c>dpkg-query</c> output.</summary>
+    /// <remarks>
+    /// Ordinal-ordered on the way out, because the canonical rendering the content hash is taken
+    /// over has to be independent of the order dpkg happened to print. A line this parser cannot
+    /// read is skipped rather than failing the batch: one damaged entry must not cost the other
+    /// nine hundred.
+    /// </remarks>
+    public static IReadOnlyDictionary<string, string> ParseList(string? output)
+    {
+        var packages = new SortedDictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var raw in (output ?? string.Empty).Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var firstSpace = line.IndexOf(' ', StringComparison.Ordinal);
+            if (firstSpace < 0 || !line.AsSpan(0, firstSpace).SequenceEqual("installed"))
+            {
+                continue;
+            }
+
+            var rest = line[(firstSpace + 1)..];
+            var secondSpace = rest.IndexOf(' ', StringComparison.Ordinal);
+            var name = (secondSpace < 0 ? rest : rest[..secondSpace]).Trim();
+            var version = secondSpace < 0 ? string.Empty : rest[(secondSpace + 1)..].Trim();
+
+            if (name.Length > 0)
+            {
+                packages[name] = version;
+            }
+        }
+
+        return packages;
     }
 
     /// <summary>Reads one line of <c>dpkg-query</c> output in the catalog's format.</summary>

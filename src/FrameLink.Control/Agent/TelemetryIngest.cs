@@ -22,6 +22,7 @@ namespace FrameLink.Control.Agent;
 /// </remarks>
 public sealed class TelemetryIngest(
     IFleetTelemetryStore telemetry,
+    IPackageStore packages,
     FleetEvents events,
     ILogger<TelemetryIngest> logger)
 {
@@ -44,6 +45,22 @@ public sealed class TelemetryIngest(
 
             // The console re-reads the device on any change, so one nudge per report is enough
             // to make the live reconciliation screen live without a second serialisation.
+            events.Publish(deviceId);
+            return;
+        }
+
+        if (string.Equals(envelope.Kind, ControlWire.KindPackageInventory, StringComparison.Ordinal))
+        {
+            if (envelope.PayloadAs(ProtocolJson.Default.PackageInventory) is not { } inventory)
+            {
+                logger.UnreadableTelemetry(deviceId, envelope.Kind);
+                return;
+            }
+
+            await packages
+                .RecordInventoryAsync(inventory with { DeviceId = deviceId }, cancellationToken)
+                .ConfigureAwait(false);
+
             events.Publish(deviceId);
             return;
         }

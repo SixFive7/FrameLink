@@ -96,6 +96,99 @@ export interface DeviceSettingsResponse {
 	effective: Record<string, string>;
 }
 
+/**
+ * How one package stands against the reviewed baseline.
+ *
+ * `ahead` is the *expected* value and is never styled as a fault: a frame behind NAT is left
+ * running Debian's security-only automatic updates, so its packages are supposed to move
+ * forward on their own. `behind` and `missing` are the two that mean something is wrong.
+ */
+export type PackageStatus = 'same' | 'ahead' | 'behind' | 'missing' | 'extra';
+
+/** What can happen to one package between two reports. */
+export type PackageChangeKind = 'installed' | 'removed' | 'upgraded' | 'downgraded';
+
+/** `PackageDeltaView` — one package's standing against the baseline. */
+export interface PackageDelta {
+	package: string;
+	status: PackageStatus;
+	/** The reviewed version. Absent when the baseline never named this package. */
+	baseline?: string;
+	/** What this frame has. Absent when it does not have it. */
+	installed?: string;
+}
+
+/** `PackageSummaryView` — one frame's package standing, in five numbers. */
+export interface PackageSummary {
+	deviceId: string;
+	name?: string;
+	online: boolean;
+	observedUtc: string;
+	/** The key the set is stored under. Two frames sharing one are byte-identical. */
+	contentHash: string;
+	installed: number;
+	ahead: number;
+	behind: number;
+	missing: number;
+	extra: number;
+}
+
+/** `PackageVersionGroupView` — one version, and the frames on it. */
+export interface PackageVersionGroup {
+	/** Absent when this group is the frames that do not have the package at all. */
+	version?: string;
+	deviceIds: string[];
+}
+
+/** `PackageDisagreementView` — one package the fleet does not agree on. */
+export interface PackageDisagreement {
+	package: string;
+	baseline?: string;
+	versions: PackageVersionGroup[];
+}
+
+/** `FleetPackagesResponse` — `GET /api/packages`. */
+export interface FleetPackagesResponse {
+	devices: PackageSummary[];
+	/** Packages every reporting frame has at the same version. */
+	agreed: number;
+	disagreementTotal: number;
+	disagreements: PackageDisagreement[];
+	/** One means the whole fleet is byte-identical. */
+	distinctSets: number;
+	baselineCount: number;
+	baselineReviewedUtc: string;
+}
+
+/** `PackageChangeView` — one package that moved. */
+export interface PackageChange {
+	package: string;
+	change: PackageChangeKind;
+	from?: string;
+	to?: string;
+}
+
+/** `PackageChangeSetView` — everything that moved on one frame at one moment. */
+export interface PackageChangeSet {
+	observedUtc: string;
+	total: number;
+	changes: PackageChange[];
+}
+
+/** `DevicePackagesResponse` — `GET /api/devices/{id}/packages`. */
+export interface DevicePackagesResponse {
+	deviceId: string;
+	online: boolean;
+	/** Absent when this frame has never reported an inventory. */
+	summary?: PackageSummary;
+	observedCount: number;
+	driftTotal: number;
+	drift: PackageDelta[];
+	recent: PackageChangeSet[];
+	baselineCount: number;
+	baselineReviewedUtc: string;
+}
+
 /** `ApiError` — every refusal, in a shape the GUI can render. */
 export interface ApiErrorBody {
 	/** Short machine-readable code: `unauthorized`, `not-configured`, `not-adopted`, … */

@@ -7,6 +7,7 @@ using FrameLink.Control.Authentication;
 using FrameLink.Control.Storage;
 using FrameLink.Protocol;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FrameLink.Tests;
 
@@ -117,6 +118,7 @@ public sealed class StorageFixture : IDisposable
         Devices = new SqliteDeviceStore(Database, Clock);
         Settings = new SqliteSettingsStore(Database, Clock);
         Telemetry = new SqliteFleetTelemetryStore(Database);
+        Packages = new SqlitePackageStore(Database, NullLogger<SqlitePackageStore>.Instance);
     }
 
     /// <summary>The test clock the stores stamp rows with.</summary>
@@ -133,6 +135,9 @@ public sealed class StorageFixture : IDisposable
 
     /// <summary>Reconciliation reports and device events (§3.5).</summary>
     public IFleetTelemetryStore Telemetry { get; }
+
+    /// <summary>Per-device package inventories, content-addressed.</summary>
+    public IPackageStore Packages { get; }
 
     /// <summary>Registers a device by proven contact and returns its row.</summary>
     public Task<DeviceRecord> SeeDeviceAsync(string deviceId, string publicKey = "key", int cap = 100) =>
@@ -339,6 +344,108 @@ public sealed class ControlServer : IAsyncDisposable
 
         response.EnsureSuccessStatusCode();
         return await response.ReadAsync(ControlJson.Default.DeviceReconcileResponse);
+    }
+
+    /// <summary>
+    /// Runs a device through the whole enrollment dance and returns its id.
+    /// </summary>
+    /// <remarks>
+    /// Pending handshake, sign in, adopt. Four lines that appear at the top of nearly every test
+    /// that needs an adopted frame, and that say nothing about what the test is for.
+    /// </remarks>
+    /// <param name="key">The device keypair.</param>
+    /// <param name="password">The operator password, or null when this client is already signed in.</param>
+    public async Task<string> EnrolAsync(ECDsa key, string? password = null)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+
+        await using (var pending = await ConnectAgentAsync(key))
+        {
+            if (pending.Result.Status != HandshakeStatus.Pending)
+            {
+                throw new InvalidOperationException(
+                    $"A first connect should be answered '{HandshakeStatus.Pending}', not '{pending.Result.Status}'.");
+            }
+        }
+
+        if (password is not null)
+        {
+            await SignInAsync(password);
+        }
+
+        var deviceId = DeviceIdentity.FingerprintOf(key.ExportSubjectPublicKeyInfo());
+        await AdoptAsync(deviceId);
+        return deviceId;
+    }
+
+    /// <summary>Reads a device's package inventory view.</summary>
+    public async Task<DevicePackagesResponse> GetPackagesAsync(string deviceId)
+    {
+        var response = await Client.GetAsync(
+            $"/api/devices/{deviceId}/packages",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.DevicePackagesResponse);
+    }
+
+    /// <summary>Reads the fleet-wide package comparison.</summary>
+    public async Task<FleetPackagesResponse> GetFleetPackagesAsync()
+    {
+        var response = await Client.GetAsync("/api/packages", TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.FleetPackagesResponse);
+    }
+
+    /// <summary>Polls the device package route until it satisfies a condition, or gives up.</summary>
+    public async Task<DevicePackagesResponse> WaitForPackagesAsync(
+        string deviceId,
+        Func<DevicePackagesResponse, bool> condition,
+        TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        DevicePackagesResponse latest;
+
+        do
+        {
+            latest = await GetPackagesAsync(deviceId);
+            if (condition(latest))
+            {
+                return latest;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return latest;
+    }
+
+    /// <summary>Polls the fleet package route until it satisfies a condition, or gives up.</summary>
+    public async Task<FleetPackagesResponse> WaitForFleetPackagesAsync(
+        Func<FleetPackagesResponse, bool> condition,
+        TimeSpan? timeout = null)
+    {
+        ArgumentNullException.ThrowIfNull(condition);
+
+        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        FleetPackagesResponse latest;
+
+        do
+        {
+            latest = await GetFleetPackagesAsync();
+            if (condition(latest))
+            {
+                return latest;
+            }
+
+            await Task.Delay(25, TestContext.Current.CancellationToken);
+        }
+        while (DateTimeOffset.UtcNow < deadline);
+
+        return latest;
     }
 
     /// <summary>Reads a device's recent events.</summary>
@@ -569,6 +676,15 @@ public sealed class TestAgent : IAsyncDisposable
             ControlWire.KindReconcileReport,
             report,
             ProtocolJson.Default.ReconcileReport,
+            ProtocolConstants.ChannelTelemetry);
+
+    /// <summary>Sends a package inventory on the <c>telemetry</c> channel (§4.1).</summary>
+    public Task SendPackagesAsync(PackageInventory inventory) =>
+        SendAsync(
+            _socket,
+            ControlWire.KindPackageInventory,
+            inventory,
+            ProtocolJson.Default.PackageInventory,
             ProtocolConstants.ChannelTelemetry);
 
     /// <summary>Sends one device event on the <c>events</c> channel (§4.1).</summary>

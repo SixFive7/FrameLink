@@ -34,7 +34,11 @@
 		eye: 'M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z M12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Z',
 		eyeOff: 'M4 4l16 16 M10.6 10.6a2.5 2.5 0 0 0 3.4 3.4 M6.5 6.6C3.8 8.2 2 12 2 12s3.6 6 10 6c1.7 0 3.2-.4 4.5-1 M11 6.05C11.3 6 11.6 6 12 6c6.4 0 10 6 10 6s-.9 1.5-2.5 3',
 		clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 7v5l3.5 2',
-		key: 'M14.5 4a5.5 5.5 0 1 0-4.3 8.9L4 19v3h3l1-1v-2h2v-2h2l1.2-1.2A5.5 5.5 0 0 0 14.5 4Z M16.5 8.5h.01'
+		key: 'M14.5 4a5.5 5.5 0 1 0-4.3 8.9L4 19v3h3l1-1v-2h2v-2h2l1.2-1.2A5.5 5.5 0 0 0 14.5 4Z M16.5 8.5h.01',
+
+		// An isometric crate, for the package inventory. Drawn on the same 24px grid and 2px
+		// weight as the rest rather than borrowed, so the set stays one hand.
+		box: 'M12 3 3 7.5v9L12 21l9-4.5v-9L12 3Z M3 7.5 12 12l9-4.5 M12 12v9'
 	} as const;
 
 	export type IconName = keyof typeof ICONS;

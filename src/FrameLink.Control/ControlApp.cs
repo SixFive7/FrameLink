@@ -61,6 +61,7 @@ public static class ControlApp
         builder.Services.AddSingleton<IDeviceStore, SqliteDeviceStore>();
         builder.Services.AddSingleton<ISettingsStore, SqliteSettingsStore>();
         builder.Services.AddSingleton<IFleetTelemetryStore, SqliteFleetTelemetryStore>();
+        builder.Services.AddSingleton<IPackageStore, SqlitePackageStore>();
 
         builder.Services.AddSingleton<OperatorSessions>();
         builder.Services.AddSingleton<FleetEvents>();

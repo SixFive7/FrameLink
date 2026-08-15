@@ -63,6 +63,24 @@
   </ItemGroup>
 
   <!--
+    The reviewed package baseline every frame's inventory is compared against.
+
+    A file rather than a generated .cs, for the reason §7.1 gives about the base image pin: it is
+    somebody else's data, it is 929 lines long, and what matters is that changing it is a diff a
+    person reads. It is transcribed verbatim from the PACKAGES block of
+    reference/v1-state-inventory.txt — the frozen v1 reference Precondition zero exists to
+    produce — and ControlPackageTests reads that file and fails if the two have parted company,
+    so this copy can never quietly become the authority.
+
+    It ships in the Fleet Manager and deliberately not in the agent: drift is computed centrally,
+    and 23 kB of baseline inside a 1.35 MB frame binary would be carried by every frame and read
+    by none of them.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Storage\v1-package-baseline.txt" LogicalName="v1-package-baseline.txt" />
+  </ItemGroup>
+
+  <!--
     ══ The GUI is part of the build ═════════════════════════════════════════════════════════
 
     `wwwroot` is a committed build artifact — §3.1 ships one container with the Svelte output

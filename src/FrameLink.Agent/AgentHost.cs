@@ -206,6 +206,22 @@ public sealed class AgentHost
 
         var values = new FleetValues(key => Volatile.Read(ref _settings).GetValueOrDefault(key));
 
+        // Beside the loop, not inside it. The package set is an observation nothing converges,
+        // and §2.4's reboot-per-resource is what makes a startup read plus a slow tick enough to
+        // catch every change: everything the agent installs is followed by a process start, and
+        // the only thing that moves a package on a converged frame is the overnight security
+        // update the tick is sized for.
+        var packages = new PackageInventoryReporter(
+            new AptPackages(HostProcessRunner.Instance),
+            outbox,
+            store,
+            _clock,
+            _log,
+            values)
+        {
+            DeviceId = identity.DeviceId,
+        };
+
         // The kiosk stack lives in one unprivileged user's session while the agent is root in the
         // system manager (§6.1). One seam covers both the home directory and that user's systemd.
         // No fallback passed: an unset device.user falls through to the account the image was
@@ -355,13 +371,14 @@ public sealed class AgentHost
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Six loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // Seven loops now, and none is gated on another finishing. §1.2.2: a frame must provision
         // and self-heal with the server unreachable, so the reconciler runs from the first second
         // whether or not anything ever answers. What adoption gates is the resources that need
         // issued values, and it gates them through the DAG (§2.2) rather than by not running.
-        // The last two are §2.10's second responsibility and §2.7's browser stage: both keep
-        // running through an outage, because that is exactly when no help is coming.
-        var running = new List<Task>(6)
+        // Three of them are §2.10's second responsibility, §2.7's browser stage and the package
+        // inventory: all keep running through an outage, because that is exactly when no help is
+        // coming — and the inventory buffers on disk like everything else on that channel (§4.1).
+        var running = new List<Task>(7)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
@@ -369,6 +386,7 @@ public sealed class AgentHost
             loop.RunAsync(shutdown.Token),
             supervisor.RunAsync(shutdown.Token),
             BrowserStageLoopAsync(browser, shutdown.Token),
+            packages.RunAsync(shutdown.Token),
         };
 
         try

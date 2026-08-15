@@ -106,6 +106,10 @@
 							<Chip tone="warn" size="sm">{pendingCount}</Chip>
 						{/if}
 					</a>
+					<a href="/packages" class:current={page.url.pathname === '/packages'}>
+						<Icon name="box" size={15} />
+						Packages
+					</a>
 					<a href="/settings" class:current={page.url.pathname === '/settings'}>
 						<Icon name="sliders" size={15} />
 						Fleet settings

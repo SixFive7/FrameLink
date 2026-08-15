@@ -15,6 +15,7 @@ namespace FrameLink.Control.Agent;
 public sealed class PendingDeviceReaper(
     IDeviceStore devices,
     IFleetTelemetryStore telemetry,
+    IPackageStore packages,
     RegistrationRateLimiter limiter,
     ControlOptions options,
     TimeProvider clock,
@@ -63,6 +64,22 @@ public sealed class PendingDeviceReaper(
             if (rolled > 0)
             {
                 logger.ExpiredDeviceEvents(rolled);
+            }
+
+            // Package history rolls off on the same month and the same sweep. The blob collection
+            // has to run after it and unconditionally, not only when something expired: forgetting
+            // a device cascades its rows away without going near the sets they referenced, so the
+            // orphans it leaves would otherwise sit in the file until some unrelated history entry
+            // happened to expire.
+            var entries = await packages
+                .ExpireHistoryAsync(now - options.TelemetryRetention, cancellationToken)
+                .ConfigureAwait(false);
+
+            var sets = await packages.CollectUnreferencedSetsAsync(cancellationToken).ConfigureAwait(false);
+
+            if (entries > 0 || sets > 0)
+            {
+                logger.ExpiredPackageHistory(entries, sets);
             }
         }
         catch (Exception exception) when (exception is not OperationCanceledException)

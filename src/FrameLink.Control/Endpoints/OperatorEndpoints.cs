@@ -35,6 +35,9 @@ public static class OperatorEndpoints
         app.MapGet("/api/devices/{deviceId}/reconcile", GetReconcileAsync);
         app.MapGet("/api/devices/{deviceId}/events", GetDeviceEventsAsync);
 
+        app.MapGet("/api/packages", GetFleetPackagesAsync);
+        app.MapGet("/api/devices/{deviceId}/packages", GetDevicePackagesAsync);
+
         app.MapGet("/api/devices/{deviceId}/settings", GetDeviceSettingsAsync);
         app.MapPut("/api/devices/{deviceId}/settings/{key}", SetDeviceSettingAsync);
         app.MapDelete("/api/devices/{deviceId}/settings/{key}", RemoveDeviceSettingAsync);
@@ -480,6 +483,111 @@ public static class OperatorEndpoints
         return Results.Json(
             new DeviceEventsResponse { DeviceId = deviceId, Events = events },
             ControlJson.Default.DeviceEventsResponse);
+    }
+
+    /// <summary>The fleet-wide package comparison (§3.5).</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The route answers with differences, never with sets.</b> Ten frames carrying ~930
+    /// packages each is nine thousand facts, and the number an operator can act on is the handful
+    /// they disagree about — so the comparison happens here, where the sets already are, and what
+    /// crosses to the browser is the disagreement plus five numbers per frame.
+    /// </para>
+    /// <para>
+    /// Frames that have never reported are simply absent from the list rather than present with
+    /// zeros, which is the same distinction the reconcile route makes with a null report.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> GetFleetPackagesAsync(
+        IPackageStore packages,
+        IDeviceStore devices,
+        AgentConnectionRegistry registry,
+        CancellationToken cancellationToken)
+    {
+        var sets = await packages.ListAsync(cancellationToken).ConfigureAwait(false);
+        var records = await devices.ListAsync(includeBlocked: true, cancellationToken).ConfigureAwait(false);
+        var names = records.ToDictionary(record => record.DeviceId, record => record.DisplayName, StringComparer.Ordinal);
+
+        var (rows, total, agreed) = PackageDrift.AcrossFleet(sets);
+
+        return Results.Json(
+            new FleetPackagesResponse
+            {
+                Devices =
+                [
+                    .. sets.Select(set => PackageDrift.Summarise(
+                        set,
+                        names.GetValueOrDefault(set.DeviceId),
+                        registry.IsOnline(set.DeviceId))),
+                ],
+                Agreed = agreed,
+                DisagreementTotal = total,
+                Disagreements = rows,
+                DistinctSets = sets.Select(set => set.ContentHash).Distinct(StringComparer.Ordinal).Count(),
+                BaselineCount = PackageBaseline.Versions.Count,
+                BaselineReviewedUtc = PackageBaseline.ReviewedUtc,
+            },
+            ControlJson.Default.FleetPackagesResponse);
+    }
+
+    /// <summary>One frame's packages: how it stands, and what moved on it recently.</summary>
+    /// <remarks>
+    /// A 404 only when the device is unknown. A known frame that has never sent an inventory
+    /// answers 200 with a null summary and empty lists, because "adopted and has not reported
+    /// yet" is a state the screen renders rather than an error.
+    /// </remarks>
+    private static async Task<IResult> GetDevicePackagesAsync(
+        string deviceId,
+        int? history,
+        IPackageStore packages,
+        IDeviceStore devices,
+        AgentConnectionRegistry registry,
+        CancellationToken cancellationToken)
+    {
+        var record = await devices.FindAsync(deviceId, cancellationToken).ConfigureAwait(false);
+        if (record is null)
+        {
+            return NotFound(deviceId);
+        }
+
+        var online = registry.IsOnline(deviceId);
+        var set = await packages.GetAsync(deviceId, cancellationToken).ConfigureAwait(false);
+
+        if (set is null)
+        {
+            return Results.Json(
+                new DevicePackagesResponse
+                {
+                    DeviceId = deviceId,
+                    Online = online,
+                    Drift = [],
+                    Recent = [],
+                    BaselineCount = PackageBaseline.Versions.Count,
+                    BaselineReviewedUtc = PackageBaseline.ReviewedUtc,
+                },
+                ControlJson.Default.DevicePackagesResponse);
+        }
+
+        var entries = await packages
+            .ListHistoryAsync(deviceId, (history ?? 8) + 1, cancellationToken)
+            .ConfigureAwait(false);
+
+        var summary = PackageDrift.Summarise(set, record.DisplayName, online);
+
+        return Results.Json(
+            new DevicePackagesResponse
+            {
+                DeviceId = deviceId,
+                Online = online,
+                Summary = summary,
+                ObservedCount = set.ObservedCount,
+                DriftTotal = summary.Ahead + summary.Behind + summary.Missing + summary.Extra,
+                Drift = PackageDrift.AgainstBaseline(set.Packages),
+                Recent = PackageDrift.Timeline(entries),
+                BaselineCount = PackageBaseline.Versions.Count,
+                BaselineReviewedUtc = PackageBaseline.ReviewedUtc,
+            },
+            ControlJson.Default.DevicePackagesResponse);
     }
 
     private static async Task<IResult> GetFleetSettingsAsync(

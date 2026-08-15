@@ -33,6 +33,7 @@
 	import DetailRow from '$lib/components/DetailRow.svelte';
 	import Fingerprint from '$lib/components/Fingerprint.svelte';
 	import Icon from '$lib/components/Icon.svelte';
+	import PackagePanel from '$lib/components/PackagePanel.svelte';
 	import PresenceChip from '$lib/components/PresenceChip.svelte';
 	import SettingRow from '$lib/components/SettingRow.svelte';
 	import TextField from '$lib/components/TextField.svelte';
@@ -350,6 +351,13 @@
 						<AddSetting existing={Object.keys(settings?.overrides ?? {})} mode="device" onadd={saveOverride} />
 					{/if}
 				</Card>
+
+				<!-- Under settings rather than beside them, because it answers a different kind of
+				     question. Settings are what this frame was *told*; packages are what it
+				     actually has, and the two are read at different moments. -->
+				<div class="packages">
+					<PackagePanel {deviceId} />
+				</div>
 			</section>
 		</div>
 	{/if}
@@ -542,6 +550,10 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-3);
+	}
+
+	.packages {
+		margin-top: var(--space-6);
 	}
 
 	.settings-head {

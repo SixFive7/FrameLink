@@ -76,12 +76,12 @@ public sealed class AgentPackageTests
     }
 
     [Fact]
-    public async Task Nothing_in_the_block_pins_a_version()
+    public async Task Nothing_in_the_block_pins_a_version_upward()
     {
-        // §7.1: everything floats. The catalog says the same in its own words — it "pins the
-        // presence, not the version". Asserted as behaviour rather than as the absence of a digit
-        // in a string, because several of these package names contain digits themselves: every
-        // package is installed at a version the archive never offered, and every one is in sync.
+        // The reviewed version is a floor, never a ceiling: whatever the archive has moved on to,
+        // however far past what anybody reviewed, the frame is in sync. Asserted as behaviour
+        // rather than as the absence of a digit in a string, because several of these package
+        // names contain digits themselves.
         var debian = FakeDebian.StockImage();
 
         foreach (var spec in PackageCatalog.Specs.Where(item => !item.MustBeAbsent))
@@ -162,11 +162,12 @@ public sealed class AgentPackageTests
     }
 
     [Fact]
-    public async Task The_installed_version_is_reported_and_never_compared()
+    public async Task A_package_ahead_of_the_reviewed_version_is_in_sync_and_still_reported()
     {
-        // The frame is running a version the v1 reference never saw. §7.1 floats, so that is in
-        // sync — and the version still reaches the observed value, because a delta that names it
-        // is worth more than one that does not.
+        // This is what a Debian security update looks like from the frame's side, and it is the
+        // case the whole one-sided comparison exists for: a literal pin would call it drift and
+        // §2.6 would stop the product until the update had been undone. The version still reaches
+        // the observed value, because a delta that names it is worth more than one that does not.
         var debian = FakeDebian.StockImage();
         debian.Installed["labwc"] = "0.9.9-1+rpt9";
 
@@ -174,7 +175,78 @@ public sealed class AgentPackageTests
 
         Assert.True(observation.InSync);
         Assert.Contains("0.9.9-1+rpt9", observation.Observed, StringComparison.Ordinal);
-        Assert.DoesNotContain("0.9.2-1+rpt4", observation.Expected, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_package_below_the_reviewed_version_is_drift_and_the_delta_names_both()
+    {
+        // The other direction, and the reason the floor is recorded at all. Nothing a frame does
+        // on its own moves a package backward, so finding one there means something is wrong —
+        // and §2.5 needs a person to be able to read what.
+        var debian = FakeDebian.StockImage();
+        debian.Installed["labwc"] = "0.9.1-1+rpt1";
+
+        var observation = await Resource(debian, "labwc").ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+        Assert.Contains("0.9.2-1+rpt4", observation.Delta, StringComparison.Ordinal);
+        Assert.Contains("0.9.1-1+rpt1", observation.Delta, StringComparison.Ordinal);
+        Assert.Contains("older than the reviewed version", observation.Delta, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Repairing_a_package_that_moved_backward_installs_rather_than_downgrades()
+    {
+        // The floor is a record, not a pin, and the Act proves it: apt-get install brings the
+        // package up to whatever the archive now offers. Nothing anywhere names the reviewed
+        // version on a command line.
+        var debian = FakeDebian.StockImage();
+        debian.InstallAll(PackageCatalog.Specs.Where(spec => !spec.MustBeAbsent).Select(spec => spec.Package));
+        debian.Installed["labwc"] = "0.9.1-1+rpt1";
+
+        using var harness = new ReconcileHarness(Fast, [.. PackageCatalog.Build(new AptPackages(debian))]);
+        var outcome = await harness.ConvergeAsync();
+
+        Assert.Equal(PassResult.Converged, outcome.Result);
+        Assert.Equal("0.9.2-1+rpt4", debian.Installed["labwc"]);
+        Assert.Contains(debian.Commands, command => command.Contains("apt-get install -y labwc", StringComparison.Ordinal));
+        Assert.All(
+            debian.Commands,
+            command => Assert.DoesNotContain("0.9.2-1+rpt4", command, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Every_reviewed_version_matches_the_frozen_v1_reference()
+    {
+        // §7.1: version claims are never asserted from memory. The catalog records a floor per
+        // package and this reads the file those floors were transcribed from, so the two can
+        // never quietly part company. Two of the fifteen have no floor and both are deliberate:
+        // libspa-0.2-libcamera asserts absence, and unattended-upgrades is not on the v1 frame.
+        var reference = V1Reference.Packages();
+        var checkedCount = 0;
+
+        foreach (var spec in PackageCatalog.Specs)
+        {
+            if (spec.MustBeAbsent)
+            {
+                Assert.Null(spec.ReviewedVersion);
+                Assert.False(reference.ContainsKey(spec.Package));
+                continue;
+            }
+
+            if (spec.ReviewedVersion is null)
+            {
+                Assert.Equal("unattended-upgrades", spec.Package);
+                Assert.False(reference.ContainsKey(spec.Package));
+                continue;
+            }
+
+            Assert.Equal(reference[spec.Package], spec.ReviewedVersion);
+            checkedCount++;
+        }
+
+        Assert.Equal(13, checkedCount);
     }
 
     [Fact]
@@ -771,10 +843,50 @@ internal sealed class FakeDebian : IProcessRunner
 
         return Task.FromResult(executable switch
         {
+            // Two shapes of the same tool, told apart the way dpkg-query itself tells them apart:
+            // the whole-database form carries no package argument at all.
+            AptPackages.DpkgQuery when arguments is [_, AptPackages.ListFormat] => List(),
             AptPackages.DpkgQuery => Query(arguments[^1]),
             AptPackages.Env => Apt([.. arguments.Skip(2)]),
             _ => new ProcessResult(127, string.Empty, $"{executable}: command not found"),
         });
+    }
+
+    /// <summary>
+    /// The whole database, the way <c>dpkg-query -W</c> prints it with no package argument.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately prints the <c>rc</c> and half-configured entries too, with their versions,
+    /// because those lines are the reason the reader filters on the status field rather than
+    /// counting fields. A model that only printed installed packages could not catch that.
+    /// </remarks>
+    private ProcessResult List()
+    {
+        if (DpkgBroken)
+        {
+            return new ProcessResult(
+                2,
+                string.Empty,
+                "dpkg-query: error: failed to open package info file '/var/lib/dpkg/status' for reading: Input/output error");
+        }
+
+        var lines = new List<string>();
+        foreach (var entry in Installed)
+        {
+            lines.Add($"installed {entry.Key} {entry.Value}");
+        }
+
+        foreach (var package in Removed)
+        {
+            lines.Add($"config-files {package} {Archive.GetValueOrDefault(package, string.Empty)}".TrimEnd());
+        }
+
+        foreach (var package in Interrupted)
+        {
+            lines.Add($"half-configured {package} {Archive.GetValueOrDefault(package, string.Empty)}".TrimEnd());
+        }
+
+        return Ok(string.Join('\n', lines));
     }
 
     private ProcessResult Query(string package)
@@ -867,7 +979,13 @@ internal sealed class FakeDebian : IProcessRunner
 
     private void Apply(string package, List<string> settingUp)
     {
-        if (Installed.ContainsKey(package))
+        var candidate = Archive.GetValueOrDefault(package, "1.0");
+
+        // `apt-get install` on a package that is already there is an upgrade to the candidate, not
+        // a no-op — which is the whole repair path for a package that somehow moved backward. A
+        // model that returned early here would make that case look unfixable.
+        if (Installed.TryGetValue(package, out var current)
+            && DebianVersion.Compare(current, candidate) >= 0)
         {
             return;
         }
@@ -877,11 +995,10 @@ internal sealed class FakeDebian : IProcessRunner
             Apply(dependency, settingUp);
         }
 
-        var version = Archive.GetValueOrDefault(package, "1.0");
-        Installed[package] = version;
+        Installed[package] = candidate;
         Removed.Remove(package);
         Interrupted.Remove(package);
-        settingUp.Add($"Setting up {package} ({version}) ...");
+        settingUp.Add($"Setting up {package} ({candidate}) ...");
     }
 
     private ProcessResult Purge(string package)

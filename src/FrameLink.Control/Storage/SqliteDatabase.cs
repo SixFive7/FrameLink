@@ -23,14 +23,14 @@ namespace FrameLink.Control.Storage;
 public sealed class SqliteDatabase : IDisposable
 {
     /// <summary>
-    /// 2: the reconciliation report and device-event tables of §3.5.
+    /// 3: the content-addressed package inventory tables beside §3.5's reports and events.
     /// </summary>
     /// <remarks>
     /// The schema is additive and every statement below is <c>IF NOT EXISTS</c>, so an existing
-    /// volume moves from 1 to 2 by starting the new container and nothing else. There is no
-    /// migration step because there is nothing to migrate — no existing column changed meaning.
+    /// volume moves up by starting the new container and nothing else. There is no migration step
+    /// because there is nothing to migrate — no existing column has ever changed meaning.
     /// </remarks>
-    private const int SchemaVersion = 2;
+    private const int SchemaVersion = 3;
 
     /// <summary>Key of the settings revision counter in <c>control_meta</c>.</summary>
     internal const string RevisionKey = "settings_revision";
@@ -208,6 +208,42 @@ public sealed class SqliteDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS device_events_time
                 ON device_events (occurred_utc);
+
+            -- One row per DISTINCT package set across the whole fleet, keyed by the hash of its
+            -- canonical rendering. Ten converged frames share one row; a frame reporting the same
+            -- set twice writes nothing. This is what keeps ~930 packages per device per report
+            -- from becoming the largest thing in the database by two orders of magnitude.
+            CREATE TABLE IF NOT EXISTS package_sets (
+                content_hash  TEXT PRIMARY KEY,
+                package_count INTEGER NOT NULL,
+                body          TEXT NOT NULL
+            );
+
+            -- The current set, one row per device, replaced. No cascade to package_sets: a blob
+            -- outlives the last device that referenced it until the sweep collects it, which is
+            -- what lets a device be forgotten inside a transaction that knows nothing about who
+            -- else shares its packages.
+            CREATE TABLE IF NOT EXISTS device_packages (
+                device_id      TEXT PRIMARY KEY REFERENCES devices (device_id) ON DELETE CASCADE,
+                sequence       INTEGER NOT NULL,
+                observed_utc   TEXT NOT NULL,
+                content_hash   TEXT NOT NULL REFERENCES package_sets (content_hash),
+                observed_count INTEGER NOT NULL
+            );
+
+            -- §3.5's month of history. One row per reported change — the agent only reports when
+            -- the set moved — at roughly 60 bytes each, so a frame's whole month is a few hundred
+            -- bytes of index plus whatever distinct blobs it passed through.
+            CREATE TABLE IF NOT EXISTS device_package_history (
+                device_id    TEXT NOT NULL REFERENCES devices (device_id) ON DELETE CASCADE,
+                sequence     INTEGER NOT NULL,
+                observed_utc TEXT NOT NULL,
+                content_hash TEXT NOT NULL REFERENCES package_sets (content_hash),
+                PRIMARY KEY (device_id, sequence)
+            );
+
+            CREATE INDEX IF NOT EXISTS device_package_history_time
+                ON device_package_history (observed_utc);
 
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('schema_version', '1');
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('settings_revision', '0');

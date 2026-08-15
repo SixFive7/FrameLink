@@ -133,10 +133,28 @@ internal static partial class ControlLog
         string summary);
 
     [LoggerMessage(
+        EventId = 1307,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} claimed package-set hash {Claimed}; this server computed "
+            + "{Computed} over the same set. Storing under the computed one.")]
+    public static partial void PackageHashMismatch(
+        this ILogger logger,
+        string deviceId,
+        string claimed,
+        string computed);
+
+    [LoggerMessage(
         EventId = 1502,
         Level = LogLevel.Information,
         Message = "Rolled off {Count} device events older than the retention window.")]
     public static partial void ExpiredDeviceEvents(this ILogger logger, int count);
+
+    [LoggerMessage(
+        EventId = 1503,
+        Level = LogLevel.Information,
+        Message = "Rolled off {Entries} package-history entries and collected {Sets} package sets "
+            + "nothing referenced any more.")]
+    public static partial void ExpiredPackageHistory(this ILogger logger, int entries, int sets);
 
     [LoggerMessage(
         EventId = 1400,
