@@ -1,3 +1,4 @@
+using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 
 namespace FrameLink.Agent.State;
@@ -81,6 +82,11 @@ public sealed record AgentStatus
     /// <summary>Narration for the repair screen.</summary>
     public Narration Narration { get; init; } = Narration.None;
 
+    /// <summary>
+    /// The reconciliation loop's own attempt, backoff, countdown and escalation state (§2.7).
+    /// </summary>
+    public ReconcileNarration Reconcile { get; init; } = ReconcileNarration.None;
+
     /// <summary>Per-resource status list.</summary>
     public IReadOnlyList<ResourceStatus> Resources { get; init; } = NoResources;
 
@@ -96,6 +102,17 @@ public sealed record AgentStatus
     /// for as long as the Fleet Manager stayed up.
     /// </remarks>
     public bool RestartPending { get; init; }
+
+    /// <summary>
+    /// Whether the console stage can actually be seen, once it has been asked.
+    /// </summary>
+    /// <remarks>
+    /// §2.7 bans blank screens, and on a stock image the screen is blank for reasons the agent
+    /// cannot fix until the panel overlay resource lands — 76th of 79 in the catalog's ordering,
+    /// because writing <c>config.txt</c> is brick-capable. Carrying the answer here is what lets
+    /// the one surface that <i>is</i> reachable say so.
+    /// </remarks>
+    public DisplayVisibility? ConsoleVisibility { get; init; }
 
     /// <summary>Whether the product app may run (§2.6).</summary>
     public bool ProductRuns => Condition.ProductRuns;

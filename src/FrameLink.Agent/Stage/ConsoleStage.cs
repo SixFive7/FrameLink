@@ -32,7 +32,19 @@ public sealed class ConsoleStage : IDisposable
     private bool _disposed;
 
     /// <summary>Attaches the stage to <paramref name="terminal"/>.</summary>
-    public ConsoleStage(ITerminal terminal, AgentStatusHub hub, IAgentClock clock)
+    /// <param name="terminal">Where frames are written.</param>
+    /// <param name="hub">The shared status holder.</param>
+    /// <param name="clock">Source of the animation tick.</param>
+    /// <param name="display">
+    /// Asked, once, whether anything can actually show a picture.
+    /// </param>
+    /// <param name="log">Where the honest answer is recorded.</param>
+    public ConsoleStage(
+        ITerminal terminal,
+        AgentStatusHub hub,
+        IAgentClock clock,
+        IDisplayProbe? display = null,
+        IAgentLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(terminal);
         ArgumentNullException.ThrowIfNull(hub);
@@ -41,8 +53,46 @@ public sealed class ConsoleStage : IDisposable
         _terminal = terminal;
         _hub = hub;
         _clock = clock;
+
+        // Asked before the first paint, because the answer changes what a successful paint
+        // means. A write to /dev/tty1 succeeds on a frame with no framebuffer at all, so
+        // PaintedFrames counts frames written, never frames seen.
+        Visibility = (display ?? StaticDisplayProbe.Visible).Probe();
+        hub.Publish(status => status with { ConsoleVisibility = Visibility });
+
+        var journal = log ?? NullLog.Instance;
+        if (Visibility.Visible)
+        {
+            journal.Info($"Console stage can be seen: {Visibility.Reason} [{Visibility.Evidence}]");
+        }
+        else
+        {
+            journal.Warn(
+                "Console stage attached, no display output detected — narration is not visible. "
+                + $"{Visibility.Reason} [{Visibility.Evidence}]");
+        }
+
+        if (!terminal.SizeIsKnown)
+        {
+            journal.Warn(
+                $"The console did not report its size, so the layout is being composed against "
+                + $"{terminal.Columns}x{terminal.Rows} rather than a measured one.");
+        }
+
         _subscription = hub.Subscribe(_ => Paint());
     }
+
+    /// <summary>
+    /// Whether the frames this stage writes can be seen.
+    /// </summary>
+    /// <remarks>
+    /// Not derivable from anything this class does. §2.7 bans blank screens and the stage is the
+    /// mechanism, but on a stock image the panel overlay has not been applied and there is no
+    /// framebuffer — measured on the mule 2026-08-15 — so every write lands nowhere and returns
+    /// success. The honest position is that the stage reports its own blindness rather than
+    /// assuming it away.
+    /// </remarks>
+    public DisplayVisibility Visibility { get; }
 
     /// <summary>How often the animation advances.</summary>
     public TimeSpan TickInterval { get; init; } = TimeSpan.FromMilliseconds(120);

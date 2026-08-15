@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using FrameLink.Agent.Discovery;
+using FrameLink.Agent.Reconcile;
+using FrameLink.Agent.Resources;
 
 namespace FrameLink.Agent;
 
@@ -17,4 +19,6 @@ namespace FrameLink.Agent;
     DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     WriteIndented = true)]
 [JsonSerializable(typeof(ControlEndpoints))]
+[JsonSerializable(typeof(ReconcileJournalState))]
+[JsonSerializable(typeof(BootTrialState))]
 public sealed partial class AgentJson : JsonSerializerContext;

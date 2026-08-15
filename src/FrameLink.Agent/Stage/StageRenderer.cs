@@ -253,6 +253,14 @@ public static class StageRenderer
             AddField(lines, "Server", message, inner, colour);
         }
 
+        // §2.7 item 7. Placed with the narration rather than beside the activity bar because it
+        // is the answer to "what happens next", and what happens next is nothing until a person
+        // acts.
+        if (status.Reconcile.EscalationLine is { Length: > 0 } escalation)
+        {
+            AddField(lines, "Stopped", escalation, inner, colour);
+        }
+
         return lines;
     }
 
@@ -310,6 +318,76 @@ public static class StageRenderer
                     new Run(Bar(progress, barWidth) + "  ", accent),
                     new Run(
                         string.Create(CultureInfo.InvariantCulture, $"{(int)Math.Round(progress * 100)}%"),
+                        StagePalette.Body),
+                ],
+                inner,
+                colour);
+        }
+
+        // §2.7 item 4: the countdown before the verifying reboot, with the skip named on screen.
+        // It outranks everything below because it is the one moment the screen is asking the
+        // person in front of it for something rather than telling them.
+        if (status.Reconcile.Countdown is { } countdown)
+        {
+            var left = Math.Max(0, (int)Math.Ceiling(countdown.Remaining(now).TotalSeconds));
+
+            // A narrower bar than the other activity lines, because this one carries the longest
+            // caption on the screen and the caption is the part that matters: a bar that pushed
+            // "Restart now" off the right edge would take the affordance away on exactly the
+            // screen §2.7 says must offer it.
+            var countdownBar = Math.Max(8, inner - 60);
+
+            return Compose(
+                [
+                    new Run(Pad("Restarting", LabelWidth), StagePalette.Label),
+                    new Run(Bar(countdown.Elapsed(now), countdownBar) + "  ", accent),
+                    new Run(
+                        countdown.Skippable
+                            ? string.Create(CultureInfo.InvariantCulture, $"in {left}s — touch \"Restart now\" to skip")
+                            : string.Create(CultureInfo.InvariantCulture, $"in {left}s"),
+                        StagePalette.Body),
+                ],
+                inner,
+                colour);
+        }
+
+        // §2.7 items 5 and 6, for the reconciler's own retry schedule. Separate from the
+        // connection's, below, because a frame can be waiting on both at once and they mean
+        // different things: one is "the server is not answering", the other is "this setting
+        // would not stick".
+        if (status.Reconcile.Attempt > 0)
+        {
+            var label = status.Reconcile.AttemptBudget > 0
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"Attempt {status.Reconcile.Attempt} of {status.Reconcile.AttemptBudget}")
+                : string.Create(CultureInfo.InvariantCulture, $"Attempt {status.Reconcile.Attempt}");
+
+            if (status.Reconcile.BackoffEndsAt is not { } endsAt || status.Reconcile.BackoffTotal <= TimeSpan.Zero)
+            {
+                return Compose(
+                    [
+                        new Run(Pad(label, LabelWidth + 4), StagePalette.Label),
+                        new Run(Marquee(tick, Math.Max(8, barWidth - 4)) + "  ", accent),
+                        new Run(status.Reconcile.Resource ?? "working", StagePalette.Body),
+                    ],
+                    inner,
+                    colour);
+            }
+
+            var left = endsAt - now;
+            left = left < TimeSpan.Zero ? TimeSpan.Zero
+                : left > status.Reconcile.BackoffTotal ? status.Reconcile.BackoffTotal
+                : left;
+
+            var done = (status.Reconcile.BackoffTotal - left).Ticks / (double)status.Reconcile.BackoffTotal.Ticks;
+
+            return Compose(
+                [
+                    new Run(Pad(label, LabelWidth + 4), StagePalette.Label),
+                    new Run(Bar(done, Math.Max(8, barWidth - 4)) + "  ", accent),
+                    new Run(
+                        string.Create(CultureInfo.InvariantCulture, $"trying again in {Math.Max(0, (int)Math.Ceiling(left.TotalSeconds))}s"),
                         StagePalette.Body),
                 ],
                 inner,
@@ -375,10 +453,22 @@ public static class StageRenderer
             : remaining;
     }
 
-    private static string DescribeResource(ResourceStatus resource) =>
-        resource.Kind == ResourceStatusKind.InSync
-            ? "in sync"
-            : string.Create(CultureInfo.InvariantCulture, $"{resource.Kind} — {resource.Delta ?? "no detail"} (attempt {resource.Attempts})");
+    private static string DescribeResource(ResourceStatus resource) => resource.Kind switch
+    {
+        ResourceStatusKind.InSync => "in sync",
+
+        ResourceStatusKind.Blocked => string.Create(
+            CultureInfo.InvariantCulture,
+            $"waiting for {resource.BlockedBy ?? "something else"}"),
+
+        _ when resource.AttemptBudget > 0 => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{resource.Kind} — {resource.Delta ?? "no detail"} (attempt {resource.Attempts} of {resource.AttemptBudget})"),
+
+        _ => string.Create(
+            CultureInfo.InvariantCulture,
+            $"{resource.Kind} — {resource.Delta ?? "no detail"} (attempt {resource.Attempts})"),
+    };
 
     private static void AddField(List<string> lines, string label, string value, int inner, bool colour)
     {

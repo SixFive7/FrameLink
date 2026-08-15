@@ -63,6 +63,12 @@ public sealed record AttemptContext
     /// the hourly tick, and nothing about convergence depends on it running or succeeding.
     /// </remarks>
     public Func<HandshakeResult, CancellationToken, Task>? OnVerdict { get; init; }
+
+    /// <summary>Where this attempt publishes its transport for the duration of the session.</summary>
+    public AgentUplink? Uplink { get; init; }
+
+    /// <summary>Invoked when the Fleet Manager pushes effective settings (§3.4).</summary>
+    public Action<SettingsPush>? OnSettings { get; init; }
 }
 
 /// <summary>
@@ -267,6 +273,14 @@ public sealed class ConnectionAttempt : IAsyncDisposable
         var verdict = handshake.Result!;
         Publish(context, verdict, connected: true);
 
+        // Owned like everything else, so the reconciler's route to the server closes when this
+        // attempt does. A long-lived object holding a short-lived transport is the exact shape
+        // of the v1 leak, and Own() is what keeps it from being one here.
+        if (context.Uplink is { } uplink)
+        {
+            Own(uplink.Attach(transport));
+        }
+
         // Before the pump, not after it. §2.8 makes the handshake the thing that triggers an
         // update immediately instead of waiting for the hourly tick, and a session on a healthy
         // adopted frame never ends — so a callback that waited for the pump to return would fire
@@ -340,6 +354,19 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                 if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
                 {
                     await PongAsync(transport, envelope, cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+
+                if (string.Equals(envelope.Kind, ControlWire.KindSettings, StringComparison.Ordinal))
+                {
+                    // §3.4's dynamic values, and the only thing on this socket that changes what
+                    // the reconciler converges on. Still not logic: a dictionary of strings, read
+                    // by resources the catalog compiled in (§2.2, decision 15).
+                    if (envelope.PayloadAs(ProtocolJson.Default.SettingsPush) is { } push)
+                    {
+                        context.OnSettings?.Invoke(push);
+                    }
+
                     continue;
                 }
 

@@ -4,8 +4,10 @@ using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Identity;
 using FrameLink.Agent.Link;
 using FrameLink.Agent.Reconcile;
+using FrameLink.Agent.Resources;
 using FrameLink.Agent.Stage;
 using FrameLink.Agent.State;
+using FrameLink.Agent.Telemetry;
 using FrameLink.Agent.Update;
 using FrameLink.Protocol;
 
@@ -46,6 +48,15 @@ public sealed class AgentHost
     /// reconciler. Volatile because those are two different threads.
     /// </summary>
     private string? _desiredDeviceName;
+
+    /// <summary>
+    /// The effective settings the Fleet Manager last pushed (§3.4), read by every resource that
+    /// takes a value. Swapped wholesale so a resource never sees half a settings revision.
+    /// </summary>
+    private IReadOnlyDictionary<string, string> _settings = new Dictionary<string, string>(StringComparer.Ordinal);
+
+    /// <summary>Whether the last <i>authoritative</i> answer was <c>ok</c> (§2.6, §3.3).</summary>
+    private volatile bool _adopted;
 
     /// <summary>Creates a host for the given command line.</summary>
     public AgentHost(IReadOnlyList<string> arguments, IAgentLog log, IAgentClock? clock = null)
@@ -88,10 +99,15 @@ public sealed class AgentHost
             HardwareSerial = serial,
         });
 
+        var systemFiles = HostSystemFiles.Instance;
+        var display = new SysfsDisplayProbe(systemFiles);
+
         using var stage = new ConsoleStage(
             TtyTerminal.Open(Environment.GetEnvironmentVariable(TerminalVariable) ?? TtyTerminal.DefaultPath, _log),
             hub,
-            _clock);
+            _clock,
+            display,
+            _log);
 
         // Painted before anything slow happens. Endpoint discovery can spend a couple of seconds
         // listening for mDNS, and §2.7's hard rule against blank screens covers those seconds too.
@@ -117,8 +133,48 @@ public sealed class AgentHost
             AgentBuild.Version,
             AgentBuild.RuntimeIdentifier);
 
-        var reconciler = new Reconciler(_log);
-        var resource = new DeviceNameResource(store, () => Volatile.Read(ref _desiredDeviceName));
+        using var uplink = new AgentUplink();
+        var outbox = new TelemetryOutbox(uplink, store, _log);
+        var boot = new KernelBootIdentity(HostTextFileReader.Instance);
+
+        var (countdownFlag, development) = CountdownDuration.ReadFlags(_arguments);
+
+        var loop = new ReconcileLoop(new ReconcileServices
+        {
+            Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
+            {
+                Files = systemFiles,
+                Store = store,
+                Processes = HostProcessRunner.Instance,
+                SystemControl = new SystemdControl(),
+                Display = display,
+                Boot = boot,
+                Clock = _clock,
+                Log = _log,
+                Values = new FleetValues(key => Volatile.Read(ref _settings).GetValueOrDefault(key)),
+                Adopted = () => _adopted,
+                DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
+            }),
+            Journal = new ReconcileJournal(store, _log),
+            Boot = boot,
+            Reboots = new SystemRebootBoundary(new SystemdControl(), _log),
+            Countdown = new RebootCountdown(_clock),
+            Telemetry = outbox,
+            Hub = hub,
+            Clock = _clock,
+            Log = _log,
+            Options = new ReconcileOptions
+            {
+                Countdown = CountdownDuration.Resolve(
+                    countdownFlag ?? Environment.GetEnvironmentVariable(CountdownDuration.Variable),
+                    development,
+                    bootFile: null,
+                    fleetValue: Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey)),
+            },
+        })
+        {
+            DeviceId = identity.DeviceId,
+        };
 
         var link = new ControlLink(
             new WebSocketControlTransportFactory(),
@@ -127,8 +183,10 @@ public sealed class AgentHost
             _clock,
             _log,
             () => hub.Current.Endpoints,
-            onVerdict: (verdict, token) => OnVerdictAsync(verdict, hub, updates, reconciler, resource, token))
+            onVerdict: (verdict, token) => OnVerdictAsync(verdict, updates, outbox, token))
         {
+            Uplink = uplink,
+            OnSettings = push => Volatile.Write(ref _settings, push.Values),
             HardwareSerial = serial,
 
             // Free text with a vocabulary head, per AgentHealth. The head is what the Fleet
@@ -143,11 +201,17 @@ public sealed class AgentHost
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        var running = new List<Task>(3)
+        // Four loops now, and the fourth is deliberately not gated on the third. §1.2.2: a frame
+        // must provision and self-heal with the server unreachable, so the reconciler runs from
+        // the first second whether or not anything ever answers. What adoption gates is the
+        // resources that need issued values, and it gates them through the DAG (§2.2) rather
+        // than by not running.
+        var running = new List<Task>(4)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
             updates.RunAsync(shutdown.Token),
+            loop.RunAsync(shutdown.Token),
         };
 
         try
@@ -211,10 +275,8 @@ public sealed class AgentHost
     /// </remarks>
     private async Task OnVerdictAsync(
         HandshakeResult verdict,
-        AgentStatusHub hub,
         UpdateService updates,
-        Reconciler reconciler,
-        IResource resource,
+        TelemetryOutbox outbox,
         CancellationToken cancellationToken)
     {
         if (verdict.ServedAgentVersion is { Length: > 0 } served
@@ -230,12 +292,18 @@ public sealed class AgentHost
         if (!string.Equals(verdict.Status, HandshakeStatus.Ok, StringComparison.Ordinal))
         {
             // §3.3: a pending device receives nothing — no configuration, no token, no commands.
+            // The reconciler keeps running regardless; its adoption resource simply observes
+            // that this frame is not adopted and blocks everything that needs an issued value.
+            _adopted = false;
             return;
         }
 
+        _adopted = true;
         Volatile.Write(ref _desiredDeviceName, verdict.DeviceName ?? string.Empty);
 
-        var status = await reconciler.ReconcileAsync(resource, cancellationToken).ConfigureAwait(false);
-        hub.Publish(current => current with { Resources = [status] });
+        // §4.1: buffered telemetry drains on reconnect. Done here rather than in the loop
+        // because this is the moment a link exists, and the loop deliberately does not know
+        // whether one does.
+        await outbox.DrainAsync(cancellationToken).ConfigureAwait(false);
     }
 }

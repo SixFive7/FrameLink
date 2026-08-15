@@ -88,6 +88,19 @@ public sealed class ControlLink
     /// <summary>Free-text self-report sent in the hello (§4.2).</summary>
     public string? AgentStatusText { get; init; }
 
+    /// <summary>
+    /// Where an attempt publishes its transport so the reconciler can send telemetry (§4.1).
+    /// </summary>
+    /// <remarks>
+    /// Optional, and nothing in this loop depends on it. The attachment lives and dies inside
+    /// one attempt's ownership stack, so a loop with an uplink leaks exactly as much as one
+    /// without: nothing.
+    /// </remarks>
+    public AgentUplink? Uplink { get; init; }
+
+    /// <summary>Invoked when the Fleet Manager pushes effective settings (§3.4).</summary>
+    public Action<SettingsPush>? OnSettings { get; init; }
+
     /// <summary>How long connect plus handshake may take.</summary>
     public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(20);
 
@@ -207,6 +220,8 @@ public sealed class ControlLink
                     AgentStatusText = AgentStatusText,
                     HandshakeTimeout = HandshakeTimeout,
                     OnVerdict = _onVerdict,
+                    Uplink = Uplink,
+                    OnSettings = OnSettings,
                 },
                 cancellationToken).ConfigureAwait(false);
         }

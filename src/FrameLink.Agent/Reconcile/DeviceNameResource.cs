@@ -15,10 +15,10 @@ namespace FrameLink.Agent.Reconcile;
 /// visible in the same second.
 /// </para>
 /// <para>
-/// It reboots nothing and breaks nothing, which is the point: §5.1's walking skeleton retires
-/// <i>integration</i> risk, and a resource that can brick a mule would add risk of a kind M1 is
-/// not trying to carry. Real resources — <c>config.txt</c> lines, mixer controls, unit files —
-/// arrive in M3 behind the reboot-verified apply.
+/// It survives into M2 unchanged in behaviour but no longer unchanged in treatment: it now
+/// reboots like everything else (§2.4, no exceptions) and it depends on
+/// <see cref="Resources.AdoptionResource"/>, because the value it converges on is one the Fleet
+/// Manager issues and §3.3 gives a pending device none.
 /// </para>
 /// </remarks>
 public sealed class DeviceNameResource : IResource
@@ -45,7 +45,10 @@ public sealed class DeviceNameResource : IResource
     }
 
     /// <inheritdoc/>
-    public string Name => "device-name";
+    public string Name => "app.config.identity";
+
+    /// <inheritdoc/>
+    public IReadOnlyList<string> DependsOn => [Resources.AdoptionResource.ResourceName];
 
     /// <inheritdoc/>
     public string Detected => "The name this frame has been given does not match the Fleet Manager.";
@@ -68,13 +71,15 @@ public sealed class DeviceNameResource : IResource
     }
 
     /// <inheritdoc/>
-    public ValueTask<string> ActAsync(CancellationToken cancellationToken)
+    public ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var expected = _desired() ?? string.Empty;
         _store.WriteText(FileName, expected);
 
-        return ValueTask.FromResult($"write '{expected}' to {_store.PathOf(FileName)}");
+        return ValueTask.FromResult(new ResourceAction(
+            $"write '{expected}' to {_store.PathOf(FileName)}",
+            $"Remembering that this frame is called '{expected}'."));
     }
 }
