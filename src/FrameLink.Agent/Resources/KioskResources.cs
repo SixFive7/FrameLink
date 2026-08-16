@@ -201,7 +201,13 @@ public sealed class KioskOfflineCacheResource : IResource
     }
 }
 
-/// <summary>One of the four settings guide 9's Compose file carried.</summary>
+/// <summary>One of the settings the child's environment carries.</summary>
+/// <remarks>
+/// Four of them are guide 9's Compose file, carried across. The fifth,
+/// <c>kiosk.config.albums</c>, is not in guide 9 and not in the resource catalog: guide 9's
+/// Compose file never scoped selection at all, which is a gap rather than a decision, and the
+/// frame it was measured on could not have worked without it.
+/// </remarks>
 public sealed record KioskConfigSpec
 {
     /// <summary>The catalog id.</summary>
@@ -233,10 +239,22 @@ public sealed record KioskConfigSpec
 
     /// <summary>Whether the value must never appear in a delta, a log or on a screen.</summary>
     public bool Secret { get; init; }
+
+    /// <summary>
+    /// One spelling per value, applied to both sides of every comparison.
+    /// </summary>
+    /// <remarks>
+    /// A trim is enough for four of the five, and is what the default does. It is not enough for a
+    /// list: <c>a, b</c> and <c>a,b</c> are the same selection, and comparing them literally would
+    /// report a running child as disagreeing with a frame that had recorded exactly what it was
+    /// given. The normalisation is applied to the issued value <i>and</i> to the recorded one, so
+    /// a value written by an older build converges rather than drifting for ever.
+    /// </remarks>
+    public Func<string, string> Normalise { get; init; } = value => value.Trim();
 }
 
 /// <summary>
-/// <c>kiosk.config.*</c> — the four Compose settings, held by the agent instead of by a YAML file.
+/// <c>kiosk.config.*</c> — the child's settings, held by the agent instead of by a YAML file.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -245,6 +263,14 @@ public sealed record KioskConfigSpec
 /// supplies and the agent records under <c>/var/lib/fl-agent</c>. What the child runs on is its own
 /// environment block, which <see cref="KioskCatalog.SettingsFrom"/> renders from these records — so
 /// there is one copy of each value on the frame, and it is the copy the reconciler owns.
+/// </para>
+/// <para>
+/// <b>The fifth is not guide 9's, and its absence was a live defect.</b>
+/// <c>kiosk.config.albums</c> scopes which photos the child selects from, and neither the Compose
+/// file nor the resource catalog has anything corresponding to it — so a frame whose Immich account
+/// sees photos only through a <i>shared</i> album had no way to be told where its photos were. What
+/// that frame did instead was ask for a random asset it owned, get none, and say so about seven
+/// times a second (see <see cref="KioskProcessSettings.Albums"/>).
 /// </para>
 /// <para>
 /// <b>Observe compares two things, and only one of them can fail the resource.</b> The recorded
@@ -308,10 +334,10 @@ public sealed class KioskConfigResource : IResource
     public string WhyItMatters => _spec.WhyItMatters;
 
     /// <summary>The value the Fleet Manager has issued, or the catalog default.</summary>
-    public string Desired => _values.Get(_spec.SettingKey, _spec.Fallback).Trim();
+    public string Desired => _spec.Normalise(_values.Get(_spec.SettingKey, _spec.Fallback));
 
     /// <summary>The value this frame has recorded, or empty.</summary>
-    public string Recorded => _store.ReadText(_spec.FileName)?.Trim() ?? string.Empty;
+    public string Recorded => _spec.Normalise(_store.ReadText(_spec.FileName) ?? string.Empty);
 
     /// <inheritdoc/>
     public ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
@@ -700,13 +726,15 @@ public sealed class KioskSupervisedResource : IResource
     }
 }
 
-/// <summary>The eight resources of the catalog's guide 9 block, in catalog order.</summary>
+/// <summary>The nine resources of the guide 9 block, in catalog order.</summary>
 /// <remarks>
 /// Docker is removed from the frame entirely (§2.1); what guide 9's Compose file configured
-/// survives as these eight. Three of guide 9's four steps have no resource at all and that is the
-/// point of the block: step 1 installed Docker Engine, step 2's Compose file and
+/// survives as eight of these. Three of guide 9's four steps have no resource at all and that is
+/// the point of the block: step 1 installed Docker Engine, step 2's Compose file and
 /// <c>chown 65532</c> described a container, and step 3 started one. Step 4's <c>HTTP 200</c> check
-/// is the only part that describes device state, and it is <c>kiosk.process.supervised</c>.
+/// is the only part that describes device state, and it is <c>kiosk.process.supervised</c>. The
+/// ninth, <c>kiosk.config.albums</c>, comes from neither guide 9 nor the resource catalog — see
+/// <see cref="KioskConfigResource"/>.
 /// </remarks>
 public static class KioskCatalog
 {
@@ -715,6 +743,17 @@ public static class KioskCatalog
 
     /// <summary>Fleet setting carrying the read-only Immich API key.</summary>
     public const string ImmichApiKeySettingKey = "immich.apiKey";
+
+    /// <summary>Fleet setting carrying which albums the slideshow draws from.</summary>
+    /// <remarks>
+    /// <b>One key, two consumers, and that is the point of reusing it.</b> The same value scopes
+    /// the child's own selection (this resource, as <c>KIOSK_ALBUMS</c>) and the page the browser
+    /// asks for (<c>app.config.immich-kiosk-url</c>, as repeated <c>album=</c> query parameters).
+    /// Two keys would be a value that has to agree with itself in two places — the objection
+    /// <c>kiosk.listen-address</c> raises against a settable port — and disagreeing halves would
+    /// produce a frame whose live slideshow and whose offline cache hold different albums.
+    /// </remarks>
+    public const string AlbumsSettingKey = AppConfigCatalog.AlbumsSettingKey;
 
     /// <summary>Fleet setting carrying whether Kiosk caches for offline use.</summary>
     public const string OfflineModeSettingKey = "slideshow.offlineMode";
@@ -725,7 +764,14 @@ public static class KioskCatalog
     /// <summary>Guide 9's measured value.</summary>
     public const string DefaultOfflineAssetCount = "200";
 
-    /// <summary>The four <c>kiosk.config.*</c> specs, in the order the catalog lists them.</summary>
+    /// <summary>
+    /// The five <c>kiosk.config.*</c> specs, in the order the catalog lists them, with the album
+    /// selection placed where it belongs in that order rather than appended.
+    /// </summary>
+    /// <remarks>
+    /// Reach the library, scope the library, cache what was scoped. Putting the album after the
+    /// two offline settings would put the size of a cache ahead of the question of what goes in it.
+    /// </remarks>
     public static IReadOnlyList<KioskConfigSpec> Specs { get; } =
     [
         new KioskConfigSpec
@@ -753,6 +799,23 @@ public static class KioskCatalog
         },
         new KioskConfigSpec
         {
+            ResourceName = "kiosk.config.albums",
+            FileName = "kiosk.albums",
+            Variable = KioskProcessSettings.AlbumsVariable,
+            SettingKey = AlbumsSettingKey,
+
+            // Adoption, by the catalog's own rule: the desired value is issued by the Fleet
+            // Manager and there is no default this project could hold. An album id belongs to
+            // somebody's photo library, so a frame that has not been adopted would have to guess,
+            // exactly as it would for the server address and the key.
+            DependsOn = [KioskBinaryResource.ResourceName, AdoptionResource.ResourceName],
+            Detected = "This frame has not been told which photo album to show.",
+            WhyItMatters = "If the photos are shared with this frame rather than owned by it, it finds none at all.",
+            Gloss = "Telling the slideshow which album of photos to show.",
+            Normalise = AlbumSelection.Normalise,
+        },
+        new KioskConfigSpec
+        {
             ResourceName = "kiosk.config.offline-mode-enabled",
             FileName = "kiosk.offline-mode",
             Variable = "KIOSK_OFFLINE_MODE_ENABLED",
@@ -777,7 +840,7 @@ public static class KioskCatalog
         },
     ];
 
-    /// <summary>Builds the eight resources, in catalog order.</summary>
+    /// <summary>Builds the nine resources, in catalog order.</summary>
     public static IReadOnlyList<IResource> Build(DeviceCatalogContext context, KioskInstaller installer)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -786,7 +849,7 @@ public static class KioskCatalog
         var kiosk = context.Kiosk
             ?? throw new InvalidOperationException("The kiosk block needs a KioskProcess in the catalog context.");
 
-        var resources = new List<IResource>(8)
+        var resources = new List<IResource>(4 + Specs.Count)
         {
             new KioskBinaryResource(installer),
             new KioskOfflineCacheResource(context.Files, kiosk),
@@ -830,6 +893,7 @@ public static class KioskCatalog
                 int.TryParse(count, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0
                     ? parsed
                     : 200,
+            Albums = AlbumSelection.Normalise(store.ReadText("kiosk.albums")),
             Port = KioskProcess.DefaultPort,
         };
     }

@@ -3,6 +3,7 @@ using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Kiosk;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 
@@ -428,8 +429,27 @@ public static class AppConfigCatalog
     /// <summary>Fleet setting carrying the seconds each photo is shown.</summary>
     public const string IntervalSettingKey = "slideshow.interval";
 
-    /// <summary>Fleet setting carrying the album to show.</summary>
-    public const string AlbumSettingKey = "slideshow.album";
+    /// <summary>
+    /// Fleet setting carrying which albums to show — Immich album ids, comma-separated.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Plural, and renamed from <c>slideshow.album</c> in the same change that made it reach the
+    /// child.</b> The value's meaning changed: it used to be one album appended to a query string,
+    /// and it is now the selection scope for the whole slideshow, carried both here and as
+    /// <c>KIOSK_ALBUMS</c> on the child's environment. A singular key naming a list is exactly the
+    /// near-miss <c>ControlSettingsCatalogTests</c> exists to catch, one step earlier: nothing
+    /// would have failed, the operator would have set a value, and half of it would have been
+    /// ignored. Nothing has shipped, so the old spelling is not kept as an alias (§ no shims).
+    /// </para>
+    /// <para>
+    /// <b>Ids, not names.</b> Upstream's <c>Albums []string</c> takes Immich album UUIDs — the id
+    /// in an album's own URL — or one of its keywords <c>all</c>, <c>owned</c>, <c>shared</c>,
+    /// <c>favourites</c>/<c>favorites</c>. An album <i>name</i> matches nothing and fails the same
+    /// silent way an unset value does, which is what the settings catalog used to suggest.
+    /// </para>
+    /// </remarks>
+    public const string AlbumsSettingKey = "slideshow.albums";
 
     /// <summary>Guide 10's measured value.</summary>
     public const string DefaultInterval = "30";
@@ -506,10 +526,27 @@ public static class AppConfigCatalog
 
     /// <summary>The slideshow URL for the current settings.</summary>
     /// <remarks>
-    /// Composed rather than stored whole, so <c>slideshow.interval</c> and <c>slideshow.album</c>
+    /// <para>
+    /// Composed rather than stored whole, so <c>slideshow.interval</c> and <c>slideshow.albums</c>
     /// stay ordinary fleet settings an operator can move without anybody hand-editing a query
     /// string. The base is fixed by the catalog because every one of its parameters is a display
     /// decision guide 9 and guide 10 already made.
+    /// </para>
+    /// <para>
+    /// <b>One <c>album=</c> per id, and the parameter is singular where the variable is plural.</b>
+    /// That is not an inconsistency to tidy up: upstream's field carries both tags —
+    /// <c>mapstructure:"albums"</c>, which is what makes the environment variable
+    /// <c>KIOSK_ALBUMS</c>, and <c>query:"album"</c>, which is what makes the query parameter
+    /// <c>album</c>. A repeated parameter is how a list arrives over a query string, so a
+    /// comma-joined single parameter would be read as one album id containing commas and would
+    /// match nothing.
+    /// </para>
+    /// <para>
+    /// This half and <c>KIOSK_ALBUMS</c> are fed from the <i>same</i> setting on purpose. The
+    /// environment scopes what the child pre-downloads for offline use; the query string scopes
+    /// what the page renders. Letting them differ would produce a frame showing one album live and
+    /// a different one the moment Immich became unreachable.
+    /// </para>
     /// </remarks>
     public static string SlideshowUrl(FleetValues values)
     {
@@ -517,9 +554,12 @@ public static class AppConfigCatalog
 
         var url = SlideshowBase + "&duration=" + values.Get(IntervalSettingKey, DefaultInterval);
 
-        return values.Find(AlbumSettingKey) is { Length: > 0 } album
-            ? url + "&album=" + Uri.EscapeDataString(album)
-            : url;
+        foreach (var album in AlbumSelection.Split(values.Find(AlbumsSettingKey)))
+        {
+            url += "&album=" + Uri.EscapeDataString(album);
+        }
+
+        return url;
     }
 
     /// <summary>Builds the five resources, in catalog order.</summary>

@@ -252,6 +252,146 @@ public sealed class AgentImmichKioskTests
     }
 
     [Fact]
+    public void The_album_variable_is_the_plural_upstream_renamed_it_to_and_is_omitted_when_unset()
+    {
+        var settings = new KioskProcessSettings
+        {
+            WorkingDirectory = "/var/lib/fl-agent/kiosk",
+            ImmichUrl = "https://immich.example.invalid",
+            ImmichApiKey = "a-key",
+        };
+
+        // KIOSK_ALBUM was renamed to KIOSK_ALBUMS in upstream v0.22.0, alongside KIOSK_PERSON ->
+        // KIOSK_PEOPLE and KIOSK_TAG -> KIOSK_TAGS, with no compatibility alias left behind. The
+        // struct tag on v0.42.0 is `Albums []string \`mapstructure:"albums"\``, and the singular
+        // spelling is therefore read by nothing and reported by nothing — the worst possible
+        // failure for the one value that decides whether the frame finds any photos.
+        Assert.Equal("KIOSK_ALBUMS", KioskProcessSettings.AlbumsVariable);
+
+        // Absent, not empty. An empty variable goes through Viper's comma decode hook and can come
+        // out as a one-element slice holding the empty string — a request scoped to an album that
+        // does not exist — where an absent one leaves upstream's own `[]` default in place.
+        Assert.DoesNotContain("KIOSK_ALBUMS", settings.Environment.Select(pair => pair.Key));
+
+        // And it is still *said*, because an unset album selection leaving no trace at all except
+        // an error loop is the defect this whole resource exists to answer.
+        Assert.Contains("KIOSK_ALBUMS=<unset", settings.Describe(), StringComparison.Ordinal);
+
+        var scoped = settings with { Albums = "67c9021a,3f10bb02" };
+
+        Assert.Equal(
+            ["KIOSK_IMMICH_URL", "KIOSK_IMMICH_API_KEY", "KIOSK_ALBUMS", "KIOSK_OFFLINE_MODE_ENABLED", "KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS", "KIOSK_PORT"],
+            scoped.Environment.Select(pair => pair.Key));
+        Assert.Equal("67c9021a,3f10bb02", scoped.Environment.Single(pair => pair.Key == "KIOSK_ALBUMS").Value);
+        Assert.Contains("KIOSK_ALBUMS=67c9021a,3f10bb02", scoped.Describe(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_album_list_has_one_spelling_so_a_running_child_is_not_read_as_disagreeing()
+    {
+        // The /proc/<pid>/environ cross-check is a string comparison against the recorded value, so
+        // a selection typed with spaces after the commas would read as a running child disagreeing
+        // with a frame that had recorded exactly what it was given. Normalising both sides is what
+        // makes that comparison mean what it says.
+        Assert.Equal("a,b,c", AlbumSelection.Normalise(" a , b ,c "));
+        Assert.Equal("a,b", AlbumSelection.Normalise("a,,b,"));
+        Assert.Equal(string.Empty, AlbumSelection.Normalise(null));
+        Assert.Equal(string.Empty, AlbumSelection.Normalise("  ,  "));
+        Assert.Equal(["a", "b"], AlbumSelection.Split("a, b"));
+        Assert.Empty(AlbumSelection.Split(null));
+
+        using var store = new TemporaryStore();
+        store.Store.WriteText("kiosk.albums", " 67c9021a , 3f10bb02 ");
+
+        Assert.Equal("67c9021a,3f10bb02", KioskCatalog.SettingsFrom(store.Store, "/tmp/kiosk").Albums);
+    }
+
+    [Fact]
+    public async Task One_setting_scopes_both_the_child_and_the_page_the_browser_asks_for()
+    {
+        using var store = new TemporaryStore();
+
+        // Two consumers, one key, deliberately. The environment scopes what the child selects and
+        // pre-downloads for offline use; the query string scopes what the page renders. Two keys
+        // would be a value that has to agree with itself in two places, and disagreeing halves
+        // would show one album live and a different one the moment Immich became unreachable.
+        Assert.Equal(AppConfigCatalog.AlbumsSettingKey, KioskCatalog.AlbumsSettingKey);
+
+        var values = FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [AppConfigCatalog.AlbumsSettingKey] = "67c9021a, 3f10bb02",
+        });
+
+        // One `album=` per id, and the parameter is singular where the variable is plural: upstream
+        // carries both tags on one field — mapstructure:"albums" and query:"album" — and a repeated
+        // parameter is how a list arrives over a query string. Comma-joining into one parameter
+        // would be read as a single album id containing commas and would match nothing.
+        var url = AppConfigCatalog.SlideshowUrl(values);
+
+        Assert.Contains("&album=67c9021a", url, StringComparison.Ordinal);
+        Assert.Contains("&album=3f10bb02", url, StringComparison.Ordinal);
+        Assert.DoesNotContain("%2C", url, StringComparison.Ordinal);
+
+        // Unset stays unset on both halves rather than becoming an empty album.
+        Assert.DoesNotContain("album=", AppConfigCatalog.SlideshowUrl(FleetValues.None), StringComparison.Ordinal);
+
+        var spec = KioskCatalog.Specs.Single(candidate => candidate.ResourceName == "kiosk.config.albums");
+        var resource = new KioskConfigResource(
+            store.Store,
+            values,
+            new MemorySystemFiles(),
+            new KioskProcess(new KioskProcessServices
+            {
+                Store = store.Store,
+                Clock = new ManualClock(),
+                Log = NullLog.Instance,
+                Settings = () => KioskCatalog.SettingsFrom(store.Store, "/tmp/kiosk"),
+            }),
+            spec);
+
+        Assert.False((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        await resource.ActAsync(TestContext.Current.CancellationToken);
+
+        // Recorded normalised, so the value the reconciler verified and the value the child is
+        // handed are the same string.
+        Assert.Equal("67c9021a,3f10bb02", store.Store.ReadText("kiosk.albums"));
+        Assert.True((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+    }
+
+    [Fact]
+    public async Task An_unissued_album_is_a_legal_configuration_and_never_a_reboot_loop()
+    {
+        using var store = new TemporaryStore();
+
+        // The agent cannot tell a frame that needs an album from one that does not: with no album
+        // set, upstream falls through to an owner-scoped POST /api/search/random, which is exactly
+        // right on a frame whose Immich account owns its own photos. Making the absence drift would
+        // put every such frame into a reboot cycle it can never leave, over a value nobody is ever
+        // going to set. So it is in sync, and the visibility is bought elsewhere — in the launch
+        // line Describe() writes, which names the variable whether or not it has a value.
+        var spec = KioskCatalog.Specs.Single(candidate => candidate.ResourceName == "kiosk.config.albums");
+        var resource = new KioskConfigResource(
+            store.Store,
+            FleetValues.None,
+            new MemorySystemFiles(),
+            new KioskProcess(new KioskProcessServices
+            {
+                Store = store.Store,
+                Clock = new ManualClock(),
+                Log = NullLog.Instance,
+                Settings = () => KioskCatalog.SettingsFrom(store.Store, "/tmp/kiosk"),
+            }),
+            spec);
+
+        var observation = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Equal(ObservationOutcome.InSync, observation.Outcome);
+        Assert.Empty(KioskCatalog.SettingsFrom(store.Store, "/tmp/kiosk").Albums);
+    }
+
+    [Fact]
     public void The_api_key_is_never_written_down_anywhere_a_person_or_a_server_can_read_it()
     {
         var settings = new KioskProcessSettings
@@ -488,7 +628,7 @@ public sealed class AgentImmichKioskTests
     }
 
     [Fact]
-    public void The_block_is_the_catalogs_eight_with_the_catalogs_dependencies()
+    public void The_block_is_the_catalogs_eight_plus_the_one_the_catalog_never_had()
     {
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(AgentResourceGraphTests.Context(files));
@@ -499,6 +639,7 @@ public sealed class AgentImmichKioskTests
             KioskOfflineCacheResource.ResourceName,
             "kiosk.config.immich-url",
             "kiosk.config.immich-api-key",
+            "kiosk.config.albums",
             "kiosk.config.offline-mode-enabled",
             "kiosk.config.offline-asset-count",
             KioskListenAddressResource.ResourceName,
@@ -506,7 +647,17 @@ public sealed class AgentImmichKioskTests
         ];
 
         Assert.All(block, name => Assert.NotNull(graph.Find(name)));
-        Assert.Equal(8, block.Length);
+        Assert.Equal(9, block.Length);
+
+        // Adoption, on the same rule as the URL and the key: an album id belongs to somebody's
+        // photo library and there is no default this project could hold, so a frame that has not
+        // been adopted would have to guess.
+        Assert.Contains(AdoptionResource.ResourceName, graph.Find("kiosk.config.albums")!.DependsOn);
+
+        // But the child is *not* gated on it. An album is optional to Immich Kiosk — a frame whose
+        // Immich account owns its own photos needs none — so an edge here would block the whole
+        // slideshow on a value that frame will never set.
+        Assert.DoesNotContain("kiosk.config.albums", graph.Find(KioskSupervisedResource.ResourceName)!.DependsOn);
 
         // The dependsOn rule, and the catalog's own statement of why: "the test is not 'is there a
         // fleet setting' but 'would this resource have to guess'." The address of somebody's photo

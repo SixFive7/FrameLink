@@ -66,12 +66,17 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		kind: 'secret',
 		group: 'Photos'
 	},
-	'slideshow.album': {
-		label: 'Album',
-		hint: 'Which album the frame shows. Per-device is the usual case — each person gets their own.',
+	'slideshow.albums': {
+		label: 'Albums',
+		hint:
+			'Which albums the frame shows, by album ID — the ID in the album\'s own Immich address, ' +
+			'not its name. Separate several with commas, or use "shared" for every album shared ' +
+			'with this frame. Per-device is the usual case — each person gets their own. Leave it ' +
+			'unset and the frame shows photos its own Immich account owns, which is nothing at all ' +
+			'if the photos were shared with it rather than uploaded by it.',
 		kind: 'text',
 		group: 'Photos',
-		example: 'Family'
+		example: '67c9021a-0000-0000-0000-000000000000'
 	},
 	'slideshow.interval': {
 		label: 'Photo interval',
@@ -84,7 +89,7 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		label: 'Slideshow address',
 		hint:
 			'The full slideshow address the frame opens, query string and all. Leave it unset ' +
-			'unless you know you need something other than the album above.',
+			'unless you know you need something other than the albums above.',
 		kind: 'url',
 		group: 'Photos'
 	},

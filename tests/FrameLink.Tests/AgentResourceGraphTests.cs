@@ -197,14 +197,17 @@ public sealed class AgentResourceGraphTests
         // which — `pkg.git` — open question 3's adopted reading deletes, because `xvf_host` arrives
         // as a pinned checksum-verified artifact rather than a clone and guide 10's other use of
         // git went with the embedded app. That leaves 78 implementable entries, all of them here.
-        // The 79th shipped resource is `agent.device-name`, which is *not* in the catalog: the
-        // display name the Fleet Manager assigns at adoption, which the cross-guide section never
-        // enumerated. 78 catalog entries plus that one is the arithmetic.
-        Assert.Equal(79, graph.Count);
+        // Two shipped resources are *not* in the catalog: `agent.device-name`, the display name the
+        // Fleet Manager assigns at adoption, which the cross-guide section never enumerated; and
+        // `kiosk.config.albums`, which scopes what the slideshow selects from and which neither
+        // guide 9's Compose file nor the catalog ever had — a gap the frame proved by finding no
+        // photos at all. 78 catalog entries plus those two is the arithmetic.
+        Assert.Equal(80, graph.Count);
 
         var names = graph.Ordered.Select(resource => resource.Name).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(PackageResource.Prefix + "git", names);
         Assert.Contains("agent.device-name", names);
+        Assert.Contains("kiosk.config.albums", names);
         Assert.Equal([AdoptionResource.ResourceName], graph.Find(HostnameResource.ResourceName)!.DependsOn);
         Assert.Equal(
             [CpuGovernorUnitResource.ResourceName],
@@ -296,10 +299,19 @@ public sealed class AgentResourceGraphTests
         // resource disappears". Guide 10's other use of git went with the embedded app.
         var excluded = new[] { PackageResource.Prefix + "git" };
 
-        // Not in the document: the display name the Fleet Manager assigns at adoption. The
+        // Not in the document, and both named individually so neither can widen quietly.
+        //
+        // `agent.device-name` — the display name the Fleet Manager assigns at adoption. The
         // cross-guide section enumerates the keypair, the version and the adoption record, and
         // never enumerated this one.
-        var extra = new[] { "agent.device-name" };
+        //
+        // `kiosk.config.albums` — which albums the slideshow draws from. The document's guide 9
+        // block is the v2 shape of guide 9's Compose file, and that file scoped selection not at
+        // all, so there was nothing to carry across. It is a gap in the document rather than a
+        // decision it took: measured on the mule 2026-08-16, a frame whose Immich account owns no
+        // assets and sees photos only through a shared album selected nothing, for ever, and said
+        // so about seven times a second.
+        var extra = new[] { "agent.device-name", "kiosk.config.albums" };
 
         var document = ResourceCatalogDocument.Ids();
         Assert.Equal(79, document.Count);
