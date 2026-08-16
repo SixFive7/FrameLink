@@ -579,7 +579,11 @@ _HARDWARE_FINDINGS.append(
             "too, each of which acted and rebooted in turn. 55 boots. Setting "
             "`repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its "
             "own default - was the whole fix. One further repair cycle and the frame reached "
-            "**81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel."
+            "**81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel "
+            "- and held it: eight consecutive converged censuses, telemetry sequence 1281 through "
+            "1288, one every five minutes across 35 minutes, online throughout, with **no reboot "
+            "between any of them**. That last part is the claim worth having, because everything "
+            "this frame did wrong tonight it did by rebooting."
         ),
         "answer": (
             "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` "
