@@ -1,0 +1,148 @@
+# FrameLink Fleet Manager — the LOCAL DEVELOPMENT stack (version2.md §3.1, §3.7, §3.8).
+#
+# This is the stack that runs on the author's own workstation under Docker Desktop, and it is
+# what replaces `dotnet run --project src/FrameLink.Control` as the way the Fleet Manager is
+# started day to day. It is a sibling of framelink.stack.yml, not a variant of it: that file
+# describes a deployment onto an existing estate — Traefik, Authelia, a certificate resolver, a
+# pinned /24, a firewall generator — and NONE of that estate exists on a workstation. Attempting
+# to carry those labels here would not degrade gracefully; a `traefik.enable: "true"` label with
+# no Traefik is inert noise, and an Authelia opt-out that opts out of nothing reads like security
+# that is present when it is not. So they are absent, deliberately, and the two files stay
+# separate rather than one file with a mode switch.
+#
+# Walkthrough with what to check after every step: docs/15-local-fleet-manager.md
+#
+# ── PLAIN HTTP, AND SAYING SO OUT LOUD ───────────────────────────────────────────────────────
+# There is no TLS here and no name — a frame reaches this Fleet Manager as http://<this host's
+# LAN address>:5199 and that is the whole address. The operator password therefore crosses the
+# LAN in the clear on sign-in, which is acceptable for a workstation on a home network and is not
+# acceptable anywhere else. That is one of the reasons this file is not the deployment file.
+#
+# ── WHY THE VOLUME IS EXTERNAL HERE TOO ──────────────────────────────────────────────────────
+# The temptation on a development machine is to bind-mount the data directory so the database is
+# an ordinary file you can look at. On Windows that is not merely untidy, it is unsafe, and it
+# was measured rather than assumed: Docker Desktop presents a Windows bind mount to the container
+# over 9p (drvfs), and SQLite's locking does not cross that boundary. With a process on the
+# Windows side holding BEGIN EXCLUSIVE on the database file, a write issued inside the container
+# completed in 50 ms, and afterwards the two sides disagreed about the contents — the container
+# saw a fleet setting the host could not see. Two writers, no mutual exclusion, no error message
+# anywhere. §3.3 makes identity the keypair, so the file this would eventually corrupt is the one
+# holding every adopted frame's binding.
+#
+# So the database lives in a named volume, which is an ext4 filesystem inside the Docker VM where
+# SQLite's locking works normally, and an existing database is IMPORTED into it once. `external:
+# true` for the same reason the deployment stack gives: Compose will never create, adopt or
+# remove a volume it does not own, so `docker compose down -v`, a wrong project name and a
+# mistyped command all leave it exactly where it was.
+#
+# ── THE MEDIA PORTS ARE PUBLISHED ONE-TO-ONE, AND ON WINDOWS THAT NEEDS A RESERVATION ────────
+# LiveKit runs with use_external_ip: false and advertises its own container address, so a call
+# completes only because the source port a frame observes is a port this host will deliver back.
+# Remap 50000-50199 and calls connect for nobody with no error anywhere.
+#
+# On this Windows host the range sits inside the ephemeral port range (netsh reports UDP dynamic
+# ports starting at 49152, 16384 wide), so any process can be holding a port in it when the
+# container starts. Measured: 198 of the 200 mappings bound, with 50005 taken by an svchost
+# socket on 127.0.0.1 and 50082 by Microsoft Teams — an ordinary ephemeral allocation, not a
+# fixed service, so WHICH two are missing changes. docs/15 step 3 reserves the range so the
+# allocator stops handing those ports out; that reservation is the fix, and narrowing the range
+# would not be one.
+#
+# ── PUBLISHING A PORT AND BEING REACHABLE ON IT ARE NOT THE SAME THING HERE ──────────────────
+# Nothing in this file can make the frames able to reach it, and on this workstation they cannot
+# until a firewall rule exists that has nothing to do with Compose. `.wslconfig` sets
+# networkingMode=mirrored, which puts Docker's published ports inside the WSL virtual machine,
+# and Windows applies a SEPARATE Hyper-V firewall to that machine whose default inbound action is
+# Block with only ICMP and mDNS allowed. Measured from a network namespace that is not this PC's
+# own: the Fleet Manager started by hand answered 10.20.30.200:5199 with 200 in three
+# milliseconds, while 10.20.30.200:5299 and 10.20.30.200:7880 — both published by Docker — timed
+# out. Loopback works throughout, which is what makes this so easy to miss. docs/15 step 2 has
+# the two New-NetFirewallHyperVRule commands and step 7 has the check that proves it.
+
+services:
+  framelink:
+    image: ${FRAMELINK_IMAGE:-framelink/fleet-manager:latest}
+    container_name: ${FRAMELINK_CONTAINER:-framelink-dev}
+    hostname: framelink-dev
+    restart: unless-stopped
+
+    # tini as PID 1: the Fleet Manager supervises livekit-server as a child (§3.7), so this
+    # container has a process tree rather than a process.
+    init: true
+
+    # The database is mid-write when a restart arrives, and a clean stop is what folds the
+    # write-ahead log back into framelink.db — which is what makes docs/15's backup a single file.
+    stop_grace_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+
+    cap_drop:
+      - ALL
+
+    environment:
+      # The one variable that must be set (§3.2, decision 43). Taken from THIS SHELL rather than
+      # from a file: an .env beside a compose file is a password on disk, which §1.2 forbids, and
+      # a development machine is not a place that rule gets relaxed. Compose refuses to render
+      # this file at all when it is unset, and says so by name.
+      FRAMELINK_OPERATOR_PASSWORD: ${FRAMELINK_OPERATOR_PASSWORD:?export it in this shell first - at least 24 characters - see docs/15-local-fleet-manager.md step 6}
+
+      FRAMELINK_DATA_DIR: /var/lib/fl-control
+
+      # Deliberately empty, and the emptiness is the correct value here rather than an omission.
+      # There is no reverse proxy on a workstation, so every request arrives from its real source
+      # address and §3.3's per-IP rate limiter should believe exactly nobody's X-Forwarded-For.
+      # The deployment stack's value belongs to the estate it was measured on and is inert here.
+      FRAMELINK_TRUSTED_PROXIES: ""
+
+      # The address frames dial for calls. Not derivable by the container: it knows the addresses
+      # it is bound to and nothing about how a frame on the LAN reaches this host. It must be the
+      # workstation's own LAN address, because media is published on the host directly.
+      FRAMELINK_LIVEKIT_PUBLIC_URL: ${FRAMELINK_LIVEKIT_PUBLIC_URL:-ws://${FRAMELINK_LAN_IP:-10.20.30.200}:7880}
+
+      # Unset means §3.5's alerts are evaluated and written to this container's log and nowhere
+      # else, which is the normal state for a development instance.
+      FRAMELINK_ALERT_WEBHOOK: ${FRAMELINK_ALERT_WEBHOOK:-}
+
+    volumes:
+      - framelink-data:/var/lib/fl-control
+
+    ports:
+      # The console and the /agent websocket. 5199 is not an arbitrary development port: it is
+      # the port the frame at 10.20.30.53 already has written into its own endpoints.json, and
+      # §4.3 persists that on install and never rediscovers it. Publishing the same host port is
+      # therefore the whole reason the cutover needs no change on any frame.
+      - "${FRAMELINK_BIND:-0.0.0.0}:${FRAMELINK_HTTP_PORT:-5199}:8080/tcp"
+      # LiveKit signalling: HTTP and WebSocket.
+      - "${FRAMELINK_BIND:-0.0.0.0}:7880:7880/tcp"
+      # LiveKit TCP media fallback, for a network that blocks UDP.
+      - "${FRAMELINK_BIND:-0.0.0.0}:7881:7881/tcp"
+      # Where call media actually flows. One-to-one, for the reason in the header.
+      - "${FRAMELINK_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  # An ordinary Compose-managed bridge with no pinned addressing. The deployment stack pins a
+  # /24, an IPv4 and a MAC because the estate it targets has a subnet registry and a firewall
+  # generator that read them; this machine has neither, and inventing an address here would
+  # collide with whatever Docker Desktop already handed out.
+  default:
+    name: ${FRAMELINK_NETWORK_NAME:-framelink-dev}
+    driver: bridge
+
+volumes:
+  framelink-data:
+    name: ${FRAMELINK_VOLUME:-framelink-data}
+    external: true

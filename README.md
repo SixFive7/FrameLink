@@ -107,7 +107,7 @@ Key design decisions and the reasoning behind them:
 
 ## Build Guide
 
-The build is split into one hardware guide and thirteen software guides, each stepping through validated instructions only. Guides 1–13 build a frame; guide 14 stands up the server the fleet reports to:
+The build is split into one hardware guide and fourteen software guides, each stepping through validated instructions only. Guides 1–13 build a frame; guides 14 and 15 stand up the server the fleet reports to — 15 is the one in daily use, and 14 is kept ready for the day the server deployment happens:
 
 1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
 2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
@@ -122,7 +122,8 @@ The build is split into one hardware guide and thirteen software guides, each st
 11. [GPIO button daemon](docs/11-gpio-button.md) — Python gpiozero → WebSocket toggle
 12. [systemd services & reliability](docs/12-systemd-and-reliability.md) — services, watchdog, SD protection
 13. [Multi-device deployment](docs/13-multi-device-deploy.md) — golden image, per-device identity, household rollout
-14. [Fleet Manager deployment](docs/14-fleet-manager-deployment.md) — the server: container image, Portainer stack behind Traefik, bundled call server, alerting, backup and rollback
+14. [Fleet Manager deployment](docs/14-fleet-manager-deployment.md) — the server: container image, Portainer stack behind Traefik, bundled call server, alerting, backup and rollback; **deferred until a release is cut**, and nothing in it is a pending action
+15. [The Fleet Manager on your workstation](docs/15-local-fleet-manager.md) — the development stack: the same image and the same bundled call server under Docker Desktop on Windows, plain HTTP, the two Windows problems that decide the design, and an idempotent cutover from `dotnet run`
 
 ## To Do
 

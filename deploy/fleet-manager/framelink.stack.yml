@@ -1,13 +1,33 @@
 # FrameLink Fleet Manager — production stack (version2.md §3.8, milestone Mn+2).
 #
-# Authored against the operator's PortainerCompose repository as it actually stands: an own /24
-# bridge from that repo's config/networks.yaml, a pinned IPv4 and MAC on its formula, a .254
-# gateway, single-homed, a dfw.rules label in that repo's §4 schema, and cross-stack reach only
-# through declared pinholes. Secrets are never defaulted here; the estate's own naming (the
-# certificate resolver, the entrypoints, Traefik's address) now carries a default, because those
-# are facts about that estate rather than guesses.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+#  INERT. NOTHING IN THIS FILE IS LIVE CONFIGURATION, AND NOTHING IN IT IS A PENDING ACTION.
 #
-# ── WHAT THE OPERATOR'S REPO SETTLES, AND WHAT IT DOES NOT ───────────────────────────────────
+#  Deployment onto the operator's server is DEFERRED until a release has been cut. Until that
+#  day this file is a record of a design that was worked out and reviewed, not an instruction to
+#  do anything: no value in it is applied anywhere, no placeholder in it is waiting to be filled
+#  in, and the /24, the gateway, the IPv4 and the MAC below are questions for deployment day
+#  rather than choices anybody needs to make now.
+#
+#  The Fleet Manager that is actually running lives on the author's workstation under Docker,
+#  described by framelink.dev.yml and docs/15-local-fleet-manager.md. That is the file to read
+#  and the one to change.
+#
+#  Everything below about Traefik, Authelia, the certificate resolver, the trusted-proxy address
+#  and the dfw.rules firewall block was derived from the operator's own repository and is kept
+#  BECAUSE it was expensive to work out and will be correct again when it is needed. It must be
+#  RE-VERIFIED against that repository on deployment day before any of it is believed: an estate
+#  moves, and a value that was true months ago and is quietly wrong now is worse than no value.
+# ═════════════════════════════════════════════════════════════════════════════════════════════
+#
+# Authored against the operator's PortainerCompose repository as it stood when this was written:
+# an own /24 bridge from that repo's config/networks.yaml, a pinned IPv4 and MAC on its formula,
+# a .254 gateway, single-homed, a dfw.rules label in that repo's §4 schema, and cross-stack reach
+# only through declared pinholes. Secrets are never defaulted here; the estate's own naming (the
+# certificate resolver, the entrypoints, Traefik's address) carries a default, because those were
+# facts about that estate rather than guesses.
+#
+# ── WHAT THE OPERATOR'S REPO SETTLED, AND WHAT IT LEFT OPEN ──────────────────────────────────
 # Settled, and applied below: entrypoints are `http` (:80) and `https` (:443, asDefault); the
 # certificate resolver is `letsencrypt`; Authelia is `authelia@file` bound to the HTTPS
 # ENTRYPOINT, so every HTTPS router inherits it and the opt-out idiom is an empty middlewares
@@ -15,18 +35,21 @@
 # the MAC formula is `02:42:` + the four IPv4 bytes in hex; `.100` is the main service and `.254`
 # is the gateway; `traefik.docker.network` is forbidden fleet-wide (validator F23).
 #
-# NOT settled, and left as variables on purpose: which /24 this stack gets. That registry is
+# Left open, and left open deliberately: which /24 this stack gets. That registry is
 # alphabetical-sequential, and `framelink` sorts between `fossflow` and `frigate` — so the
-# by-the-book slot is 172.16.8.0/24 and taking it renumbers 24 downstream stacks, Traefik's own
-# among them. The alternative is appending at 172.16.32.0/24 and accepting the alphabetical
-# break. That is the operator's call, not this file's. See stack.env.example.
+# by-the-book slot renumbers two dozen downstream stacks, Traefik's own among them, and the
+# alternative is appending at the end and accepting an alphabetical break. It is a deployment-day
+# question with a real cost either way, it is the operator's to answer then, and stack.env.example
+# sets out both options with every derived value already computed so that answering it is a
+# minute's work rather than an afternoon's. It is not an outstanding task.
 #
-# ── HOW TO DEPLOY ────────────────────────────────────────────────────────────────────────────
-#   1. docker volume create framelink-data          (once, on the Docker host)
-#   2. Portainer → Stacks → Add stack → Web editor → paste this file
-#   3. Fill in the environment variables from stack.env.example in Portainer's own
+# ── HOW IT WOULD BE DEPLOYED, WHEN THAT DAY COMES ────────────────────────────────────────────
+#   1. Re-verify every estate-derived value below against the operator's own repository.
+#   2. docker volume create framelink-data          (once, on the Docker host)
+#   3. Portainer → Stacks → Add stack → Web editor → paste this file
+#   4. Fill in the environment variables from stack.env.example in Portainer's own
 #      "Environment variables" panel. THE SECRETS ARE TYPED THERE AND NOWHERE ELSE.
-#   4. Deploy.
+#   5. Deploy.
 # Full walkthrough, with what to check after each step: docs/14-fleet-manager-deployment.md
 #
 # ── IF THIS STACK IS ADOPTED INTO THE PortainerCompose REPO ──────────────────────────────────
@@ -67,21 +90,15 @@
 #      observes being a port the host will deliver back. Remap 50000-50199 to anything else and
 #      calls connect for nobody, with no error anywhere.
 #
-# ── A HOST PORT COLLISION THE OPERATOR MUST RESOLVE FIRST ────────────────────────────────────
-# The operator's estate already runs a standalone `livekit` stack (172.16.14.0/24) publishing
-# 7880/tcp, 7881/tcp and 50000-50060/udp on this same Docker host, and its inline config already
-# carries an API key named `framelink`. Those are the exact host ports this stack publishes, so
-# deploying both is a bind failure, not a degradation — Docker refuses to start the second
-# claimant of 7880. There are two clean resolutions and they are the operator's to choose:
-#
-#   a. RETIRE the standalone livekit stack and let this one supervise its own call server. That
-#      is what guide 14 assumes and what makes the bundled binary worth having.
-#   b. KEEP the standalone stack and point this one at it with §3.7's escape hatch — set
-#      FRAMELINK_LIVEKIT_URL, FRAMELINK_LIVEKIT_API_KEY and FRAMELINK_LIVEKIT_API_SECRET, and
-#      delete the three `ports:` entries below, since nothing in this container then listens on
-#      them. The existing `framelink` key in that stack suggests this was the original intent.
-#
-# Nothing here picks for them, and the ports stay declared because (a) is the documented path.
+# ── WHAT ELSE MAY BE HOLDING THESE HOST PORTS, ON DEPLOYMENT DAY ─────────────────────────────
+# 7880, 7881 and 50000-50199 are published on the host directly, so anything else already bound
+# to them is a bind failure rather than a degradation — Docker refuses to start the second
+# claimant and says which port. That is a good failure: loud, immediate, and answered before
+# anything else is attempted. What is holding them, if anything, is a fact about that host on the
+# day, so it is checked then rather than assumed now, and this file does not model it. §3.7's
+# escape hatch is the answer if an existing call server is to be kept: set FRAMELINK_LIVEKIT_URL,
+# FRAMELINK_LIVEKIT_API_KEY and FRAMELINK_LIVEKIT_API_SECRET and delete the three `ports:`
+# entries below, since nothing in this container then listens on them.
 #
 # Signalling (7880) is the one piece that could go either way. It is published directly here,
 # which is what makes the LAN case work with no certificate and no name, exactly as guide 7 did.
@@ -135,12 +152,18 @@ services:
       # set to anything other than Traefik's real address, an attacker forges X-Forwarded-For and
       # presents a fresh source per request.
       #
-      # It now defaults, because the operator's repo settles it: Traefik is single-homed at
-      # 172.16.23.253 on the reverseproxy bridge and reaches every other stack by ROUTING to its
-      # pinned IP, with the source address preserved across the bridge — the whole cross-stack
-      # policy layer is IP-pair accepts, and the estate hardened it with strict reverse-path
-      # filtering precisely because that source address functions as a credential. So the address
-      # this container observes for a proxied request is Traefik's own.
+      # It defaults, because the operator's repo settled it when this was written: Traefik is
+      # single-homed at 172.16.23.253 on the reverseproxy bridge and reaches every other stack by
+      # ROUTING to its pinned IP, with the source address preserved across the bridge — the whole
+      # cross-stack policy layer is IP-pair accepts, and the estate hardened it with strict
+      # reverse-path filtering precisely because that source address functions as a credential.
+      # So the address this container observes for a proxied request is Traefik's own.
+      #
+      # INERT until deployment day, and RE-VERIFY IT THEN. This default is a fact about one
+      # estate at one moment; it is not applied anywhere today, and a stale value here is not a
+      # cosmetic error — the wrong address makes §3.3's per-IP budget forgeable by a header. The
+      # development stack sets this to the empty string, which is the correct value when there is
+      # no proxy at all. See framelink.dev.yml.
       FRAMELINK_TRUSTED_PROXIES: ${FRAMELINK_TRUSTED_PROXIES:-172.16.23.253}
 
       # ── Calling (§3.7) ───────────────────────────────────────────────────────────────────
@@ -167,11 +190,29 @@ services:
       - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
 
     networks:
+      # Both variables are unset and are meant to be. They are not blanks waiting to be filled in
+      # — they are the mechanical consequence of the /24 answered on deployment day, and
+      # stack.env.example already has both candidates fully computed. Compose refuses to render
+      # this file with either one empty, which is the correct behaviour: it means this file cannot
+      # be deployed by accident before that question has been answered.
       default:
         ipv4_address: ${FRAMELINK_IPV4}
         mac_address: ${FRAMELINK_MAC}
 
     labels:
+      # ══ EVERY LABEL IN THIS BLOCK IS INERT UNTIL DEPLOYMENT DAY ══════════════════════════
+      # A Traefik label with no Traefik reading it does nothing at all, and a dfw.rules block is
+      # only ever read by a generator in the operator's own repository that has never seen this
+      # file. So none of what follows is live, none of it is a pending action, and the
+      # development stack in framelink.dev.yml carries none of it — plain HTTP on a workstation
+      # has no router to label and no firewall generator to declare intent to.
+      #
+      # They are kept because the reasoning behind them is the expensive part and it will be
+      # correct again when it is needed. They must be RE-VERIFIED against the operator's own
+      # repository before they are believed: the entrypoint names, the resolver name, the
+      # Authelia binding and the pinhole schema are all facts about that estate, and an estate
+      # moves.
+      #
       # ── Traefik: the GUI ─────────────────────────────────────────────────────────────────
       # No `traefik.docker.network` label. It is not merely unnecessary here, it is forbidden
       # fleet-wide: every container in this estate is single-homed, so Traefik's backend pick is
@@ -217,7 +258,12 @@ services:
       # a fleet-wide disconnect nobody attributes to it.
       framelink.socket.keepalive: "ping every 25s, dead after 60s (FRAMELINK PingInterval/PongDeadline)"
 
-      # ── The stack's own firewall rules ────────────────────────────────────────────────────
+      # ── The stack's own firewall rules — INERT, AND STRUCTURALLY SO ───────────────────────
+      # This label is read by exactly one thing: the generator at scripts/dfw-gen.py in the
+      # operator's own repository, which walks `stacks/*.yml` there. It has never seen this file
+      # and will not until a copy of it lives at stacks/framelink.yml on deployment day. Nothing
+      # here is applied to any firewall today.
+      #
       # This is the operator's dfw schema verbatim, not a string of this project's invention: a
       # YAML block scalar, egress scoped as internet/lan/host/intra_stack/cross_stack, ingress as
       # published_ports/cross_stack/intra_stack, and an `audit-tier` / `audit-reason` trailer that
