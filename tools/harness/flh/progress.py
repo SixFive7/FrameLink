@@ -500,6 +500,14 @@ _HARDWARE_FINDINGS: list[dict[str, str]] = [
             "measured 1-step-per-decibel scale the nearest step at or above that is exactly 37. "
             "The file listing is the observation; the constant is the explanation it fits."
         ),
+        "sequel": (
+            "Later the same day, once audio.wireplumber.playback-volume finally executed and "
+            "succeeded, **`default-routes` appeared in that directory beside "
+            "`stream-properties`** - so WirePlumber now has a stored route volume where it had "
+            "none, written by the agent's own `wpctl set-volume`. Both halves of this finding are "
+            "therefore confirmed: it was applying a default because nothing was stored, and "
+            "setting it through wpctl is what stores it."
+        ),
         "whenUtc": "2026-08-16",
         "where": f"mule {MULE_USER}@{MULE_HOST}",
         "recordedIn": "reference/resource-catalog.md audio.wireplumber.playback-volume; commit 1ce597d",
@@ -550,6 +558,58 @@ _HARDWARE_FINDINGS: list[dict[str, str]] = [
         ),
     },
 ]
+
+_HARDWARE_FINDINGS.append(
+    {
+        "id": "a-zero-countdown-reboots-the-frame-before-wireplumber-has-a-sink",
+        "question": (
+            "With the ordering corrected, audio.wireplumber.playback-volume ran on hardware for "
+            "the first time - and failed every cycle: `wpctl get-volume @DEFAULT_AUDIO_SINK@` "
+            "answered an empty string and `wpctl set-volume` was refused with **\"Translate ID "
+            "error: '-1' is not a valid ID (returned by default-nodes-api)\"**. Is "
+            "@DEFAULT_AUDIO_SINK@ simply the wrong way to address the sink on this frame?"
+        ),
+        "measured": (
+            "**No, and the first answer to this was wrong.** The refusal is real but it is a "
+            "symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` "
+            "was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had "
+            "settled far enough to have a default sink, so the token had nothing to translate to. "
+            "The fast cycle then fed itself: the login session never finished starting, which put "
+            "session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift "
+            "too, each of which acted and rebooted in turn. 55 boots. Setting "
+            "`repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its "
+            "own default - was the whole fix. One further repair cycle and the frame reached "
+            "**81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel."
+        ),
+        "answer": (
+            "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` "
+            "now answers `Volume: 1.00`, PCM,0 reads `60 [100%] [0.00dB] [on]` and holds across a "
+            "boot for the first time in this project's history, and PCM,1 reads the same."
+        ),
+        "rulesOut": (
+            "Renaming the sink, addressing it by id or node.name, a config fragment, and "
+            "api.alsa.soft-mixer - none of them is needed. It also rules out reading a repair "
+            "failure on a fast-cycling frame as a fact about the repair: three of the four "
+            "resources that looked broken here were only ever being asked too early."
+        ),
+        "consistentWith": (
+            "The finding above, and it closes the loop on it. Before the repair succeeded, "
+            "~/.local/state/wireplumber/ held only `stream-properties` - no stored route volume, "
+            "so a default was being applied. **After the first successful `wpctl set-volume`, "
+            "`default-routes` appeared in that directory.** That is decision 80's stated reasoning "
+            "confirmed on hardware: setting the volume *through* WirePlumber is what makes it "
+            "persist a stored one, so the value now survives a boot by WirePlumber's own "
+            "mechanism rather than by the agent winning a race against it."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}",
+        "recordedIn": (
+            "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's "
+            "ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim "
+            "in its `change` field while it was failing"
+        ),
+    }
+)
 
 #: The durable artifacts a session starting from nothing needs, and what each one is *for*.
 #: The progress file is deliberately not the specification; it is the pointer to it.
