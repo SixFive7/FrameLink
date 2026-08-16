@@ -54,12 +54,23 @@ internal sealed class ReconcileHarness : IDisposable
         Hub = new AgentStatusHub(AgentStatusFactory.Starting());
         Countdown = new RebootCountdown(Clock);
 
+        // Wrapped exactly as AgentHost wraps it (decision 79), so no test drives a boundary a frame
+        // does not have. Boundary stays the inner one, so Crossings still counts reboots that
+        // actually happened rather than ones that were asked for.
+        Floor = new RebootFloor(
+            Boundary,
+            Journal,
+            Clock,
+            Log,
+            options.RebootFloorCount,
+            options.RebootFloorWindow);
+
         Loop = new ReconcileLoop(new ReconcileServices
         {
             Graph = Graph,
             Journal = Journal,
             Boot = Boot,
-            Reboots = Boundary,
+            Reboots = Floor,
             Countdown = Countdown,
             Telemetry = Telemetry,
             Hub = Hub,
@@ -81,6 +92,9 @@ internal sealed class ReconcileHarness : IDisposable
     public MutableBootIdentity Boot { get; }
 
     public InProcessRebootBoundary Boundary { get; }
+
+    /// <summary>The device-level reboot floor the loop actually crosses through (decision 79).</summary>
+    public RebootFloor Floor { get; }
 
     public ReconcileJournal Journal { get; }
 
@@ -184,7 +198,7 @@ internal sealed class RecordingTelemetry : IReconcileTelemetry
 /// </remarks>
 internal sealed class ScriptedResource : IResource
 {
-    private readonly string _desired;
+    private string _desired;
     private string _observed;
 
     public ScriptedResource(string name, string desired, string observed, params string[] dependsOn)
@@ -210,6 +224,34 @@ internal sealed class ScriptedResource : IResource
     public bool RevertedAtBoot { get; set; }
 
     /// <summary>
+    /// When true, the value survives exactly one observation after each Act and is put back
+    /// immediately afterwards — <b>WirePlumber's shape</b>, and the livelock's.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Deliberately different from <see cref="RevertedAtBoot"/>, and the difference is the whole
+    /// defect. A value reverted <i>before</i> the post-boot verify makes the verify fail, spends an
+    /// attempt and walks §2.5's ladder to an escalation — that case has been covered since
+    /// <c>AgentRebootBoundaryTests</c> was written. A value reverted <i>after</i> the verify makes
+    /// the verify <b>pass</b>: the pass is a success, the ledger is cleared, the attempt counter goes
+    /// back to nothing, and the next pass finds fresh drift with no memory that any of this has
+    /// happened before. Measured on the frame as ~25 reboots in eleven minutes with the counter
+    /// never past <c>1/3</c>.
+    /// </para>
+    /// <para>
+    /// One observation rather than a timer because that is exactly what the boot ordering produces:
+    /// <c>fl-agent</c> verifies at boot+10 s, the login session starts a fraction of a second later,
+    /// and WirePlumber applies its own device volume once it is up.
+    /// </para>
+    /// </remarks>
+    public bool PutBackAfterVerify { get; set; }
+
+    /// <summary>How many times the value has been put back after surviving a verify.</summary>
+    public int PutBacks { get; private set; }
+
+    private bool _holdsOneReading;
+
+    /// <summary>
     /// When true, Observe cannot see anything at all — the Fleet Manager's shape (§2.6).
     /// </summary>
     /// <remarks>
@@ -233,10 +275,21 @@ internal sealed class ScriptedResource : IResource
                 "the Fleet Manager has not answered"));
         }
 
+        var reading = _observed;
+
+        if (_holdsOneReading)
+        {
+            // This reading is the verify, and it passes. The other owner gets its turn the instant
+            // afterwards, which is what every later observation sees.
+            _holdsOneReading = false;
+            _observed = "put-back-by-someone-else";
+            PutBacks++;
+        }
+
         return ValueTask.FromResult(new ResourceObservation(
-            string.Equals(_desired, _observed, StringComparison.Ordinal),
+            string.Equals(_desired, reading, StringComparison.Ordinal),
             _desired,
-            _observed));
+            reading));
     }
 
     public ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
@@ -245,6 +298,7 @@ internal sealed class ScriptedResource : IResource
         if (!ActHasNoEffect)
         {
             _observed = _desired;
+            _holdsOneReading = PutBackAfterVerify;
         }
 
         return ValueTask.FromResult(new ResourceAction(
@@ -263,4 +317,14 @@ internal sealed class ScriptedResource : IResource
 
     /// <summary>Puts this resource out of sync from outside the loop — ordinary drift.</summary>
     public void Drift() => _observed = "drifted-again";
+
+    /// <summary>
+    /// Changes what this resource <i>wants</i> — a desired value pushed from the Fleet Manager.
+    /// </summary>
+    /// <remarks>
+    /// §2.6 calls this conflict drift too, and it is the half that must never accumulate towards a
+    /// give-up: the value did not move, the goalposts did, and an operator is entitled to move them
+    /// as often as they like.
+    /// </remarks>
+    public void Retarget(string desired) => _desired = desired;
 }

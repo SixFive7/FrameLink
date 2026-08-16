@@ -73,6 +73,53 @@ public sealed record ResourceLedgerEntry
     /// </remarks>
     public bool EscalationNotified { get; init; }
 
+    /// <summary>
+    /// How many times in a row a value that had been observed correct came back wrong — §2.6's
+    /// <b>conflict drift</b> (decision 78).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The one thing the ladder could not previously remember.</b> Every other counter here is
+    /// about a repair that never worked; this one is about a repair that <i>did</i> work and was
+    /// then undone. Without it the two are indistinguishable, because the successful verify clears
+    /// the ledger and the next pass starts from nothing — which is precisely how a frame reboots
+    /// for ever while every individual pass reports success (measured: ~25 reboots in eleven
+    /// minutes, attempt counter never past 1 of 3).
+    /// </para>
+    /// <para>
+    /// <b>Consecutive, not cumulative.</b> A value that holds for
+    /// <see cref="ReconcileOptions.ConflictHold"/> clears it, so an ordinary one-off repair — a
+    /// package postinst rewriting a file, an operator correcting something by hand — never
+    /// accumulates towards a give-up however many times it happens over a frame's life. What does
+    /// accumulate is a value that will not stay put.
+    /// </para>
+    /// </remarks>
+    public int Reversions { get; init; }
+
+    /// <summary>
+    /// The expected value the last in-sync observation was made against, or null when this
+    /// resource is not currently holding one.
+    /// </summary>
+    /// <remarks>
+    /// <b>The discriminator, and the reason this is a string rather than a flag.</b> §2.6 names two
+    /// different things conflict drift: a change that keeps returning after correction, and a
+    /// desired-value change pushed from the Fleet Manager. Only the first is a fight. An operator
+    /// who lowers <c>audio.playbackVolume</c> three times while tuning it produces three
+    /// drift-after-convergence events that are all entirely legitimate, and a counter that could
+    /// not tell them apart would escalate their frame for using the product as designed. Comparing
+    /// the expectation separates the two exactly: the value moved, or the goalposts did.
+    /// </remarks>
+    public string? HeldExpected { get; init; }
+
+    /// <summary>When the current unbroken run of in-sync observations began.</summary>
+    /// <remarks>
+    /// Read only against <see cref="ReconcileOptions.ConflictHold"/>, to decide whether a value has
+    /// held long enough to forgive the reversions before it. A timestamp rather than a pass count
+    /// because passes are not a clock: after a reboot the loop runs the next pass immediately with
+    /// no wait at all, so "in sync on two consecutive passes" can be two readings a millisecond
+    /// apart, which a value being reverted by a session that has not started yet would satisfy.
+    /// </remarks>
+    public DateTimeOffset? HeldSinceUtc { get; init; }
 
     /// <summary>When the backoff expires and the next attempt is allowed.</summary>
     public DateTimeOffset? NextAttemptUtc { get; init; }
@@ -88,12 +135,33 @@ public sealed record ResourceLedgerEntry
 public sealed record ReconcileJournalState
 {
     private static readonly IReadOnlyList<ResourceLedgerEntry> NoEntries = [];
+    private static readonly IReadOnlyList<DateTimeOffset> NoReboots = [];
 
     /// <summary>The in-flight apply, if the machine went down mid-contract.</summary>
     public PendingApply? Pending { get; init; }
 
     /// <summary>Per-resource attempt and escalation history.</summary>
     public IReadOnlyList<ResourceLedgerEntry> Ledger { get; init; } = NoEntries;
+
+    /// <summary>
+    /// When this frame last requested each of its recent reboots — the whole state behind
+    /// <see cref="RebootFloor"/> (decision 79).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Device-level and deliberately not per resource.</b> Every other counter in this file is
+    /// keyed by resource, which is exactly why none of them can bound a reboot cycle that no
+    /// resource is failing: the ladder counts failures, and a livelock is made of successes. This
+    /// list counts the thing that actually wears the card out, and it is the same list whichever
+    /// resource asked.
+    /// </para>
+    /// <para>
+    /// It has to be durable for the obvious reason — the process does not survive the event it is
+    /// counting — and it is pruned to <see cref="ReconcileOptions.RebootFloorWindow"/> on every
+    /// write, so it is bounded by the floor rather than by the frame's age.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<DateTimeOffset> Reboots { get; init; } = NoReboots;
 
     /// <summary>The boot the loop last ran in, so a fresh boot can be announced (§4.1 events).</summary>
     public string? LastBootId { get; init; }

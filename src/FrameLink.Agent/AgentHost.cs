@@ -346,6 +346,24 @@ public sealed class AgentHost
                 Path.Combine(store.Root, KioskProcess.DirectoryName)),
         });
 
+        var reconcileOptions = new ReconcileOptions
+        {
+            // Read at each reboot, not here. The settings map is empty until the Fleet
+            // Manager has answered, and decision 48 leaves it as the only configuration
+            // source there is — so resolving once at startup would pin every frame to the
+            // built-in 60 s and quietly discard the operator's setting.
+            CountdownSource = () => CountdownDuration.Resolve(
+                Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey),
+                development),
+
+            // Decision 53's sibling of the line above, read the same way and for a sharper
+            // version of the same reason: the frame this one paces is mid-provision, so its
+            // settings are arriving for the first time while the loop is already running.
+            ProvisioningPaceSource = () => ProvisioningPace.Resolve(
+                Volatile.Read(ref _settings).GetValueOrDefault(ProvisioningPace.SettingKey),
+                development),
+        };
+
         var loop = new ReconcileLoop(new ReconcileServices
         {
             Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
@@ -385,29 +403,23 @@ public sealed class AgentHost
             Interlock = interlock,
             Journal = journal,
             Boot = boot,
-            Reboots = new SystemRebootBoundary(new SystemdControl(), _log),
+            // Decision 79. The floor wraps the boundary rather than sitting inside the loop, so it
+            // holds for every caller of the boundary and needs to know nothing about resources,
+            // attempts or escalations — which is the whole requirement, because the livelock it
+            // exists for is one where nothing is failing.
+            Reboots = new RebootFloor(
+                new SystemRebootBoundary(new SystemdControl(), _log),
+                journal,
+                _clock,
+                _log,
+                reconcileOptions.RebootFloorCount,
+                reconcileOptions.RebootFloorWindow),
             Countdown = countdown,
             Telemetry = outbox,
             Hub = hub,
             Clock = _clock,
             Log = _log,
-            Options = new ReconcileOptions
-            {
-                // Read at each reboot, not here. The settings map is empty until the Fleet
-                // Manager has answered, and decision 48 leaves it as the only configuration
-                // source there is — so resolving once at startup would pin every frame to the
-                // built-in 60 s and quietly discard the operator's setting.
-                CountdownSource = () => CountdownDuration.Resolve(
-                    Volatile.Read(ref _settings).GetValueOrDefault(CountdownDuration.SettingKey),
-                    development),
-
-                // Decision 53's sibling of the line above, read the same way and for a sharper
-                // version of the same reason: the frame this one paces is mid-provision, so its
-                // settings are arriving for the first time while the loop is already running.
-                ProvisioningPaceSource = () => ProvisioningPace.Resolve(
-                    Volatile.Read(ref _settings).GetValueOrDefault(ProvisioningPace.SettingKey),
-                    development),
-            },
+            Options = reconcileOptions,
         })
         {
             DeviceId = identity.DeviceId,

@@ -154,6 +154,24 @@ public sealed record ReconcileServices
 /// schedules another pass after an escalation, because that tick is the only thing that can notice
 /// a budget a retry has reset — see <see cref="EndsTheLoop"/>.
 /// </para>
+/// <para>
+/// <b>A repair that works and does not last is a different failure from one that never works
+/// (decision 78).</b> Everything above counts attempts, and an attempt counter can only ever count
+/// <i>failures</i> — so a change that applies, verifies across a reboot, and is undone afterwards by
+/// a second owner leaves it nothing to count. Measured on the frame: a mixer value put back by the
+/// login session a fraction of a second after the post-boot verify read it, with the verify winning
+/// that race most boots and clearing the ledger every time it did. The loop therefore keeps a second
+/// counter with the opposite lifetime — <see cref="ResourceLedgerEntry.Reversions"/>, which survives
+/// a successful verify and is cleared only by a value that genuinely holds — and treats a run of
+/// them as §2.6's <b>conflict drift</b>: maximally serious, not acted on again, straight to rung 2.
+/// See <see cref="NoteDrift"/> and <see cref="GiveUpOnConflictAsync"/>.
+/// </para>
+/// <para>
+/// <b>And underneath all of it, a floor that counts nothing but reboots</b> —
+/// <see cref="RebootFloor"/>, decision 79. It is not in this class and shares no state with the
+/// ladder, because a safety net keyed on the same fact as the thing it is protecting is not a
+/// safety net.
+/// </para>
 /// </remarks>
 public sealed class ReconcileLoop
 {
@@ -236,10 +254,41 @@ public sealed class ReconcileLoop
             {
                 Attempts = 0,
                 NextAttemptUtc = null,
+
+                // Decision 78's counter is cleared by a retry for the same reason the attempts
+                // are, and leaving it would be worse than pointless: a resource carrying its
+                // conflict count into the next pass re-escalates before it is ever acted on, so
+                // the retry would visibly do nothing on exactly the frame it was pressed for —
+                // which is the failure decision 75 records at length.
+                Reversions = 0,
+                HeldExpected = null,
+                HeldSinceUtc = null,
             });
         });
 
+        ForgetReboots();
+
         _services.Log.Info($"{resource}: the attempt budget was reset by the Fleet Manager.");
+    }
+
+    /// <summary>
+    /// Clears the device's reboot history — decision 79's floor, reset by the same press.
+    /// </summary>
+    /// <remarks>
+    /// It lives here rather than on <see cref="RebootFloor"/> because the journal is what both
+    /// read, and reaching through <see cref="ReconcileServices.Reboots"/> would mean type-testing an
+    /// interface for one implementation. A frame that has not reached the floor loses nothing by
+    /// this, and a frame that has is precisely the one whose retry has to work.
+    /// </remarks>
+    private void ForgetReboots()
+    {
+        if (_services.Journal.Read().Reboots.Count == 0)
+        {
+            return;
+        }
+
+        _services.Journal.Update(state => state with { Reboots = [] });
+        _services.Log.Info("The reboot floor was cleared: this frame may take a full window of reboots again.");
     }
 
     /// <summary>
@@ -275,6 +324,11 @@ public sealed class ReconcileLoop
 
         if (names is null)
         {
+            // The reboot floor is still cleared. A frame can be holding at decision 79's floor with
+            // nothing yet escalated — the refusal spends attempts one pass at a time — and that is
+            // exactly the moment an operator watching it reboot presses retry.
+            ForgetReboots();
+
             _services.Log.Info("The Fleet Manager asked this frame to try again; nothing had given up.");
             return [];
         }
@@ -606,18 +660,23 @@ public sealed class ReconcileLoop
         if (observation.InSync)
         {
             _services.Log.Info($"{resource.Name}: '{pending.Change}' survived the reboot.");
-            ClearLedger(resource.Name);
+            MarkHeld(resource.Name, observation.Expected);
         }
         else
         {
             _services.Log.Warn($"{resource.Name}: did not survive the reboot — {observation.Delta}.");
-            var failed = await RecordFailureAsync(
-                    resource,
-                    AttemptsWithin(pending.Attempt, _services.Options.AttemptBudget),
-                    observation.Delta,
-                    pending.Change,
-                    cancellationToken)
-                .ConfigureAwait(false);
+
+            var entry = NoteDrift(resource.Name, observation.Expected);
+
+            var failed = IsConflict(entry)
+                ? await GiveUpOnConflictAsync(resource, entry, observation, cancellationToken).ConfigureAwait(false)
+                : await RecordFailureAsync(
+                        resource,
+                        AttemptsWithin(pending.Attempt, _services.Options.AttemptBudget),
+                        observation.Delta,
+                        pending.Change,
+                        cancellationToken)
+                    .ConfigureAwait(false);
 
             if (failed.Kind.HasGivenUp())
             {
@@ -777,9 +836,15 @@ public sealed class ReconcileLoop
 
             if (observation.InSync)
             {
-                if (entry.Attempts > 0 || entry.Escalations > 0 || entry.NextAttemptUtc is not null)
+                // Written only when it would change something, so a converged frame does not
+                // rewrite its journal every five minutes for ever. The comparison is structural
+                // rather than a list of fields, because the list was the thing that would rot: the
+                // ladder's counters and decision 78's counters have opposite lifetimes and a
+                // hand-written condition would eventually forget one of them.
+                var held = Held(entry, observation.Expected);
+                if (held != entry)
                 {
-                    ClearLedger(resource.Name);
+                    _services.Journal.Update(state => ReconcileJournal.WithEntry(state, held));
                 }
 
                 Record(new ResourceStatus { Name = resource.Name, Kind = ResourceStatusKind.InSync });
@@ -805,6 +870,26 @@ public sealed class ReconcileLoop
                 });
 
                 result = Worst(result, PassResult.Pending);
+                continue;
+            }
+
+            // §2.6's **conflict drift** (decision 78). Deliberately below the supervision clause
+            // above, so a kiosk process that is briefly not running because §2.10 is restarting it
+            // is not counted as somebody fighting the desired state — it is the one drift the frame
+            // already knows the cause of.
+            entry = NoteDrift(resource.Name, observation.Expected);
+
+            if (IsConflict(entry))
+            {
+                var conflict = await GiveUpOnConflictAsync(resource, entry, observation, cancellationToken)
+                    .ConfigureAwait(false);
+
+                Record(conflict);
+                (gaveUp ??= []).Add(resource.Name);
+
+                stopped = true;
+                acted = true;
+                result = Worst(result, PassResult.Escalated);
                 continue;
             }
 
@@ -1117,7 +1202,7 @@ public sealed class ReconcileLoop
                 if (after.InSync)
                 {
                     _services.Log.Info($"{resource.Name}: in sync after '{change}', verified across a reboot.");
-                    ClearLedger(resource.Name);
+                    MarkHeld(resource.Name, after.Expected);
 
                     return await FinishAsync(
                         PassResult.Rebooted,
@@ -1138,8 +1223,13 @@ public sealed class ReconcileLoop
                 }
 
                 _services.Log.Warn($"{resource.Name}: '{change}' did not survive the reboot — {after.Delta}.");
-                var failed = await RecordFailureAsync(resource, attempt, after.Delta, change, cancellationToken)
-                    .ConfigureAwait(false);
+
+                var reverted = NoteDrift(resource.Name, after.Expected);
+
+                var failed = IsConflict(reverted)
+                    ? await GiveUpOnConflictAsync(resource, reverted, after, cancellationToken).ConfigureAwait(false)
+                    : await RecordFailureAsync(resource, attempt, after.Delta, change, cancellationToken)
+                        .ConfigureAwait(false);
 
                 return await FinishAsync(
                     failed.Kind.HasGivenUp() ? PassResult.Escalated : PassResult.Rebooted,
@@ -1527,10 +1617,162 @@ public sealed class ReconcileLoop
         }
     }
 
-    private void ClearLedger(string resource) =>
+    /// <summary>
+    /// Records that this resource is currently holding <paramref name="expected"/>, clearing the
+    /// ladder and keeping decision 78's history.
+    /// </summary>
+    /// <remarks>
+    /// <b>This replaced a method that cleared the whole entry, and that clearing was the livelock.</b>
+    /// A successful verify wiped every trace the resource had ever been repaired, so the next pass
+    /// began from nothing and the loop had no way of telling a value that had never converged from
+    /// one that had converged and been taken away — which is the difference between drift and
+    /// §2.6's conflict drift, and the reason a frame could reboot indefinitely with its attempt
+    /// counter never passing <c>1/3</c>. What is cleared is exactly the ladder: attempts,
+    /// escalations, the notification flag, the delta, the last change and the backoff. What is kept
+    /// is how many times this value has already been put back.
+    /// </remarks>
+    private void MarkHeld(string resource, string expected) =>
         _services.Journal.Update(state => ReconcileJournal.WithEntry(
             state,
-            new ResourceLedgerEntry { Resource = resource }));
+            Held(ReconcileJournal.EntryFor(state, resource), expected)));
+
+    /// <summary>One ledger entry as an in-sync observation of <paramref name="expected"/> leaves it.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="ResourceLedgerEntry.HeldSinceUtc"/> is when the run began, not when it was last
+    /// seen</b> — so a value observed correct on twenty consecutive passes keeps the timestamp of
+    /// the first of them, and <see cref="ReconcileOptions.ConflictHold"/> measures the whole run
+    /// rather than the gap between two readings. Written the other way the hold could never be
+    /// reached and a reversion count could never be forgiven.
+    /// </para>
+    /// <para>
+    /// A changed expectation starts a new run, because the frame has not yet seen the <i>new</i>
+    /// value hold for anything.
+    /// </para>
+    /// </remarks>
+    private ResourceLedgerEntry Held(ResourceLedgerEntry entry, string expected)
+    {
+        var now = _services.Clock.UtcNow;
+        var since = entry.HeldSinceUtc is { } began
+            && string.Equals(entry.HeldExpected, expected, StringComparison.Ordinal)
+                ? began
+                : now;
+
+        return new ResourceLedgerEntry
+        {
+            Resource = entry.Resource,
+            Reversions = entry.Reversions > 0 && now - since >= _services.Options.ConflictHold
+                ? 0
+                : entry.Reversions,
+            HeldExpected = expected,
+            HeldSinceUtc = since,
+        };
+    }
+
+    /// <summary>
+    /// Counts a <b>reversion</b> if this drift is one, and answers with the entry as it now stands.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Called from all three places a drift can be discovered</b> — the post-boot verify in
+    /// <see cref="ResumePendingAsync"/>, the in-process verify in <see cref="CrossAndVerifyAsync"/>,
+    /// and the ordinary walk. That is not tidiness; it is what makes the bound hold. The frame's
+    /// post-boot verify races the login session by a margin decision 65 measured at 0.03–0.7 s, so
+    /// which of those three finds the drift is a coin flip, and a rule implemented in only one of
+    /// them would count on some cycles and not others.
+    /// </para>
+    /// <para>
+    /// <b>The two things §2.6 calls conflict drift are separated here rather than conflated.</b> A
+    /// value this frame observed correct and is now observing wrong, against an expectation that has
+    /// <i>not moved</i>, is a reversion — something put it back. A value whose expectation has moved
+    /// is a desired-value change pushed from the Fleet Manager, which §2.6 names in the same
+    /// sentence and which must never accumulate towards a give-up: an operator tuning
+    /// <c>audio.playbackVolume</c> would otherwise stop their own frame for using the product as
+    /// designed.
+    /// </para>
+    /// <para>
+    /// <b>The hold is cleared either way</b>, so one episode of drift is counted once however many
+    /// passes observe it before it is repaired.
+    /// </para>
+    /// </remarks>
+    private ResourceLedgerEntry NoteDrift(string resource, string expected)
+    {
+        var entry = ReconcileJournal.EntryFor(_services.Journal.Read(), resource);
+
+        if (entry.HeldExpected is null)
+        {
+            return entry;
+        }
+
+        var updated = string.Equals(entry.HeldExpected, expected, StringComparison.Ordinal)
+            ? entry with
+            {
+                Reversions = entry.Reversions + 1,
+                HeldExpected = null,
+                HeldSinceUtc = null,
+            }
+            : entry with { HeldExpected = null, HeldSinceUtc = null };
+
+        _services.Journal.Update(state => ReconcileJournal.WithEntry(state, updated));
+
+        return updated;
+    }
+
+    /// <summary>Whether this resource has crossed §2.6's conflict-drift threshold.</summary>
+    private bool IsConflict(ResourceLedgerEntry entry) =>
+        _services.Options.ConflictThreshold > 0
+        && entry.Reversions >= _services.Options.ConflictThreshold;
+
+    /// <summary>
+    /// Stops touching a resource something else keeps changing back — §2.6's "maximally serious".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Straight to §2.5 rung 2 with the budget declared spent, rather than another turn of the
+    /// ladder. The repair demonstrably <i>works</i> — it was applied and verified across a reboot,
+    /// more than once — and demonstrably does not last, so every remaining attempt buys exactly one
+    /// more reboot and one more revert. Decision 68 then stops the frame around it and a person is
+    /// told what is fighting it.
+    /// </para>
+    /// <para>
+    /// It reuses <see cref="RecordFailureAsync"/> rather than writing its own escalation so that
+    /// there is one place that notifies, one place that increments <c>Escalations</c>, and one
+    /// definition of the <c>Degraded</c>/<c>Escalated</c> split.
+    /// </para>
+    /// </remarks>
+    private async Task<ResourceStatus> GiveUpOnConflictAsync(
+        IResource resource,
+        ResourceLedgerEntry entry,
+        ResourceObservation observation,
+        CancellationToken cancellationToken)
+    {
+        _services.Log.Fail(string.Create(
+            CultureInfo.InvariantCulture,
+            $"{resource.Name}: applied and verified {entry.Reversions} times and put back every time. Something on this frame is fighting it."));
+
+        return await RecordFailureAsync(
+                resource,
+                _services.Options.AttemptBudget,
+                ConflictDelta(observation, entry.Reversions),
+                entry.Change ?? observation.Expected,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The delta an operator reads when the frame has stopped because something is fighting it.
+    /// </summary>
+    /// <remarks>
+    /// The ordinary expected-versus-observed is kept verbatim in front — §2.5 rung 2 requires it and
+    /// decision 70 requires it rendered rather than re-derived — and the sentence after it is the
+    /// part that changes what a person does. "Expected 60, observed 37" sends somebody looking for a
+    /// setting that will not apply; the same line followed by <i>it applied three times and was put
+    /// back three times</i> sends them looking for the other owner, which is where the fault is.
+    /// </remarks>
+    private static string ConflictDelta(ResourceObservation observation, int reversions) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{observation.Delta} — applied and verified {reversions} times and put back every time, so something else on this frame is changing it after the agent does");
 
     private async Task<PassOutcome> FinishAsync(
         PassResult result,

@@ -63,6 +63,86 @@ public sealed record ReconcileOptions
     /// </remarks>
     public int EscalationLimit { get; init; } = 2;
 
+    /// <summary>
+    /// How many consecutive reversions make a <b>conflict</b> rather than a coincidence — §2.6,
+    /// decision 78.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Three, and the first two are what stop this being trigger-happy.</b> A reversion is a
+    /// value this frame observed correct and later observed wrong <i>against an unchanged
+    /// expectation</i>, so a desired-value change pushed from the Fleet Manager is already excluded
+    /// before the count is reached. What is left is genuine drift, and §2.2 makes repairing that the
+    /// ordinary job: the first one must be repaired silently, and the second must be too, because a
+    /// package postinst that rewrites <c>config.txt</c> during an unattended upgrade can plausibly do
+    /// it twice in a night and the frame should simply fix it.
+    /// </para>
+    /// <para>
+    /// <b>The third cannot plausibly be a coincidence, and it is cheap.</b> Decision 64 measured a
+    /// drift-to-boot cycle at a mean of 21.0 s, so three reversions is about a minute of a cycle
+    /// that would otherwise run for ever — measured on the frame at ~25 reboots in eleven minutes,
+    /// indefinitely. Set against that, the cost of being wrong is one press: an escalation grants a
+    /// fresh budget on retry exactly as decision 67's does.
+    /// </para>
+    /// <para>
+    /// Zero or less disables the rule outright, which is what a test asserting the pre-decision-78
+    /// behaviour wants and what nothing on a frame should ever set.
+    /// </para>
+    /// </remarks>
+    public int ConflictThreshold { get; init; } = 3;
+
+    /// <summary>
+    /// How long a value must stay correct before the reversions before it are forgiven.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is what makes <see cref="ResourceLedgerEntry.Reversions"/> a run length rather than a
+    /// lifetime total</b>, and without it a frame would accumulate unrelated legitimate repairs over
+    /// months and eventually escalate for nothing.
+    /// </para>
+    /// <para>
+    /// Five minutes because it is <see cref="PassInterval"/> — the value has survived a whole
+    /// ordinary drift-detection sweep, which is the longest interval the frame ever goes without
+    /// looking. It is its own field rather than a read of that one so a test can shorten it, and it
+    /// deliberately does not track it: shortening the sweep to catch drift sooner should not also
+    /// make the frame quicker to forgive a fight.
+    /// </para>
+    /// </remarks>
+    public TimeSpan ConflictHold { get; init; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// How many reboots this frame may take inside <see cref="RebootFloorWindow"/> before it stops
+    /// rebooting at all — §2.4, decision 79.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A floor, not a diagnosis.</b> It knows nothing about resources, attempts or escalations,
+    /// and that is the entire point: it has to hold when nothing is failing, which is the state a
+    /// livelock presents as. <see cref="ConflictThreshold"/> is the diagnosis and stops the measured
+    /// fault inside a minute; this catches whatever the diagnosis does not model.
+    /// </para>
+    /// <para>
+    /// <b>120, sized against a whole first provision rather than against a rate.</b> The rates do not
+    /// separate: a bare provision of the 80-resource catalog runs at roughly 80 reboots in 30 minutes
+    /// (decision 64's measured 21.0 s mean), which is 2.6 per minute, and the measured livelock ran
+    /// ~25 reboots in eleven minutes, which is 2.3 per minute. A bound on frequency would therefore
+    /// have to stop one to stop the other. A bound on the <i>total inside a window long enough to
+    /// contain a whole provision</i> separates them cleanly, because a provision ends and a livelock
+    /// does not. 120 leaves 40 reboots of headroom over the catalog's 80 — enough for half of it to
+    /// need a second attempt — and a retry grants a fresh window.
+    /// </para>
+    /// </remarks>
+    public int RebootFloorCount { get; init; } = 120;
+
+    /// <summary>The window <see cref="RebootFloorCount"/> is counted over.</summary>
+    /// <remarks>
+    /// Six hours. A bare provision is ~30 minutes measured, and the slowest single Act anybody has
+    /// measured on the frame is 110–112 s — so even a catalog where every resource were that slow
+    /// provisions in 2.4 hours. Six contains that with better than 2× margin while still being short
+    /// enough that yesterday's provision does not count against today's repair.
+    /// </remarks>
+    public TimeSpan RebootFloorWindow { get; init; } = TimeSpan.FromHours(6);
+
     /// <summary>Wait before the second attempt on a resource.</summary>
     public TimeSpan InitialBackoff { get; init; } = TimeSpan.FromSeconds(30);
 
