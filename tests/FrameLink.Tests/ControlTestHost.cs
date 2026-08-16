@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading.Channels;
 using FrameLink.Control;
+using FrameLink.Control.Alerting;
 using FrameLink.Control.Authentication;
 using FrameLink.Control.LiveKit;
 using FrameLink.Control.Storage;
@@ -213,11 +214,17 @@ public sealed class ControlServer : IAsyncDisposable
     /// and an upstream that never answers, so every test gets working token minting and nothing
     /// in the suite ever downloads fifty megabytes or starts a child process.
     /// </param>
+    /// <param name="alerts">
+    /// Adjusts §3.5's alerting. The default is the shipped thresholds with no webhook, so the
+    /// suite never POSTs anywhere — and, like <paramref name="livekit"/>, it is never read from
+    /// the environment, which would make the suite's behaviour depend on whose machine it ran on.
+    /// </param>
     public static async Task<ControlServer> StartAsync(
         string? operatorPassword,
         Func<ControlOptions, ControlOptions>? configure = null,
         string? webRoot = null,
-        Func<LiveKitOptions, LiveKitOptions>? livekit = null)
+        Func<LiveKitOptions, LiveKitOptions>? livekit = null,
+        Func<AlertOptions, AlertOptions>? alerts = null)
     {
         var workspace = new TempWorkspace();
 
@@ -259,6 +266,12 @@ public sealed class ControlServer : IAsyncDisposable
             callOptions = livekit(callOptions);
         }
 
+        var alertOptions = new AlertOptions();
+        if (alerts is not null)
+        {
+            alertOptions = alerts(alertOptions);
+        }
+
         string[] args =
         [
             "--urls",
@@ -281,7 +294,9 @@ public sealed class ControlServer : IAsyncDisposable
             OperatorCredential.FromValue(operatorPassword),
             TimeProvider.System,
             callOptions,
-            UnreachableLiveKitDownload.Instance);
+            UnreachableLiveKitDownload.Instance,
+            alertOptions,
+            LogOnlyAlertSink.Instance);
 
         await app.StartAsync(TestContext.Current.CancellationToken);
 

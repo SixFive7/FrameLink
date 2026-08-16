@@ -23,14 +23,24 @@ namespace FrameLink.Control.Storage;
 public sealed class SqliteDatabase : IDisposable
 {
     /// <summary>
-    /// 3: the content-addressed package inventory tables beside §3.5's reports and events.
+    /// 4: <c>fleet_alerts</c>, the open-condition set §3.5's alerting is de-duplicated against.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// The schema is additive and every statement below is <c>IF NOT EXISTS</c>, so an existing
     /// volume moves up by starting the new container and nothing else. There is no migration step
     /// because there is nothing to migrate — no existing column has ever changed meaning.
+    /// </para>
+    /// <para>
+    /// <b>That additivity is what makes an image rollback safe</b>, and it is worth stating as a
+    /// property rather than leaving as a happy accident. An older Fleet Manager started against a
+    /// newer volume finds every table and column it knows about exactly where it left them, and
+    /// simply never reads the ones added after it — so the rollback path in the deployment guide
+    /// is "run the previous tag", with no dump, no downgrade script and no data loss. The rule
+    /// that keeps it true: <b>add tables and nullable columns; never repurpose or drop one.</b>
+    /// </para>
     /// </remarks>
-    private const int SchemaVersion = 3;
+    private const int SchemaVersion = 4;
 
     /// <summary>Key of the settings revision counter in <c>control_meta</c>.</summary>
     internal const string RevisionKey = "settings_revision";
@@ -244,6 +254,24 @@ public sealed class SqliteDatabase : IDisposable
 
             CREATE INDEX IF NOT EXISTS device_package_history_time
                 ON device_package_history (observed_utc);
+
+            -- One row per alert condition that is true RIGHT NOW (§3.5). Deliberately not a
+            -- history table: what is closed has already been written to the log, and a second copy
+            -- would need retention rules of its own. No foreign key to devices, because one of the
+            -- rules is about this server rather than about a frame, and because forgetting a frame
+            -- must clear its alerts through the ordinary path that tells somebody — not through a
+            -- cascade that deletes the row in silence.
+            CREATE TABLE IF NOT EXISTS fleet_alerts (
+                key          TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                severity     TEXT NOT NULL,
+                subject      TEXT NOT NULL,
+                detail       TEXT NOT NULL,
+                device_id    TEXT,
+                device_name  TEXT,
+                opened_utc   TEXT NOT NULL,
+                notified_utc TEXT
+            );
 
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('schema_version', '1');
             INSERT OR IGNORE INTO control_meta (key, value) VALUES ('settings_revision', '0');

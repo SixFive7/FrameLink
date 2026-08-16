@@ -1,5 +1,6 @@
 using System.Net;
 using FrameLink.Control.Agent;
+using FrameLink.Control.Alerting;
 using FrameLink.Control.Endpoints;
 using FrameLink.Control.Authentication;
 using FrameLink.Control.Imaging;
@@ -32,13 +33,20 @@ public static class ControlApp
     /// Where the pinned LiveKit release is fetched from. Real HTTPS when omitted; a test supplies
     /// its own so that the suite never reaches GitHub and never writes fifty megabytes.
     /// </param>
+    /// <param name="alerts">§3.5's alerting thresholds and channel. From the environment when omitted.</param>
+    /// <param name="sink">
+    /// Where notifications are delivered. Chosen from <paramref name="alerts"/> when omitted; a
+    /// test supplies its own so the suite never POSTs anywhere and can assert what was sent.
+    /// </param>
     public static WebApplication Build(
         string[] args,
         ControlOptions? options = null,
         OperatorCredential? credential = null,
         TimeProvider? clock = null,
         LiveKitOptions? livekit = null,
-        ILiveKitDownload? download = null)
+        ILiveKitDownload? download = null,
+        AlertOptions? alerts = null,
+        IAlertSink? sink = null)
     {
         options ??= ControlOptions.FromEnvironment();
         credential ??= OperatorCredential.FromEnvironment();
@@ -117,6 +125,28 @@ public static class ControlApp
 
         builder.Services.AddSingleton<LiveKitService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveKitService>());
+
+        // §3.5's alerting. The sink is chosen once, here, rather than by a branch inside the
+        // sweep: a Fleet Manager with no webhook is not a broken one, it is one whose delivery
+        // channel is the container log, and expressing that as a different implementation keeps
+        // FleetWatch with exactly one code path to test.
+        builder.Services.AddSingleton(alerts ?? AlertOptions.FromEnvironment());
+        builder.Services.AddSingleton<IAlertStore, SqliteAlertStore>();
+
+        if (sink is not null)
+        {
+            builder.Services.AddSingleton(sink);
+        }
+        else
+        {
+            builder.Services.AddSingleton<IAlertSink>(sp =>
+                sp.GetRequiredService<AlertOptions>().HasWebhook
+                    ? ActivatorUtilities.CreateInstance<WebhookAlertSink>(sp)
+                    : LogOnlyAlertSink.Instance);
+        }
+
+        builder.Services.AddSingleton<FleetWatch>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<FleetWatch>());
 
         if (options.TrustedProxies.Count > 0)
         {

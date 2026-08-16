@@ -1,0 +1,195 @@
+# FrameLink Fleet Manager — production stack (version2.md §3.8, milestone Mn+2).
+#
+# Authored to the PortainerCompose rules §3.8 names: an own /24 bridge taken from that repo's
+# config/networks.yaml, a pinned IPv4 and MAC, single-homed, a dfw.rules label, and cross-stack
+# reach only through declared pinholes. Every site-specific value is an environment variable with
+# no default, so this file carries no address, no secret and nothing that is true only here.
+#
+# ── HOW TO DEPLOY ────────────────────────────────────────────────────────────────────────────
+#   1. docker volume create framelink-data          (once, on the Docker host)
+#   2. Portainer → Stacks → Add stack → Web editor → paste this file
+#   3. Fill in the environment variables from stack.env.example in Portainer's own
+#      "Environment variables" panel. THE SECRETS ARE TYPED THERE AND NOWHERE ELSE.
+#   4. Deploy.
+# Full walkthrough, with what to check after each step: docs/14-fleet-manager-deployment.md
+#
+# ── WHY THE VOLUME IS `external` ─────────────────────────────────────────────────────────────
+# It holds the SQLite database, and that database holds every adopted frame's identity, settings
+# and call token. Losing it does not lose "some data" — it orphans the entire fleet, because §3.3
+# makes identity the keypair and a Fleet Manager that has forgotten a keypair sees that frame
+# reappear as a stranger in the adoption queue. An `external: true` volume is one Compose will
+# never create, never adopt and never remove: `docker compose down -v`, a Portainer "remove the
+# stack" with volumes ticked, and a mistyped stack name all leave it exactly where it was. The
+# cost is one command on first deploy, which is the cheapest insurance in this file.
+#
+# ── WHAT TRAEFIK CANNOT CARRY, AND WHAT IS DONE ABOUT IT ─────────────────────────────────────
+# Two things, and they fail in different ways:
+#
+#   1. THE AGENT WEBSOCKET can ride Traefik — it is an ordinary HTTP/1.1 Upgrade — but it must
+#      not meet Authelia. §3.8: "Authelia cannot sit in front of the agent route" because a frame
+#      is a machine with a keypair and no browser to complete an interactive SSO flow. So there
+#      are two routers on one service: the GUI router carries the Authelia middleware, and the
+#      /agent router carries none and authenticates by device keypair instead. Traefik's default
+#      priority is rule length, which already puts the longer /agent rule first; both priorities
+#      are stated explicitly anyway, because "it happens to sort correctly" is not a property to
+#      leave a fleet's connectivity resting on.
+#
+#   2. WEBRTC MEDIA cannot ride it at all. A reverse proxy terminates TCP; call media is UDP, and
+#      §3.7 calls that split unavoidable. So the UDP range and the TCP fallback are published on
+#      the host directly, one-to-one — the same shape guide 7's standalone stack used and guide 8
+#      validated end to end. One-to-one matters: LiveKit runs with `use_external_ip: false` and
+#      therefore advertises its own container address, which no frame on the LAN can route to, so
+#      connectivity is established from LiveKit outwards and depends on the source port a frame
+#      observes being a port the host will deliver back. Remap 50000-50199 to anything else and
+#      calls connect for nobody, with no error anywhere.
+#
+# Signalling (7880) is the one piece that could go either way. It is published directly here,
+# which is what makes the LAN case work with no certificate and no name, exactly as guide 7 did.
+# Routing it through Traefik as `wss://` is a supported alternative — add a third router for
+# PathPrefix(`/rtc`) and set FRAMELINK_LIVEKIT_PUBLIC_URL to the https origin — and it buys
+# encryption of the token exchange, not of the call, because the media still goes direct. That
+# trade belongs to Appendix B item 2 (cross-household connectivity), which is deferred within v2.
+
+services:
+  framelink:
+    image: ${FRAMELINK_IMAGE}
+    container_name: framelink
+    hostname: framelink
+    restart: unless-stopped
+
+    # tini as PID 1. The Fleet Manager supervises livekit-server as a child process (§3.7), so
+    # this container has a process tree rather than a process — and PID 1 in a container inherits
+    # every orphan on the host's behalf. .NET reaps the children it started itself; tini is what
+    # covers anything it did not, for the price of a 10 kB binary.
+    init: true
+
+    # The database is mid-write when a redeploy arrives, and the call server is a child that
+    # deserves to be asked before it is killed. Thirty seconds is far more than either needs and
+    # costs nothing on a graceful stop, which is the only case where it is spent.
+    stop_grace_period: 30s
+
+    security_opt:
+      - no-new-privileges:true
+
+    # Nothing in the image needs a capability the default set does not already grant. Stated
+    # rather than assumed, because §3.9's whole argument for image generation being affordable is
+    # that debugfs and mcopy work with no --privileged and no --cap-add, and a stack that quietly
+    # granted one would make that claim untestable in the place it actually runs.
+    cap_drop:
+      - ALL
+
+    environment:
+      # ── The one variable that must be set (§3.2, decision 43) ──────────────────────────────
+      # Supplied by Portainer's environment panel. Never in this file, never in the image.
+      FRAMELINK_OPERATOR_PASSWORD: ${FRAMELINK_OPERATOR_PASSWORD}
+
+      # ── Paths inside the container ────────────────────────────────────────────────────────
+      # The volume mount point. Everything precious is under it: framelink.db, the LiveKit
+      # binary and its generated configuration, and §3.9's generated images.
+      FRAMELINK_DATA_DIR: /var/lib/fl-control
+
+      # ── The per-IP rate limiter behind a reverse proxy (§3.3) ─────────────────────────────
+      # The registration endpoint is fully open and internet-exposed, and per-IP rate limiting is
+      # the only thing standing between it and unbounded noise. Behind Traefik every request
+      # arrives from Traefik, so without this the whole internet shares one budget — and with it
+      # set to anything other than Traefik's real address, an attacker forges X-Forwarded-For and
+      # presents a fresh source per request. It is therefore deliberately not defaulted.
+      FRAMELINK_TRUSTED_PROXIES: ${FRAMELINK_TRUSTED_PROXIES}
+
+      # ── Calling (§3.7) ───────────────────────────────────────────────────────────────────
+      # The address frames dial. Not derivable by the container: it knows the addresses it is
+      # bound to and nothing about how a frame on the other side of a bridge reaches it. On a LAN
+      # this is ws://<the Docker host's LAN address>:7880.
+      FRAMELINK_LIVEKIT_PUBLIC_URL: ${FRAMELINK_LIVEKIT_PUBLIC_URL}
+
+      # ── Alerting (§3.5, decision 22) ──────────────────────────────────────────────────────
+      # A Home Assistant webhook URL. Unset means alerts are evaluated and written to this
+      # container's log and nowhere else, which is a working deployment with a channel nobody
+      # reads — so it is listed here rather than left to be discovered.
+      FRAMELINK_ALERT_WEBHOOK: ${FRAMELINK_ALERT_WEBHOOK:-}
+
+    volumes:
+      - framelink-data:/var/lib/fl-control
+
+    ports:
+      # LiveKit signalling: HTTP and WebSocket. The half a reverse proxy could carry.
+      - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:7880:7880/tcp"
+      # LiveKit TCP media fallback, for a network that blocks UDP.
+      - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:7881:7881/tcp"
+      # Where call media actually flows. One-to-one, for the reason in the header.
+      - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
+
+    networks:
+      framelink:
+        ipv4_address: ${FRAMELINK_IPV4}
+        mac_address: ${FRAMELINK_MAC}
+
+    labels:
+      # ── Traefik: the GUI ─────────────────────────────────────────────────────────────────
+      traefik.enable: "true"
+      traefik.docker.network: ${FRAMELINK_NETWORK_NAME}
+
+      traefik.http.routers.framelink-gui.rule: Host(`${FRAMELINK_DOMAIN}`)
+      traefik.http.routers.framelink-gui.entrypoints: ${FRAMELINK_ENTRYPOINT:-websecure}
+      traefik.http.routers.framelink-gui.tls: "true"
+      traefik.http.routers.framelink-gui.tls.certresolver: ${FRAMELINK_CERT_RESOLVER}
+      traefik.http.routers.framelink-gui.middlewares: ${FRAMELINK_GUI_MIDDLEWARES}
+      traefik.http.routers.framelink-gui.service: framelink
+      traefik.http.routers.framelink-gui.priority: "10"
+
+      # ── Traefik: the device route, deliberately without Authelia (§3.8) ──────────────────
+      # A frame authenticates with its keypair over the frozen handshake (§4.2). There is no
+      # browser here to complete an interactive SSO flow, so an SSO middleware on this router
+      # would not make it more secure — it would make the fleet unable to connect at all.
+      traefik.http.routers.framelink-agent.rule: Host(`${FRAMELINK_DOMAIN}`) && PathPrefix(`/agent`)
+      traefik.http.routers.framelink-agent.entrypoints: ${FRAMELINK_ENTRYPOINT:-websecure}
+      traefik.http.routers.framelink-agent.tls: "true"
+      traefik.http.routers.framelink-agent.tls.certresolver: ${FRAMELINK_CERT_RESOLVER}
+      traefik.http.routers.framelink-agent.service: framelink
+      traefik.http.routers.framelink-agent.priority: "100"
+
+      traefik.http.services.framelink.loadbalancer.server.port: "8080"
+
+      # A frame's socket is expected to live for months. Traefik forwards a WebSocket upgrade
+      # with no configuration at all, and the only setting that could break one is an idle
+      # timeout on the entrypoint — which §3.5's 25-second ping/pong already keeps from ever
+      # being reached. Stated here so that a future entrypoint change is a decision rather than
+      # a fleet-wide disconnect nobody attributes to it.
+      framelink.socket.keepalive: "ping every 25s, dead after 60s (FRAMELINK PingInterval/PongDeadline)"
+
+      # ── The stack's own firewall rules, per §3.8 ──────────────────────────────────────────
+      # Cross-stack reach is by declared pinhole only. This stack needs exactly one inbound
+      # pinhole — Traefik to 8080 — and no outbound reach into any other stack's /24.
+      dfw.rules: ${FRAMELINK_DFW_RULES}
+
+    healthcheck:
+      # Repeated from the image so that an operator reading only the stack can see what "healthy"
+      # means here. §3.2: an unconfigured instance is healthy — it starts, serves, and explains
+      # itself. Marking it unhealthy would have an orchestrator restart the one page that says why.
+      test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        # The container log is a delivery channel for §3.5's alerts on a deployment with no
+        # webhook, so it is bounded rather than disabled: three files of ten megabytes is weeks
+        # of this server's output and cannot fill the disk the database is on.
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  framelink:
+    name: ${FRAMELINK_NETWORK_NAME}
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${FRAMELINK_SUBNET}
+
+volumes:
+  framelink-data:
+    name: ${FRAMELINK_VOLUME:-framelink-data}
+    external: true

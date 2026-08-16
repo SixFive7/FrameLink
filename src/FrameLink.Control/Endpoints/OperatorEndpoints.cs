@@ -1,5 +1,6 @@
 using System.Net;
 using FrameLink.Control.Agent;
+using FrameLink.Control.Alerting;
 using FrameLink.Control.Authentication;
 using FrameLink.Control.LiveKit;
 using FrameLink.Control.Storage;
@@ -51,6 +52,8 @@ public static class OperatorEndpoints
         app.MapGet("/api/livekit", GetLiveKitAsync);
         app.MapPost("/api/livekit/rotate", RotateLiveKitAsync);
         app.MapPost("/api/devices/{deviceId}/call-token", IssueCallTokenAsync);
+
+        app.MapGet("/api/alerts", GetAlertsAsync);
     }
 
     /// <summary>Turns a stored row into what the GUI renders.</summary>
@@ -836,6 +839,46 @@ public static class OperatorEndpoints
                 RotatedUtc = credential is { IssuedUtc.Ticks: > 0 } ? credential.IssuedUtc : clock.GetUtcNow(),
             },
             ControlJson.Default.LiveKitRotateResponse);
+    }
+
+    /// <summary>What is wrong with the fleet right now, and whether anybody was told (§3.5).</summary>
+    /// <remarks>
+    /// Reads the open set from the database rather than re-evaluating the rules, deliberately. The
+    /// console must show <i>what was delivered</i> — including <c>notifiedUtc</c> being null, which
+    /// is how an operator discovers that their webhook is refusing — and a fresh evaluation would
+    /// show conditions nobody has been told about yet as though they had been.
+    /// </remarks>
+    private static async Task<IResult> GetAlertsAsync(
+        IAlertStore alerts,
+        FleetWatch watch,
+        CancellationToken cancellationToken)
+    {
+        var open = await alerts.ListOpenAsync(cancellationToken).ConfigureAwait(false);
+        var options = watch.Options;
+
+        return Results.Json(
+            new AlertsResponse
+            {
+                Alerts = [.. open.Select(entry => new AlertView
+                {
+                    Key = entry.Alert.Key,
+                    Kind = entry.Alert.Kind,
+                    Severity = entry.Alert.Severity is AlertSeverity.Critical ? "critical" : "warning",
+                    Subject = entry.Alert.Subject,
+                    Detail = entry.Alert.Detail,
+                    DeviceId = entry.Alert.DeviceId,
+                    DeviceName = entry.Alert.DeviceName,
+                    OpenedUtc = entry.OpenedUtc,
+                    NotifiedUtc = entry.NotifiedUtc,
+                })],
+                DeliveryConfigured = options.HasWebhook,
+                WebhookUrl = options.WebhookUrl?.ToString(),
+                Problems = options.Problems(),
+                OfflineAfterMinutes = (int)options.OfflineAfter.TotalMinutes,
+                TokenExpiryWithinDays = (int)options.TokenExpiryWithin.TotalDays,
+                IntervalMinutes = (int)options.Interval.TotalMinutes,
+            },
+            ControlJson.Default.AlertsResponse);
     }
 
     /// <summary>Mints one frame a new call token, unconditionally.</summary>

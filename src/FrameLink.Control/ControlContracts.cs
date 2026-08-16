@@ -562,6 +562,70 @@ public sealed record LiveKitRotateResponse
     public required DateTimeOffset RotatedUtc { get; init; }
 }
 
+/// <summary>One alert condition that is open right now (§3.5).</summary>
+public sealed record AlertView
+{
+    /// <summary>Stable identity of the condition.</summary>
+    public required string Key { get; init; }
+
+    /// <summary>One of <c>device-offline</c>, <c>call-token-expiring</c>, <c>call-server-down</c>,
+    /// <c>device-halted</c>.</summary>
+    public required string Kind { get; init; }
+
+    /// <summary><c>warning</c> or <c>critical</c>.</summary>
+    public required string Severity { get; init; }
+
+    /// <summary>One line, fit to be a notification title.</summary>
+    public required string Subject { get; init; }
+
+    /// <summary>The detail behind it, in plain sentences.</summary>
+    public required string Detail { get; init; }
+
+    /// <summary>The frame this is about, when it is about one.</summary>
+    public string? DeviceId { get; init; }
+
+    /// <summary>That frame's name, when it has one.</summary>
+    public string? DeviceName { get; init; }
+
+    /// <summary>When this Fleet Manager first observed the condition.</summary>
+    public required DateTimeOffset OpenedUtc { get; init; }
+
+    /// <summary>When it was successfully delivered, or null while delivery is still failing.</summary>
+    public DateTimeOffset? NotifiedUtc { get; init; }
+}
+
+/// <summary>Everything the console renders about alerting.</summary>
+/// <remarks>
+/// <b>The bearer token is deliberately absent and must stay absent</b>, for the same reason
+/// <c>LiveKitStatusResponse</c> omits the API secret: a browser is not a place a credential
+/// belongs. The webhook URL is present because an operator diagnosing "why did nothing arrive"
+/// needs to see the address this server is actually using, and because a Home Assistant webhook
+/// URL is already reachable by anything on the household network.
+/// </remarks>
+public sealed record AlertsResponse
+{
+    /// <summary>The open conditions, oldest first.</summary>
+    public required IReadOnlyList<AlertView> Alerts { get; init; }
+
+    /// <summary>Whether notifications reach anywhere other than this server's log.</summary>
+    public required bool DeliveryConfigured { get; init; }
+
+    /// <summary>Where notifications are POSTed, or null for log-only.</summary>
+    public string? WebhookUrl { get; init; }
+
+    /// <summary>Anything an operator has to fix about alerting itself.</summary>
+    public required IReadOnlyList<string> Problems { get; init; }
+
+    /// <summary>How long a frame may be out of contact before it is alerted on, in minutes.</summary>
+    public required int OfflineAfterMinutes { get; init; }
+
+    /// <summary>How much life a call token must have left before it is alerted on, in days.</summary>
+    public required int TokenExpiryWithinDays { get; init; }
+
+    /// <summary>How often the rules are evaluated, in minutes.</summary>
+    public required int IntervalMinutes { get; init; }
+}
+
 /// <summary>A refused request, in a shape the GUI can render.</summary>
 public sealed record ApiError
 {

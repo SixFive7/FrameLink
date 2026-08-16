@@ -326,4 +326,46 @@ internal static partial class ControlLog
         string room,
         DateTimeOffset expires,
         string reason);
+
+    // §3.5's alerting. Warning rather than Information for an opened alert, because the container
+    // log IS the delivery channel on a deployment with no webhook configured — an operator
+    // grepping their logs has to be able to find these by level rather than by wording.
+
+    [LoggerMessage(
+        EventId = 1900,
+        Level = LogLevel.Warning,
+        Message = "ALERT {Kind} opened [{Key}]: {Subject} — {Detail}")]
+    public static partial void AlertOpened(
+        this ILogger logger,
+        string kind,
+        string key,
+        string subject,
+        string detail);
+
+    [LoggerMessage(
+        EventId = 1901,
+        Level = LogLevel.Information,
+        Message = "ALERT {Kind} cleared [{Key}]: {Subject}")]
+    public static partial void AlertCleared(this ILogger logger, string kind, string key, string subject);
+
+    [LoggerMessage(
+        EventId = 1902,
+        Level = LogLevel.Warning,
+        Message = "The alert receiver at {Url} answered {Status} for [{Key}]. The alert stays open "
+            + "and is delivered again on the next pass.")]
+    public static partial void AlertDeliveryRefused(this ILogger logger, string url, int status, string key);
+
+    [LoggerMessage(
+        EventId = 1903,
+        Level = LogLevel.Warning,
+        Message = "The alert receiver could not be reached for [{Key}]. The alert stays open and is "
+            + "delivered again on the next pass.")]
+    public static partial void AlertDeliveryFailed(this ILogger logger, Exception exception, string key);
+
+    [LoggerMessage(
+        EventId = 1904,
+        Level = LogLevel.Error,
+        Message = "An alert evaluation pass failed. The next pass tries again; nothing else in the "
+            + "Fleet Manager is affected.")]
+    public static partial void AlertSweepFailed(this ILogger logger, Exception exception);
 }

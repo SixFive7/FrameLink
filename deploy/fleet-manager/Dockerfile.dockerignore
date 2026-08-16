@@ -1,0 +1,47 @@
+# Build context filter for deploy/fleet-manager/Dockerfile.
+#
+# BuildKit reads `<dockerfile-path>.dockerignore` in preference to the context root's
+# `.dockerignore`, which is what lets this repository have a context filter for the Fleet Manager
+# image without imposing one on every other `docker build` run against the root.
+#
+# The context is the REPOSITORY ROOT, not this directory, because the image is built from source:
+# the publish needs src/, the committed wwwroot and the solution-level props files, and it needs
+# build/out — where the agent binaries the Fleet Manager serves are staged by the *other* build
+# path. That last one is the reason build/out is conspicuously not excluded here despite being
+# gitignored.
+
+# Version control history. Large, and nothing in the build reads it.
+.git
+.gitattributes
+
+# Intermediate and per-project output from the developer's own machine. Excluding these is
+# correctness, not tidiness: a project.assets.json restored on Windows with no RID, copied into
+# the build stage, makes `dotnet publish --runtime linux-x64` fail with NETSDK1047 "Assets file
+# doesn't have a target for 'net10.0/linux-x64'" — the same collision build/build.sh documents
+# from the other direction.
+**/bin
+**/obj
+artifacts
+
+# The GUI's source dependencies and its incremental cache. wwwroot is committed and is what the
+# image serves; node_modules is hundreds of megabytes of things the image build never opens,
+# because the publish runs with -p:FrameLinkBuildGui=false.
+**/node_modules
+**/.svelte-kit
+
+# Harness run artifacts: screenshots, journal captures, console dumps.
+tools/harness/runs
+**/__pycache__
+
+# Scratch and editor state.
+.vs
+.vscode
+.idea
+*.user
+
+# Documentation and images. Nothing in the container renders them, and docs/ carries the guide
+# screenshots, which are the single largest thing in the tree after .git.
+docs
+research
+reference
+*.md

@@ -107,7 +107,7 @@ Key design decisions and the reasoning behind them:
 
 ## Build Guide
 
-The build is split into one hardware guide and twelve software guides, each stepping through validated instructions only:
+The build is split into one hardware guide and thirteen software guides, each stepping through validated instructions only. Guides 1–13 build a frame; guide 14 stands up the server the fleet reports to:
 
 1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
 2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
@@ -122,6 +122,7 @@ The build is split into one hardware guide and twelve software guides, each step
 11. [GPIO button daemon](docs/11-gpio-button.md) — Python gpiozero → WebSocket toggle
 12. [systemd services & reliability](docs/12-systemd-and-reliability.md) — services, watchdog, SD protection
 13. [Multi-device deployment](docs/13-multi-device-deploy.md) — golden image, per-device identity, household rollout
+14. [Fleet Manager deployment](docs/14-fleet-manager-deployment.md) — the server: container image, Portainer stack behind Traefik, bundled call server, alerting, backup and rollback
 
 ## To Do
 
