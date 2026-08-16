@@ -318,3 +318,20 @@ export interface ApiErrorBody {
 	/** Sentence fit to show an operator. */
 	detail?: string;
 }
+
+/**
+ * `RetryResponse` — `POST /api/devices/{id}/retry[/{resource}]`, §2.5 rung 3.
+ *
+ * `outcome` is `sent` or `offline`, and the second arrives with a 409 rather than a 200: an
+ * attempt budget lives on the frame, so nothing about reconnecting replays a retry that went
+ * nowhere. `detail` carries the latency as well as the verdict — the budget is reset immediately
+ * and the reconcile loop picks it up on its next pass, which on a frame that has stopped
+ * reconciling can be a drift sweep away, so a screen that said only "done" would look broken.
+ */
+export interface RetryResponse {
+	deviceId: string;
+	/** Absent when every resource that gave up was asked. */
+	resource?: string;
+	outcome: 'sent' | 'offline';
+	detail: string;
+}

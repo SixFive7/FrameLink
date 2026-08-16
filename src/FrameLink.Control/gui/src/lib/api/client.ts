@@ -23,6 +23,7 @@ import type {
 	FleetPackagesResponse,
 	FleetSettingsResponse,
 	LoginResponse,
+	RetryResponse,
 	SetupStatus
 } from './types';
 
@@ -187,6 +188,23 @@ export const api = {
 	/** `DELETE /api/devices/{id}` — forgets the row entirely. The device reappears as pending. */
 	forget: (deviceId: string) =>
 		request<void>(`/api/devices/${encodeURIComponent(deviceId)}`, { method: 'DELETE' }),
+
+	/**
+	 * `POST /api/devices/{id}/retry[/{resource}]` — §2.5 rung 3's retry.
+	 *
+	 * With a resource, one escalation's attempt budget; without, every resource that gave up,
+	 * which is what a frame halted under rung 4 needs because several can have given up at once.
+	 *
+	 * 409 `offline` is a real outcome and not an error to swallow: nothing replays a retry on
+	 * reconnect — the budget lives on the frame, not here — so an operator whose click went
+	 * nowhere has to be told to press it again.
+	 */
+	retry: (deviceId: string, resource?: string) => {
+		const path = resource
+			? `/api/devices/${encodeURIComponent(deviceId)}/retry/${encodeURIComponent(resource)}`
+			: `/api/devices/${encodeURIComponent(deviceId)}/retry`;
+		return request<RetryResponse>(path, { method: 'POST' });
+	},
 
 	/**
 	 * `GET /api/packages` — the fleet-wide package comparison.

@@ -36,6 +36,7 @@
 	 * `$lib/stores/reconcile.svelte` for why that is the right mechanism and not a compromise.
 	 */
 	import { page } from '$app/state';
+	import { api, ApiError } from '$lib/api/client';
 	import { fleet } from '$lib/stores/fleet.svelte';
 	import { reconcile } from '$lib/stores/reconcile.svelte';
 	import {
@@ -119,6 +120,42 @@
 	let expanded = $state(false);
 	const listed = $derived(expanded ? resources : resources.slice(0, FIRST_ROWS));
 
+	/**
+	 * §2.5 rung 3's **retry**, which is the one action this screen exists to offer and had no
+	 * button until now — the ladder stopped the resource, told the operator, and left them
+	 * reading a delta with nothing to press.
+	 *
+	 * Per resource, because that is what this card is about. The frame-wide form exists on the
+	 * API for a device halted under rung 4 with several resources given up at once; here the
+	 * operator is looking at one fault with its blast radius drawn underneath it, so the button
+	 * asks about that one and the dependents follow on their own — a blocked resource has spent
+	 * no attempt and has no budget to reset.
+	 *
+	 * Keyed by resource name rather than a single flag, so two faults on one frame get two
+	 * independent buttons instead of one that greys them both out.
+	 */
+	let pressed = $state<Record<string, string>>({});
+	let pressing = $state<string | undefined>(undefined);
+
+	async function retry(resource: string) {
+		if (pressing) return;
+		pressing = resource;
+		try {
+			const answer = await api.retry(deviceId, resource);
+			pressed = { ...pressed, [resource]: answer.detail };
+		} catch (error) {
+			// The server's own sentence, including the 409 that means the frame is not connected.
+			// That is a real answer rather than a failure to hide: nothing replays a retry on
+			// reconnect, so the operator has to know to press it again.
+			pressed = {
+				...pressed,
+				[resource]: error instanceof ApiError ? error.message : 'That did not reach the Fleet Manager.'
+			};
+		} finally {
+			pressing = undefined;
+		}
+	}
+
 	// One effect rather than `onMount`, because a navigation from one frame's reconcile screen to
 	// another's reuses this component: the watcher has to be re-pointed, not left running on the
 	// frame the operator has stopped looking at. The cleanup covers both that and unmount.
@@ -126,6 +163,14 @@
 		if (!deviceId) return;
 		reconcile.watch(deviceId);
 		return () => reconcile.stop();
+	});
+
+	// A fresh report is the frame answering, so the acknowledgement stops being the newest thing
+	// on screen. Clearing it here rather than on a timer means the sentence lives exactly as long
+	// as it is the most recent news about this frame.
+	$effect(() => {
+		void reconcile.latest?.sequence;
+		if (Object.keys(pressed).length > 0 && !pressing) pressed = {};
 	});
 </script>
 
@@ -245,6 +290,25 @@
 								</b>
 								<small>next attempt</small>
 							</div>
+						{/if}
+					</div>
+
+					<div class="fault-action">
+						<button
+							class="retry"
+							disabled={pressing === entry.resource.name}
+							onclick={() => retry(entry.resource.name)}
+						>
+							<Icon name="refresh" size={15} />
+							{pressing === entry.resource.name ? 'Asking…' : 'Try this again'}
+						</button>
+						{#if pressed[entry.resource.name]}
+							<p class="retry-said" in:collapse>{pressed[entry.resource.name]}</p>
+						{:else}
+							<p class="retry-note">
+								Gives this setting its attempts back. Nothing else changes, and the frame does
+								not reboot until it decides to.
+							</p>
 						{/if}
 					</div>
 
@@ -620,6 +684,56 @@
 		letter-spacing: var(--track-caps);
 		text-transform: uppercase;
 		color: var(--text-3);
+	}
+
+	/* ── the one action this screen offers (§2.5 rung 3) ────────────────────────────────── */
+
+	.fault-action {
+		display: grid;
+		gap: var(--space-2);
+		justify-items: start;
+		margin-top: var(--space-5);
+	}
+
+	.retry {
+		display: inline-flex;
+		align-items: center;
+		gap: var(--space-2);
+		padding: var(--space-2) var(--space-4);
+		border: 1px solid var(--line);
+		border-radius: var(--radius-sm);
+		background: var(--surface-sunken);
+		font-size: var(--text-xs);
+		font-weight: var(--weight-semibold);
+		color: var(--text-1);
+		transition:
+			border-color var(--dur-quick) var(--ease-standard),
+			color var(--dur-quick) var(--ease-standard);
+	}
+
+	.retry:hover:not(:disabled) {
+		border-color: var(--accent);
+		color: var(--accent);
+	}
+
+	.retry:disabled {
+		color: var(--text-3);
+		cursor: default;
+	}
+
+	.retry-note,
+	.retry-said {
+		font-size: var(--text-xs);
+		line-height: var(--leading-normal);
+		max-width: var(--width-prose);
+	}
+
+	.retry-note {
+		color: var(--text-3);
+	}
+
+	.retry-said {
+		color: var(--text-2);
 	}
 
 	/* ── the census ─────────────────────────────────────────────────────────────────────── */
