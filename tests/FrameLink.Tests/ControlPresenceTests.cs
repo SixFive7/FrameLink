@@ -126,8 +126,10 @@ public sealed class ControlPresenceTests
         await using var agent = await server.ConnectAgentAsync(key);
         Assert.Equal(HandshakeStatus.Ok, agent.Result.Status);
 
-        // Drain the settings push, so the wait that follows genuinely finds an empty socket
-        // rather than a queued frame.
+        // Drain the connect-time frames, so the wait that follows genuinely finds an empty socket
+        // rather than a queued frame. Two of them now: the settings push, and the operator contact
+        // of §2.7 item 8 (decision 71).
+        Assert.NotNull(await agent.ReceiveAsync(TimeSpan.FromSeconds(3)));
         Assert.NotNull(await agent.ReceiveAsync(TimeSpan.FromSeconds(3)));
 
         Assert.Null(await agent.ReceiveAsync(TimeSpan.FromMilliseconds(50)));

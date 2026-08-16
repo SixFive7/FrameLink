@@ -36,6 +36,15 @@ public sealed class AgentSocketHandler(
         var decision = await NegotiateAsync(socket, remoteAddress, cancellationToken).ConfigureAwait(false);
         if (decision is null || !decision.KeepOpen || decision.Device is null)
         {
+            // §2.7 item 8 is deliberately NOT sent here, and the reason is worth keeping. A frame
+            // that is not adopted cannot be told who to contact, because this endpoint is open to
+            // the internet (§3.3) and anything that connects is answered `pending` — so a contact
+            // frame on this path would hand the operator's name and telephone number to every
+            // anonymous caller that found the URL. What it would have bought is close to nothing:
+            // §3.2 records that "the operator is usually the first person to connect a frame", so
+            // the person standing in front of an unadopted frame is almost always the operator
+            // themselves, and they do not need to be told their own number (decision 71).
+            //
             // Answered and finished. Everything except `ok` closes here, so no pending,
             // blocked, unconfigured or version-mismatched device ever holds a socket, a
             // registry slot or a ping timer (§3.3: a pending record allocates no resources).
@@ -80,6 +89,13 @@ public sealed class AgentSocketHandler(
             // between adopted and pending on this route.
             var resolved = await settings.ResolveAsync(deviceId, cancellationToken).ConfigureAwait(false);
             await publisher.PushAsync(connection, resolved, cancellationToken).ConfigureAwait(false);
+
+            // §2.7 item 8, on the adopted path. Sent on every connect rather than only when it
+            // changes, because the frame is the thing that remembers and a frame that was reflashed
+            // remembers nothing — and because the agent already writes only on a change, so a
+            // reconnect storm costs one small frame each and no disk.
+            var contact = await publisher.ResolveContactAsync(cancellationToken).ConfigureAwait(false);
+            await publisher.PushContactAsync(connection, contact, cancellationToken).ConfigureAwait(false);
 
             await connection.RunAsync(cancellationToken).ConfigureAwait(false);
         }

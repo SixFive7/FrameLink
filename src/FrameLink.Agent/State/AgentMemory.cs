@@ -56,6 +56,18 @@ public sealed record AgentMemoryState
     /// so merging would make a setting the operator <i>deleted</i> immortal on the frame.
     /// </remarks>
     public IReadOnlyDictionary<string, string>? Settings { get; init; }
+
+    /// <summary>
+    /// Who to contact about this fleet, as the Fleet Manager last said (§2.7 item 8, decision 71).
+    /// </summary>
+    /// <remarks>
+    /// <b>The reason this field is durable is the whole reason the feature exists.</b> Every other
+    /// field here survives a reboot so the frame behaves correctly during an outage; this one
+    /// survives so that a <i>person</i> can behave correctly during one. A contact held only in
+    /// process memory would be present on every screen except the one that follows the reboot a
+    /// failed resource just took, which is the only screen anybody reads it on.
+    /// </remarks>
+    public OperatorContact? Contact { get; init; }
 }
 
 /// <summary>
@@ -175,6 +187,17 @@ public sealed class AgentMemory
 
     /// <summary>The name to start from, or null if the Fleet Manager has never said one.</summary>
     public string? DeviceName => Read().DeviceName;
+
+    /// <summary>
+    /// Who to contact, or null if the Fleet Manager has never said (§2.7 item 8).
+    /// </summary>
+    /// <remarks>
+    /// Read straight off <see cref="Read"/>, which reads the file, so this answers on a frame with
+    /// no link, no server and no network — which is the only condition under which anybody needs
+    /// it. Nothing in this path touches <see cref="Link.AgentUplink"/> or asks whether a
+    /// connection exists.
+    /// </remarks>
+    public OperatorContact? Contact => Read().Contact;
 
     /// <summary>
     /// The condition a restarted agent may carry over — §2.6's <i>"provided the frame was fully
@@ -308,6 +331,37 @@ public sealed class AgentMemory
         }
 
         _log.Info($"Remembering {push.Values.Count} setting(s) from the Fleet Manager, revision {push.Revision}.");
+    }
+
+    /// <summary>Records who to contact about this fleet (§2.7 item 8, decision 71).</summary>
+    /// <returns>True when the value changed and was written.</returns>
+    /// <remarks>
+    /// Written only on a change, like every other field here, so a frame that reconnects forty
+    /// times during an outage rewrites nothing. The comparison is on the two strings and not on
+    /// <see cref="OperatorContact.UpdatedUtc"/>, which moves on every resolve and would otherwise
+    /// make "unchanged" impossible to observe.
+    /// </remarks>
+    public bool RememberContact(OperatorContact contact)
+    {
+        ArgumentNullException.ThrowIfNull(contact);
+
+        lock (_gate)
+        {
+            var current = Current();
+            if (current.Contact is { } held
+                && string.Equals(held.Name, contact.Name, StringComparison.Ordinal)
+                && string.Equals(held.Contact, contact.Contact, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            Save(current with { Contact = contact });
+        }
+
+        // The name is a person's, and the contact detail may be a private phone number. Neither is
+        // a credential, so the fact that one arrived is worth a line; the values are not (§2.9).
+        _log.Info("Remembering who to contact about this fleet, so the frame can say so with the Fleet Manager unreachable.");
+        return true;
     }
 
     /// <summary>Reads the current state, loading it first if this is the first touch.</summary>

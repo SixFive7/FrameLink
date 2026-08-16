@@ -2,6 +2,7 @@ using System.Reflection;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Stage;
 using FrameLink.Agent.State;
+using FrameLink.Protocol;
 
 namespace FrameLink.Tests;
 
@@ -595,14 +596,16 @@ public sealed class AgentReconcileNarrationTests
     };
 
     [Fact]
-    public void The_attempt_number_is_rendered_as_attempt_n_of_the_budget()
+    public void The_attempt_number_is_rendered_as_the_item_and_attempt_n_of_the_budget()
     {
-        // §2.7 item 5's own example is "Attempt 2 of 5", and the budget is what makes it mean
-        // something: attempt 2 of 5 is patience, attempt 2 of 2 is nearly over.
+        // §2.7 item 5 in the operator's own words (decision 70): one item at a time, named,
+        // with its attempt count. The budget is what makes the count mean something — attempt 2
+        // of 3 is patience, attempt 3 of 3 is the last one — so the item and the count travel
+        // together as one sentence rather than as a bare number beside a bar.
         var frame = StageRenderer.Render(
             Base with
             {
-                Reconcile = new ReconcileNarration { Attempt = 2, AttemptBudget = 5, Resource = "cpu.governor.performance" },
+                Reconcile = new ReconcileNarration { Attempt = 2, AttemptBudget = 3, Resource = "cpu.governor.performance" },
             },
             DateTimeOffset.UnixEpoch,
             tick: 0,
@@ -610,7 +613,7 @@ public sealed class AgentReconcileNarrationTests
             rows: 24,
             colour: false);
 
-        Assert.Contains("Attempt 2 of 5", frame, StringComparison.Ordinal);
+        Assert.Contains("cpu.governor.performance attempt 2 of 3", frame, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -660,7 +663,7 @@ public sealed class AgentReconcileNarrationTests
             colour: false);
 
         Assert.Contains("in 9s", frame, StringComparison.Ordinal);
-        Assert.DoesNotContain("Attempt 2 of 5", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("trying again in", frame, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -700,17 +703,106 @@ public sealed class AgentReconcileNarrationTests
     }
 
     [Fact]
-    public void A_halted_frame_says_it_has_stopped_trying()
+    public void A_stopped_frame_never_renders_as_a_working_one()
     {
+        // Decision 70, and the single most important assertion about this screen. Before it, a
+        // resource that had permanently given up reached the renderer's "Attempt N of M" branch
+        // on nothing more than Attempt > 0 and was drawn beside a *travelling marquee* — an
+        // animation whose whole purpose is to prove that a pause is not a hang. That picture was
+        // repainted on every boot for ever, and it is what made a frame look like it was
+        // rebooting endlessly.
+        var status = Base with
+        {
+            Resources =
+            [
+                new ResourceStatus
+                {
+                    Name = "audio.mixer.pcm-volume",
+                    Kind = ResourceStatusKind.Escalated,
+                    Delta = "expected '20', observed '0'",
+                    Attempts = 3,
+                    AttemptBudget = 3,
+                    Escalations = 1,
+                },
+            ],
+            Reconcile = new ReconcileNarration
+            {
+                Resource = "audio.mixer.pcm-volume",
+                Attempt = 3,
+                AttemptBudget = 3,
+                Escalations = 1,
+                AdminNotified = true,
+            },
+        };
+
+        var first = StageRenderer.Render(status, DateTimeOffset.UnixEpoch, tick: 0, 160, 30, colour: false);
+        var later = StageRenderer.Render(status, DateTimeOffset.UnixEpoch, tick: 7, 160, 30, colour: false);
+
+        // The operator's wording, and the delta rendered rather than re-derived.
+        Assert.Contains("audio.mixer.pcm-volume failed after 3 tries", first, StringComparison.Ordinal);
+        Assert.Contains("expected '20', observed '0'", first, StringComparison.Ordinal);
+
+        // Nothing that reads as work in progress.
+        Assert.DoesNotContain("attempt 3 of 3", first, StringComparison.Ordinal);
+        Assert.DoesNotContain("Attempt", first, StringComparison.Ordinal);
+
+        // And nothing that moves. Two ticks of the same status paint identically, which is the
+        // mechanical form of "a stopped item must not render like a running one": every animated
+        // element in this renderer is a function of the tick.
+        Assert.Equal(first, later);
+    }
+
+    [Fact]
+    public void A_stopped_frame_says_who_to_ask_and_where_the_button_is()
+    {
+        // §2.7 items 8 and 9. The contact comes off the frame's own state, so this assertion holds
+        // with no server anywhere in the test — which is the whole point of decision 71 — and the
+        // console names the Fleet Manager rather than offering a button it cannot implement
+        // (decision 72).
         var frame = StageRenderer.Render(
-            Base with { Reconcile = new ReconcileNarration { Halted = true, Escalations = 2, Attempt = 5 } },
+            Base with
+            {
+                Contact = new OperatorContact { Name = "Jori", Contact = "06 12 34 56 78", UpdatedUtc = DateTimeOffset.UnixEpoch },
+                Reconcile = new ReconcileNarration
+                {
+                    Resource = "audio.mixer.pcm-volume",
+                    Attempt = 3,
+                    AttemptBudget = 3,
+                    Escalations = 1,
+                    AdminNotified = true,
+                },
+            },
             DateTimeOffset.UnixEpoch,
             tick: 0,
             columns: 160,
             rows: 30,
             colour: false);
 
-        Assert.Contains("stopped trying", frame, StringComparison.Ordinal);
+        Assert.Contains("Ask Jori — 06 12 34 56 78.", frame, StringComparison.Ordinal);
+        Assert.Contains("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_frame_that_was_never_told_who_to_ask_still_says_somebody_is_needed()
+    {
+        var frame = StageRenderer.Render(
+            Base with
+            {
+                Reconcile = new ReconcileNarration
+                {
+                    Resource = "audio.mixer.pcm-volume",
+                    Attempt = 3,
+                    AttemptBudget = 3,
+                    Escalations = 1,
+                },
+            },
+            DateTimeOffset.UnixEpoch,
+            tick: 0,
+            columns: 160,
+            rows: 30,
+            colour: false);
+
+        Assert.Contains("Ask whoever looks after your Fleet Manager", frame, StringComparison.Ordinal);
     }
 
     [Fact]

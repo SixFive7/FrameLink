@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace FrameLink.Agent.State;
 
 /// <summary>
@@ -85,18 +83,27 @@ public sealed record ReconcileNarration
         || Attempt > 0
         || Resource is { Length: > 0 };
 
-    /// <summary>One line naming the escalation state, or null (§2.7 item 7).</summary>
+    /// <summary>
+    /// One line saying whether anybody has actually been told, or null (§2.7 item 7).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Narrowed to the half nothing else knows.</b> What gave up, after how many tries and with
+    /// what delta is <see cref="ReconcileVoice.StoppedLine"/>'s sentence, and who to ask is
+    /// <see cref="ReconcileVoice.ContactLine"/>'s; this one carries the fact that neither of those
+    /// can express — whether the escalation actually reached the Fleet Manager or went into the
+    /// frame's offline buffer. §2.3 makes that the only thing distinguishing <c>Escalated</c> from
+    /// <c>Degraded</c>, and it changes what the person in front of the frame should do: wait, or
+    /// go and tell somebody themselves.
+    /// </para>
+    /// <para>
+    /// <b>The <c>Halted</c> branch is gone with the state</b> (decision 66). <see cref="Halted"/>
+    /// itself remains a field because the loop still writes it; nothing renders it, and when the
+    /// loop stops producing it this property is already correct.
+    /// </para>
+    /// </remarks>
     public string? EscalationLine =>
-        Halted
-            ? "This frame has stopped trying. An administrator has been told more than once and "
-                + "repeated restarts would do more harm than good."
-        : Escalations > 0 && AdminNotified
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"Gave up after {Attempt} attempts. Your Fleet Manager has been told and is waiting for you.")
-        : Escalations > 0
-            ? string.Create(
-                CultureInfo.InvariantCulture,
-                $"Gave up after {Attempt} attempts. The Fleet Manager cannot be reached, so nobody has been told yet.")
-        : null;
+        Escalations <= 0 ? null
+        : AdminNotified ? "Your Fleet Manager has been told and is waiting for you."
+        : "The Fleet Manager could not be reached, so nobody has been told yet.";
 }

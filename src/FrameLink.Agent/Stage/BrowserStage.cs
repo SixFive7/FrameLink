@@ -207,6 +207,12 @@ public sealed class BrowserStage
     {
         ArgumentNullException.ThrowIfNull(status);
 
+        // §2.7 items 5, 7, 8 and 9, composed once in ReconcileVoice so that the page and the
+        // console say the same thing about the same frame — including the part that matters most,
+        // which is whether the frame has stopped. A stopped frame sends StoppedLine and no
+        // ProgressLine, and the page has nothing left to animate.
+        var hasStopped = ReconcileVoice.HasStopped(status);
+
         return new StageMessage
         {
             Condition = status.Condition.State.ToString(),
@@ -220,6 +226,11 @@ public sealed class BrowserStage
             Resource = status.Reconcile.Resource,
             Attempt = status.Reconcile.Attempt,
             AttemptBudget = status.Reconcile.AttemptBudget,
+            ProgressLine = ReconcileVoice.ProgressLine(status),
+            StoppedLine = ReconcileVoice.StoppedLine(status),
+            EscalationLine = hasStopped ? status.Reconcile.EscalationLine : null,
+            ContactLine = hasStopped ? ReconcileVoice.ContactLine(status.Contact) : null,
+            CanRetry = hasStopped,
             CountdownSeconds = status.Reconcile.Countdown is { } countdown
                 ? (int)countdown.Remaining(now).TotalSeconds
                 : null,

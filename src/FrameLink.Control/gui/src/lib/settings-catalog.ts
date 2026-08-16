@@ -141,6 +141,24 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Behaviour',
 		example: '0'
 	},
+	'operator.name': {
+		label: 'Who to contact',
+		hint:
+			'Your name, shown on a frame that has stopped and needs a person. Every frame keeps ' +
+			'its own copy, so it can still say who to ask when it cannot reach this server.',
+		kind: 'text',
+		group: 'Behaviour',
+		example: 'Jori'
+	},
+	'operator.contact': {
+		label: 'How to reach you',
+		hint:
+			'A phone number, an email address, or where you are. Shown beside your name on a ' +
+			'frame that has given up, for whoever is standing in front of it.',
+		kind: 'text',
+		group: 'Behaviour',
+		example: '06 12 34 56 78'
+	},
 	'update.enabled': {
 		label: 'Automatic updates',
 		hint: 'Whether the agent converges on the version this server serves. On by default.',

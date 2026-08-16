@@ -163,6 +163,12 @@ internal static partial class ControlLog
     public static partial void SettingsPushMissed(this ILogger logger, Exception exception, string deviceId);
 
     [LoggerMessage(
+        EventId = 1401,
+        Level = LogLevel.Debug,
+        Message = "Could not tell {DeviceId} who to contact; the socket had already gone.")]
+    public static partial void ContactPushMissed(this ILogger logger, Exception exception, string deviceId);
+
+    [LoggerMessage(
         EventId = 1500,
         Level = LogLevel.Information,
         Message = "Expired {Count} un-adopted device rows.")]

@@ -451,6 +451,57 @@ public sealed class AgentMemoryTests
         Assert.NotNull(after.ResumeCondition(hasEverBeenInSync: true));
     }
 
+    [Fact]
+    public void Who_to_contact_survives_a_reboot_and_is_read_with_no_server_in_the_test_at_all()
+    {
+        // §2.7 item 8, decision 71, and the assertion the whole feature exists for. There is no
+        // Fleet Manager anywhere in this test — no link, no socket, no RecordingServer — because
+        // the moment a person needs this sentence is the moment the frame cannot ask anybody for
+        // it. What is exercised is exactly the real path: a push arrives, the process ends, a new
+        // process reads the file and seeds its screen from it.
+        using var files = new TemporaryStore();
+
+        using (var before = Process(files))
+        {
+            before.Memory.RememberContact(new OperatorContact
+            {
+                Name = "Jori",
+                Contact = "06 12 34 56 78",
+                UpdatedUtc = new DateTimeOffset(2026, 8, 16, 9, 0, 0, TimeSpan.Zero),
+            });
+        }
+
+        using var after = Process(files);
+
+        Assert.Equal("Jori", after.Hub.Current.Contact?.Name);
+        Assert.Equal(
+            "Nothing more will happen until someone helps. Ask Jori — 06 12 34 56 78.",
+            ReconcileVoice.ContactLine(after.Hub.Current.Contact));
+    }
+
+    [Fact]
+    public void Being_told_the_same_contact_again_writes_nothing()
+    {
+        // A frame reconnects on every backoff tick during an outage and is told who to contact on
+        // every one of them. Rewriting the file each time would put a card write on a schedule set
+        // by a network fault, which is the shape §2.4's backoff exists to avoid.
+        using var files = new TemporaryStore();
+        var memory = new AgentMemory(files.Store, new RecordingLog(), new ManualClock());
+
+        var contact = new OperatorContact
+        {
+            Name = "Jori",
+            Contact = "06 12 34 56 78",
+            UpdatedUtc = new DateTimeOffset(2026, 8, 16, 9, 0, 0, TimeSpan.Zero),
+        };
+
+        Assert.True(memory.RememberContact(contact));
+
+        // The timestamp moves on every resolve and must not, by itself, count as a change.
+        Assert.False(memory.RememberContact(contact with { UpdatedUtc = contact.UpdatedUtc.AddHours(1) }));
+        Assert.True(memory.RememberContact(contact with { Contact = "06 87 65 43 21" }));
+    }
+
     /// <summary>Starts a process over a state directory that outlives it.</summary>
     private static FrameProcess Process(TemporaryStore files) => new(files.Store);
 
@@ -534,6 +585,7 @@ internal sealed class FrameProcess : IDisposable
             Condition = resumed ?? DeviceStateLadder.Starting,
             LastAuthoritative = resumed,
             DeviceId = "TEST-DEVI-CEID-0001",
+            Contact = Memory.Contact,
         });
 
         _remembering = Hub.Subscribe(status =>

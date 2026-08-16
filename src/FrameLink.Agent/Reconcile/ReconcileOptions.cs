@@ -17,20 +17,41 @@ public sealed record ReconcileOptions
     /// How many times one resource may be acted on before the budget is exhausted (§2.5 rung 2).
     /// </summary>
     /// <remarks>
-    /// Five, because §2.7 item 5 shows "Attempt 2 of 5" as the example a person reads, and
-    /// because at 40–60 s a boot-and-verify cycle five attempts is roughly four minutes — long
-    /// enough for a transient to clear, short enough that a genuinely broken setting reaches a
-    /// human before an hour of reboots has worn the card.
+    /// <para>
+    /// <b>Three</b> (decision 67). It used to be five, chosen against §2.7's own example sentence
+    /// "Attempt 2 of 5" — which is circular, since the screen showed five because the budget was
+    /// five. What decides it now is what an attempt costs: decision 64 measured a drift-to-boot
+    /// cycle at a mean of 21.0 s, so the difference between three and five is forty seconds of
+    /// extra card wear per resource per fault, on a fault that has usually either cleared by the
+    /// second attempt or is not going to clear at all.
+    /// </para>
+    /// <para>
+    /// The multiplier is the sharper argument. Measured on the frame, one 350 ms race shared by
+    /// five resources spent five separate budgets in full and cost 41 reboots. Decision 68 removes
+    /// the multiplication by stopping the pass at the first escalation; this shortens each term
+    /// that was being multiplied, and the two are kept separate because either alone still leaves
+    /// the other's failure available.
+    /// </para>
+    /// <para>
+    /// A retry grants a fresh three, so the cost of this being too short is one press.
+    /// </para>
     /// </remarks>
-    public int AttemptBudget { get; init; } = 5;
+    public int AttemptBudget { get; init; } = 3;
 
     /// <summary>
     /// How many exhausted budgets on one resource halt the device (§2.5 rung 4).
     /// </summary>
     /// <remarks>
-    /// Two. The first exhaustion notifies; the operator's <b>retry</b> resets the budget; a
-    /// second exhaustion means an administrator has been told more than once, which is the exact
-    /// condition §2.5 names for <c>Halted</c>.
+    /// <para>
+    /// <b>Retired by decision 66, which removes <c>Halted</c> from the design.</b> <c>Escalated</c>
+    /// is now the terminal status, so there is no second strike for this number to count towards.
+    /// It is left in place, and still read by the loop, because removing it belongs with the loop's
+    /// own halt paths in one deliberate change rather than half here and half there.
+    /// </para>
+    /// <para>
+    /// What it used to mean: two. The first exhaustion notifies, the operator's <b>retry</b> resets
+    /// the budget, and a second exhaustion meant an administrator had been told more than once.
+    /// </para>
     /// </remarks>
     public int EscalationLimit { get; init; } = 2;
 

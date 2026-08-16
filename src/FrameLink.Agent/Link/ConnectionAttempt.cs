@@ -72,6 +72,9 @@ public sealed record AttemptContext
 
     /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
     public Action<RetryRequest>? OnRetry { get; init; }
+
+    /// <summary>Invoked when the Fleet Manager pushes who to contact (§2.7 item 8).</summary>
+    public Action<OperatorContact>? OnOperatorContact { get; init; }
 }
 
 /// <summary>
@@ -368,6 +371,20 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                     if (envelope.PayloadAs(ProtocolJson.Default.SettingsPush) is { } push)
                     {
                         context.OnSettings?.Invoke(push);
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(envelope.Kind, ControlWire.KindOperatorContact, StringComparison.Ordinal))
+                {
+                    // §2.7 item 8. Nothing on the frame converges on it and nothing is acted on:
+                    // it is written to the agent's durable memory so that the sentence naming who
+                    // to ask is on screen at the one moment this socket is guaranteed not to be —
+                    // when the server is the thing that is unreachable (decision 71).
+                    if (envelope.PayloadAs(ProtocolJson.Default.OperatorContact) is { } contact)
+                    {
+                        context.OnOperatorContact?.Invoke(contact);
                     }
 
                     continue;

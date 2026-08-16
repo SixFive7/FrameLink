@@ -1,5 +1,6 @@
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
+using FrameLink.Protocol;
 
 namespace FrameLink.Agent.State;
 
@@ -178,6 +179,17 @@ public sealed record AgentStatus
 
     /// <summary>§2.10's annotation, when supervision has acted.</summary>
     public SupervisionAnnotation? Supervision { get; init; }
+
+    /// <summary>
+    /// Who to contact about this fleet, as the Fleet Manager last said (§2.7 item 8, decision 71).
+    /// </summary>
+    /// <remarks>
+    /// Seeded from <see cref="AgentMemory"/> at startup and replaced by each push, so the value on
+    /// the screen never depends on a connection being live at the moment somebody reads it. Null
+    /// means the Fleet Manager has never said, which <see cref="ReconcileVoice.ContactLine"/>
+    /// renders as its own sentence rather than as silence.
+    /// </remarks>
+    public OperatorContact? Contact { get; init; }
 
     /// <summary>Whether the product app may run (§2.6).</summary>
     public bool ProductRuns => Condition.ProductRuns && !Drifted;

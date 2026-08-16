@@ -23,6 +23,25 @@ public sealed record PageMessage
     /// <summary>Somebody pressed "Reboot now" on the repair screen (§2.7 item 4).</summary>
     public const string KindRebootNow = "reboot-now";
 
+    /// <summary>
+    /// Somebody pressed "Try again" on the repair screen — §2.5 rung 5, decision 72.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The frame's own half of §2.5 rung 3's retry, for the person standing in front of it rather
+    /// than the operator holding a Fleet Manager. It carries no arguments on purpose: the press
+    /// means <i>everything that gave up, try again</i>, which is the device-wide form
+    /// <see cref="Protocol.RetryRequest"/> already spells as a null resource. Naming a resource
+    /// would require the page to know which one, and the person pressing it does not care.
+    /// </para>
+    /// <para>
+    /// <b>It resets the budget through the same path the Fleet Manager's retry uses.</b> There is
+    /// one reset in the agent with two callers, so a retry pressed at the frame and a retry pressed
+    /// in a browser two hundred kilometres away cannot come to mean different things.
+    /// </para>
+    /// </remarks>
+    public const string KindRetry = "retry";
+
     /// <summary>Which of the kinds above this is.</summary>
     public required string Kind { get; init; }
 
@@ -88,6 +107,44 @@ public sealed record StageMessage
 
     /// <summary>The short device id, for bench matching (§3.3).</summary>
     public string? DeviceId { get; init; }
+
+    /// <summary>
+    /// §2.7 item 5 — <c>item x attempt 1 of 3</c>, or null when nothing is in progress.
+    /// </summary>
+    /// <remarks>
+    /// A composed sentence rather than the page assembling one from <see cref="Resource"/>,
+    /// <see cref="Attempt"/> and <see cref="AttemptBudget"/>. Those three stay for compatibility
+    /// with a page that predates this, but the wording is decided once, in
+    /// <see cref="State.ReconcileVoice"/>, so the browser and the console cannot say different
+    /// things about the same frame.
+    /// </remarks>
+    public string? ProgressLine { get; init; }
+
+    /// <summary>
+    /// §2.7 item 7 — <c>item z failed after 3 tries, expected a but got b</c>, or null.
+    /// </summary>
+    /// <remarks>
+    /// <b>Non-null is the page's whole signal that the frame has stopped.</b> It is what turns the
+    /// attempt counter and its animation off and the retry button on, so a page that renders this
+    /// field cannot show a stopped frame as a working one.
+    /// </remarks>
+    public string? StoppedLine { get; init; }
+
+    /// <summary>Whether anybody has been told yet (§2.7 item 7), or null.</summary>
+    public string? EscalationLine { get; init; }
+
+    /// <summary>§2.7 item 8 — who to contact, present whenever the frame has given up.</summary>
+    public string? ContactLine { get; init; }
+
+    /// <summary>
+    /// §2.7 item 9 — whether "Try again" should be offered on this screen (decision 72).
+    /// </summary>
+    /// <remarks>
+    /// True exactly when something has given up. A retry with a full budget already available
+    /// would reset nothing and teach the person that the button does nothing, which is the same
+    /// harm as a button that is not wired up.
+    /// </remarks>
+    public bool CanRetry { get; init; }
 
     /// <summary>
     /// §2.10's annotation, rendered only at fault level.
@@ -197,6 +254,9 @@ public sealed class LocalChannel
     /// <summary>Raised when somebody presses "Reboot now" on the repair screen (§2.7 item 4).</summary>
     public event Action? RebootRequested;
 
+    /// <summary>Raised when somebody presses "Try again" at the frame (§2.5 rung 5).</summary>
+    public event Action? RetryRequested;
+
     /// <summary>When the page last said anything at all.</summary>
     /// <remarks>
     /// Null until the first check-in of this process. That null is load-bearing for §2.7's
@@ -292,6 +352,9 @@ public sealed class LocalChannel
                 break;
             case PageMessage.KindRebootNow:
                 RebootRequested?.Invoke();
+                break;
+            case PageMessage.KindRetry:
+                RetryRequested?.Invoke();
                 break;
             default:
                 break;

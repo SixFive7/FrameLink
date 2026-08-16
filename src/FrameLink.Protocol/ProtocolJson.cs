@@ -33,6 +33,7 @@ namespace FrameLink.Protocol;
 [JsonSerializable(typeof(AgentPong))]
 [JsonSerializable(typeof(SettingsPush))]
 [JsonSerializable(typeof(RetryRequest))]
+[JsonSerializable(typeof(OperatorContact))]
 [JsonSerializable(typeof(ResourceReport))]
 [JsonSerializable(typeof(ReconcileReport))]
 [JsonSerializable(typeof(DeviceEvent))]

@@ -154,6 +154,12 @@ public sealed class AgentHost
             LastAuthoritative = resumed,
             DeviceId = identity.DeviceId,
             HardwareSerial = serial,
+
+            // §2.7 item 8, seeded off disk before anything has connected — which is the whole
+            // point of it. A frame that comes back from the reboot a failed resource just took
+            // must be able to name who to ask before, and whether or not, it ever reaches a Fleet
+            // Manager again (decision 71).
+            Contact = memory.Contact,
         });
 
         // The hub is the one place LastAuthoritative is decided, by either of the two paths that
@@ -291,6 +297,17 @@ public sealed class AgentHost
         var countdown = new RebootCountdown(_clock);
         channel.RebootRequested += countdown.SkipNow;
 
+        // §2.5 rung 5: the same retry the Fleet Manager sends, pressed by whoever is standing in
+        // front of the frame. It is deliberately the *device-wide* form — the person pressing it
+        // has not chosen a resource and should not have to — and it goes through
+        // ResetExhaustedBudgets, the one reset in the agent, so a press here and a press in a
+        // browser two hundred kilometres away cannot come to mean different things (decision 72).
+        //
+        // Assigned later, beside the loop it needs; declared here so the ordering reads with the
+        // other local-channel handlers.
+        Action? retryFromFrame = null;
+        channel.RetryRequested += () => retryFromFrame?.Invoke();
+
         // Guide 11's daemon, inside the agent (§2.1). It holds the GPIO line for as long as the
         // agent runs and turns a press into the toggle that used to arrive over a WebSocket server
         // on 127.0.0.1:8889 — the port the catalog retires, since daemon and app are now one
@@ -396,6 +413,18 @@ public sealed class AgentHost
             DeviceId = identity.DeviceId,
         };
 
+        // The other end of the local channel's retry, now that there is a loop to reset. Nothing
+        // is forced: the budget is cleared and the walk picks it up on its next pass, which is
+        // exactly what the Fleet Manager's retry does, for the reason RetryRequest records — a
+        // transient needing two attempts would defeat a single forced one.
+        retryFromFrame = () =>
+        {
+            var reset = loop.ResetExhaustedBudgets();
+            _log.Info(reset.Count > 0
+                ? $"Somebody at the frame asked it to try again: {string.Join(", ", reset)}."
+                : "Somebody at the frame asked it to try again; nothing had given up.");
+        };
+
         var link = new ControlLink(
             new WebSocketControlTransportFactory(),
             hub,
@@ -410,6 +439,16 @@ public sealed class AgentHost
             {
                 Volatile.Write(ref _settings, push.Values);
                 memory.RememberSettings(push);
+            },
+
+            // §2.7 item 8. Persisted first and published second, in that order deliberately: the
+            // screen can be repainted from the hub at any time, but the file is what answers after
+            // the next reboot — and the next reboot is where the person who needs this sentence is
+            // standing (decision 71).
+            OnOperatorContact = contact =>
+            {
+                memory.RememberContact(contact);
+                hub.Publish(status => status with { Contact = contact });
             },
 
             // §2.5 rung 3, and the only inbound message that changes what the reconciler is

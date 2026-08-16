@@ -70,7 +70,7 @@ public sealed class AgentReconcileTests
         var status = ReconcileHarness.StatusOf(outcome, "spy");
 
         Assert.Equal(1, status.Attempts);
-        Assert.Equal(5, status.AttemptBudget);
+        Assert.Equal(3, status.AttemptBudget);
         Assert.Contains("Hallway", status.Delta!, StringComparison.Ordinal);
         Assert.NotNull(status.Action);
     }

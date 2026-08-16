@@ -147,8 +147,43 @@ function render(stage) {
     element.appendChild(line(stage.action, 'font-size:13px;color:#6a6a6a;font-family:ui-monospace,monospace;max-width:60em;word-break:break-all'));
   }
 
-  if (stage.attemptBudget > 0 && stage.attempt > 0) {
+  // version2.md §2.7 item 5. One item at a time with its attempt count, worded by the agent
+  // (ReconcileVoice) rather than assembled here, so the console and this page cannot disagree.
+  // The agent sends it only while something is actually being attempted — a frame that has given
+  // up sends none, which is what stops this screen animating work that is not happening.
+  if (stage.progressLine) {
+    element.appendChild(line(stage.progressLine, 'font-size:15px;color:#9a9a9a'));
+  } else if (!stage.canRetry && stage.attemptBudget > 0 && stage.attempt > 0) {
     element.appendChild(line(`Attempt ${stage.attempt} of ${stage.attemptBudget}`, 'font-size:15px;color:#9a9a9a'));
+  }
+
+  // §2.7 items 7, 8 and 9 — the stopped frame. Everything here is static: no counter, no bar, no
+  // countdown, because nothing is happening and a screen that suggests otherwise is what made a
+  // frame look like it was rebooting for ever.
+  if (stage.stoppedLine) element.appendChild(line(stage.stoppedLine, 'font-size:18px;color:#e58f8f;max-width:50em;margin-top:10px'));
+  if (stage.escalationLine) element.appendChild(line(stage.escalationLine, 'font-size:16px;color:#9a9a9a;max-width:40em'));
+  if (stage.contactLine) element.appendChild(line(stage.contactLine, 'font-size:19px;color:#e8e8e8;max-width:40em;margin-top:6px'));
+
+  // §2.5 rung 5: retry is pressable by whoever is standing at the frame, not only from the Fleet
+  // Manager. It sends the same reset the Fleet Manager's retry sends, over the channel that is
+  // already open, and it is offered only when something has actually given up — a button that
+  // resets nothing teaches the person that the button does nothing.
+  if (stage.canRetry) {
+    const retry = document.createElement('button');
+    retry.textContent = 'Try again';
+    retry.style.cssText = [
+      'margin-top:14px', 'padding:16px 34px', 'font-size:20px', 'border-radius:10px',
+      'border:1px solid #3a3a3a', 'background:#1b1b1b', 'color:#e8e8e8', 'cursor:pointer',
+      // The same exemption §2.7 item 4 gives "Reboot now": this is a screen where v1's touch
+      // shield must not block input.
+      'touch-action:manipulation', 'pointer-events:auto',
+    ].join(';');
+    retry.addEventListener('click', () => {
+      retry.disabled = true;
+      retry.textContent = 'Trying again…';
+      send({ kind: 'retry' });
+    });
+    element.appendChild(retry);
   }
 
   if (typeof stage.countdownSeconds === 'number') {

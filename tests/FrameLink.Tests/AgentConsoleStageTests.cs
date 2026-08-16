@@ -211,7 +211,11 @@ public sealed class AgentConsoleStageTests
         var text = Plain(status, 100, 24);
 
         Assert.Contains("device-name", text, StringComparison.Ordinal);
-        Assert.Contains("Degraded", text, StringComparison.Ordinal);
+
+        // In words, not in the status enum's member name (decision 70). "Degraded" and
+        // "Progressing" read as the same sort of thing to somebody who has not read §2.3, and the
+        // difference between them is whether anything is still going to happen.
+        Assert.Contains("gave up after 1 try", text, StringComparison.Ordinal);
     }
 
     [Fact]

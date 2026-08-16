@@ -107,6 +107,75 @@ public sealed class ControlHandshakeTests
     }
 
     [Fact]
+    public async Task An_adopted_device_is_told_who_to_contact_on_every_connect()
+    {
+        // §2.7 item 8, decision 71. It rides its own kind rather than two more keys in the
+        // settings push, and it is sent on every connect rather than only when it changes —
+        // the frame is the thing that remembers, and a reflashed frame remembers nothing.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+
+        await using (var first = await server.ConnectAgentAsync(key))
+        {
+            Assert.Equal(HandshakeStatus.Pending, first.Result.Status);
+        }
+
+        await server.SignInAsync(Password);
+        await AdoptAsync(server, DeviceIdOf(key), "Kitchen frame");
+        await PutFleetSettingAsync(server, "operator.name", "Jori");
+        await PutFleetSettingAsync(server, "operator.contact", "06 12 34 56 78");
+
+        await using var adopted = await server.ConnectAgentAsync(key);
+
+        OperatorContact? contact = null;
+        for (var frame = 0; frame < 4 && contact is null; frame++)
+        {
+            var envelope = await adopted.ReceiveAsync(TimeSpan.FromSeconds(3));
+            if (envelope is null)
+            {
+                break;
+            }
+
+            if (string.Equals(envelope.Kind, ControlWire.KindOperatorContact, StringComparison.Ordinal))
+            {
+                contact = envelope.PayloadAs(ProtocolJson.Default.OperatorContact);
+            }
+        }
+
+        Assert.NotNull(contact);
+        Assert.Equal("Jori", contact.Name);
+        Assert.Equal("06 12 34 56 78", contact.Contact);
+    }
+
+    [Fact]
+    public async Task A_pending_device_is_never_told_who_to_contact()
+    {
+        // The half of decision 71 that was decided against its own first draft. Sending the
+        // contact to a pending device would let a frame nobody has adopted name a person — but
+        // §3.3's registration endpoint is open to the internet and answers anything that connects
+        // with `pending`, so it would publish the operator's name and telephone number to every
+        // anonymous caller who found the URL. A pending frame gets the generic sentence instead.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+
+        await using (var first = await server.ConnectAgentAsync(key))
+        {
+            Assert.Equal(HandshakeStatus.Pending, first.Result.Status);
+        }
+
+        await server.SignInAsync(Password);
+        await PutFleetSettingAsync(server, "operator.name", "Jori");
+        await PutFleetSettingAsync(server, "operator.contact", "06 12 34 56 78");
+
+        await using var pending = await server.ConnectAgentAsync(key);
+        var afterResult = await pending.ReceiveAsync(TimeSpan.FromMilliseconds(700));
+
+        Assert.Equal(HandshakeStatus.Pending, pending.Result.Status);
+        Assert.Null(afterResult);
+        Assert.True(await pending.WaitForCloseAsync(TimeSpan.FromSeconds(3)));
+    }
+
+    [Fact]
     public async Task A_forged_proof_is_refused_and_leaves_no_trace()
     {
         await using var server = await ControlServer.StartAsync(Password);

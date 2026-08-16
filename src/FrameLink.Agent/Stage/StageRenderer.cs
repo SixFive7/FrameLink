@@ -214,12 +214,19 @@ public static class StageRenderer
 
     private static List<string> BuildHead(AgentStatus status, int tick, int inner, int accent, bool colour)
     {
+        // A stopped frame gets a still glyph in the accent of a refusal, not a turning spinner.
+        // The spinner is the headline's half of the same promise the marquee makes below: that
+        // something is happening. Nothing is (decision 70).
+        var givenUp = ReconcileVoice.HasStopped(status);
+
         var lines = new List<string>(12)
         {
             Compose([], inner, colour),
             Compose(
                 [
-                    new Run(Spinner(tick) + "  ", accent),
+                    givenUp
+                        ? new Run("■  ", StagePalette.Red)
+                        : new Run(Spinner(tick) + "  ", accent),
                     new Run(status.Condition.Headline, StagePalette.Headline, Bold: true),
                 ],
                 inner,
@@ -253,12 +260,51 @@ public static class StageRenderer
             AddField(lines, "Server", message, inner, colour);
         }
 
-        // §2.7 item 7. Placed with the narration rather than beside the activity bar because it
-        // is the answer to "what happens next", and what happens next is nothing until a person
-        // acts.
-        if (status.Reconcile.EscalationLine is { Length: > 0 } escalation)
+        // §2.7 item 5, in the operator's own words: one item at a time, with its attempt count.
+        // It lives here rather than on the activity line because this is where a value gets
+        // wrapped instead of truncated, and a resource name is routinely longer than the space
+        // left beside a progress bar — a truncated name is exactly the field somebody reads when
+        // they are trying to work out which setting is failing.
+        if (ReconcileVoice.ProgressLine(status) is { Length: > 0 } progress)
         {
-            AddField(lines, "Stopped", escalation, inner, colour);
+            AddField(lines, "Progress", progress, inner, colour);
+        }
+
+        // §2.7 items 7 and 8. Placed with the narration rather than beside the activity bar
+        // because it is the answer to "what happens next", and what happens next is nothing until
+        // a person acts.
+        //
+        // Three sentences and they are deliberately three: what stopped and what it wanted
+        // (rendered from the delta §2.5 rung 2 recorded), whether anybody has been told, and who
+        // to ask. Only the last of those survives the Fleet Manager being unreachable, which is
+        // why it comes off the frame's own state rather than off the link (decision 71).
+        if (ReconcileVoice.HasStopped(status))
+        {
+            // Gated on the fact rather than on the sentence: a frame can be known to have stopped
+            // before the pass that stopped it has published which resource it was, and the two
+            // sentences that follow — has anybody been told, who to ask — are exactly as true then.
+            if (ReconcileVoice.StoppedLine(status) is { Length: > 0 } stopped)
+            {
+                AddField(lines, "Stopped", stopped, inner, colour);
+            }
+
+            if (status.Reconcile.EscalationLine is { Length: > 0 } escalation)
+            {
+                AddField(lines, string.Empty, escalation, inner, colour);
+            }
+
+            AddField(lines, string.Empty, ReconcileVoice.ContactLine(status.Contact), inner, colour);
+
+            // §2.7 item 9. The console stage has no touch input — ITerminal has no read of any
+            // kind — so it says where the button is instead of drawing one that cannot be
+            // pressed. An affordance that does nothing is worse than an honest instruction
+            // (decision 72).
+            AddField(
+                lines,
+                string.Empty,
+                "This screen has no buttons — the Try again button is in the Fleet Manager.",
+                inner,
+                colour);
         }
 
         return lines;
@@ -310,6 +356,40 @@ public static class StageRenderer
     {
         var barWidth = Math.Max(8, inner - 34);
 
+        // §2.7 item 7, and the single most consequential branch in this method: it comes first,
+        // and it does not animate.
+        //
+        // What it replaces was a frame that painted "Attempt 5 of 5" beside a *travelling
+        // marquee* — an animation whose entire purpose is to prove that a pause is not a hang —
+        // for a resource the loop had permanently stopped touching. ReconcileLoop narrates the
+        // worst status in a pass and a resource that has given up sorts worst, so that picture was
+        // redrawn on every boot, for ever, showing work that was not happening. That is what made
+        // a frame look like it was rebooting endlessly (decision 70).
+        //
+        // Placed above the countdown deliberately as well: a stopped frame has no reboot coming,
+        // so there is nothing for a countdown to count.
+        if (ReconcileVoice.HasStopped(status))
+        {
+            var tries = ReconcileVoice.Stopped(status) is { Attempts: > 0 } resource
+                ? resource.Attempts
+                : status.Reconcile.Attempt;
+
+            return Compose(
+                [
+                    new Run(Pad("Stopped", LabelWidth), StagePalette.Label),
+                    new Run(Bar(1, barWidth) + "  ", StagePalette.Red),
+                    new Run(
+                        tries == 1
+                            ? "gave up after 1 try — waiting for a person"
+                            : string.Create(
+                                CultureInfo.InvariantCulture,
+                                $"gave up after {tries} tries — waiting for a person"),
+                        StagePalette.Body),
+                ],
+                inner,
+                colour);
+        }
+
         if (status.UpdateProgress is { } progress)
         {
             return Compose(
@@ -355,20 +435,17 @@ public static class StageRenderer
         // connection's, below, because a frame can be waiting on both at once and they mean
         // different things: one is "the server is not answering", the other is "this setting
         // would not stick".
+        // The attempt count itself has moved up into the narration block, where it is wrapped
+        // rather than truncated and where §2.7 item 5's "one item at a time" reads as a sentence.
+        // What is left here is item 6's job alone — proof that a wait is a wait and not a hang.
         if (status.Reconcile.Attempt > 0)
         {
-            var label = status.Reconcile.AttemptBudget > 0
-                ? string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"Attempt {status.Reconcile.Attempt} of {status.Reconcile.AttemptBudget}")
-                : string.Create(CultureInfo.InvariantCulture, $"Attempt {status.Reconcile.Attempt}");
-
             if (status.Reconcile.BackoffEndsAt is not { } endsAt || status.Reconcile.BackoffTotal <= TimeSpan.Zero)
             {
                 return Compose(
                     [
-                        new Run(Pad(label, LabelWidth + 4), StagePalette.Label),
-                        new Run(Marquee(tick, Math.Max(8, barWidth - 4)) + "  ", accent),
+                        new Run(Pad("Working", LabelWidth), StagePalette.Label),
+                        new Run(Marquee(tick, barWidth) + "  ", accent),
                         new Run(status.Reconcile.Resource ?? "working", StagePalette.Body),
                     ],
                     inner,
@@ -384,8 +461,8 @@ public static class StageRenderer
 
             return Compose(
                 [
-                    new Run(Pad(label, LabelWidth + 4), StagePalette.Label),
-                    new Run(Bar(done, Math.Max(8, barWidth - 4)) + "  ", accent),
+                    new Run(Pad("Waiting", LabelWidth), StagePalette.Label),
+                    new Run(Bar(done, barWidth) + "  ", accent),
                     new Run(
                         string.Create(CultureInfo.InvariantCulture, $"trying again in {Math.Max(0, (int)Math.Ceiling(left.TotalSeconds))}s"),
                         StagePalette.Body),
@@ -453,6 +530,15 @@ public static class StageRenderer
             : remaining;
     }
 
+    /// <summary>
+    /// One resource's line in the foot list, in words rather than in status names.
+    /// </summary>
+    /// <remarks>
+    /// The stopped case and the in-progress case are separate arms and read differently on
+    /// purpose — "gave up after 3 tries" and "attempt 2 of 3" describe different futures, and the
+    /// old shared arm rendered both as the enum member's name followed by an attempt count, which
+    /// made a resource nothing was touching look exactly like one being worked on (decision 70).
+    /// </remarks>
     private static string DescribeResource(ResourceStatus resource) => resource.Kind switch
     {
         ResourceStatusKind.InSync => "in sync",
@@ -461,13 +547,17 @@ public static class StageRenderer
             CultureInfo.InvariantCulture,
             $"waiting for {resource.BlockedBy ?? "something else"}"),
 
+        _ when ReconcileVoice.HasGivenUp(resource.Kind) => string.Create(
+            CultureInfo.InvariantCulture,
+            $"gave up after {resource.Attempts} {(resource.Attempts == 1 ? "try" : "tries")} — {resource.Delta ?? "no detail"}"),
+
         _ when resource.AttemptBudget > 0 => string.Create(
             CultureInfo.InvariantCulture,
-            $"{resource.Kind} — {resource.Delta ?? "no detail"} (attempt {resource.Attempts} of {resource.AttemptBudget})"),
+            $"attempt {resource.Attempts} of {resource.AttemptBudget} — {resource.Delta ?? "no detail"}"),
 
         _ => string.Create(
             CultureInfo.InvariantCulture,
-            $"{resource.Kind} — {resource.Delta ?? "no detail"} (attempt {resource.Attempts})"),
+            $"attempt {resource.Attempts} — {resource.Delta ?? "no detail"}"),
     };
 
     private static void AddField(List<string> lines, string label, string value, int inner, bool colour)

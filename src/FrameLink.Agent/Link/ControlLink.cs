@@ -104,6 +104,9 @@ public sealed class ControlLink
     /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
     public Action<RetryRequest>? OnRetry { get; init; }
 
+    /// <summary>Invoked when the Fleet Manager pushes who to contact (§2.7 item 8).</summary>
+    public Action<OperatorContact>? OnOperatorContact { get; init; }
+
     /// <summary>How long connect plus handshake may take.</summary>
     public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(20);
 
@@ -226,6 +229,7 @@ public sealed class ControlLink
                     Uplink = Uplink,
                     OnSettings = OnSettings,
                     OnRetry = OnRetry,
+                    OnOperatorContact = OnOperatorContact,
                 },
                 cancellationToken).ConfigureAwait(false);
         }

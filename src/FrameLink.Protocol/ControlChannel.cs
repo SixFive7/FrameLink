@@ -76,6 +76,27 @@ public static class ControlWire
     public const string KindRetry = "retry";
 
     /// <summary>
+    /// Server to agent. Who to contact when a frame has given up (§2.7 item 8, decision 71).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The third exercise of the growth rule this class documents, and the first one whose
+    /// justification is <i>which devices it reaches</i> rather than what it carries. Two more keys
+    /// in <see cref="SettingsPush"/> would have carried the same two strings with no new kind at
+    /// all — and would have been delivered to nobody who needed them most, because §3.3 gives a
+    /// pending device no settings, and a frame that never got adopted is exactly the frame whose
+    /// person has no other way to find out who to ask.
+    /// </para>
+    /// <para>
+    /// Sending it to a pending device does not weaken §3.3. Configuration is withheld because a
+    /// device the operator has not vouched for must not be told what to become; this changes no
+    /// desired value, converges nothing, commands nothing, and is only ever rendered as a sentence
+    /// on a screen somebody is already standing in front of.
+    /// </para>
+    /// </remarks>
+    public const string KindOperatorContact = "operator-contact";
+
+    /// <summary>
     /// Agent to server, on <see cref="ProtocolConstants.ChannelTelemetry"/>. The whole loop
     /// state and the per-resource status list (§3.5).
     /// </summary>
@@ -198,6 +219,34 @@ public sealed record RetryRequest
 
     /// <summary>When the operator asked, for the agent's log.</summary>
     public required DateTimeOffset RequestedUtc { get; init; }
+}
+
+/// <summary>
+/// Who to contact about this fleet — §2.7 item 8, decision 71. <b>Frozen once shipped.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Two strings and a timestamp, and the shortness is the design.</b> It is not an address book
+/// and it never grows into one: what a person standing in front of a stopped frame needs is a name
+/// to say and one way to reach them, and every field beyond that is a field the frame would have
+/// to lay out on a screen it is already using to explain a failure.
+/// </para>
+/// <para>
+/// <b>Both fields may be empty, and empty is a real answer.</b> An operator who has configured
+/// neither gets a frame that says so plainly rather than one that invents a support address, which
+/// is the same discipline §2.6 applies to silence from the server.
+/// </para>
+/// </remarks>
+public sealed record OperatorContact
+{
+    /// <summary>Who to ask for, as a person would say it. May be empty.</summary>
+    public string? Name { get; init; }
+
+    /// <summary>How to reach them — a phone number, an address, a room. May be empty.</summary>
+    public string? Contact { get; init; }
+
+    /// <summary>When the Fleet Manager last resolved these values.</summary>
+    public required DateTimeOffset UpdatedUtc { get; init; }
 }
 
 /// <summary>
