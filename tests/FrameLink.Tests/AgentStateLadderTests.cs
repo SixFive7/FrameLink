@@ -138,6 +138,31 @@ public sealed class AgentStateLadderTests
     }
 
     [Fact]
+    public void Every_rung_the_ladder_declares_is_one_something_can_actually_reach()
+    {
+        // Decision 82. `Reconciling` sat in this enum with an accent of its own in StagePalette
+        // and no producer anywhere: DeviceStateLadder is the only thing that builds a
+        // DeviceCondition, and it resolves a handshake outcome or silence, neither of which can
+        // yield it. §2.6's row of that name is AgentStatus.Drifted — orthogonal to this ladder,
+        // because a frame can be unreachable-but-was-green and locally drifted at once — so the
+        // member could never have been set without collapsing two facts into one.
+        //
+        // A dead rung is not inert. It reads as a state the frame can be in, so a later change
+        // reasons about a case that does not exist, and the palette painted an accent nothing
+        // could ever select. This asserts the enum against its producers rather than against a
+        // list, so adding a member without a path to it turns the suite red.
+        var reachable = AllStatuses
+            .Append("a-status-from-a-newer-server")
+            .Select(status => DeviceStateLadder.FromHandshake(Result(status)).State)
+            .Append(DeviceStateLadder.NoContact(lastAuthoritative: null, "no route to host").State)
+            .Append(DeviceStateLadder.Starting.State)
+            .Append(DeviceStateLadder.Remembered.State)
+            .ToHashSet();
+
+        Assert.Equal(Enum.GetValues<DeviceState>().ToHashSet(), reachable);
+    }
+
+    [Fact]
     public void The_servers_own_words_are_carried_through_verbatim()
     {
         var condition = DeviceStateLadder.FromHandshake(new HandshakeResult

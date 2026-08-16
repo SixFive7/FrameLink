@@ -6,9 +6,24 @@ namespace FrameLink.Agent.State;
 /// The device state ladder of §2.6, outermost rung first.
 /// </summary>
 /// <remarks>
+/// <para>
 /// There is no <c>Error</c> rung and there never will be. §1.2.3: every abnormal state is
 /// named, on the frame and in the Fleet Manager. A generic failure bucket is how a frame ends
 /// up quietly wrong.
+/// </para>
+/// <para>
+/// <b>There is no <c>Reconciling</c> rung either, and §2.6's row of that name is a field rather
+/// than a member here</b> (decision 82). Every value below is produced by
+/// <see cref="DeviceStateLadder"/>, which resolves what the <i>Fleet Manager</i> said — a
+/// handshake outcome, or silence. What the frame has observed of <i>itself</i> is
+/// <see cref="AgentStatus.Drifted"/>, and the two are orthogonal rather than ordered: a frame can
+/// be unreachable-but-was-green and locally drifted in the same instant, and a single enum would
+/// force that to be reported as one or the other. §2.6's row is met by composition instead —
+/// <see cref="AgentStatus.ProductRuns"/> is the <i>Product runs? No</i> column and
+/// <see cref="ReconcileVoice.Headline"/> the narrated repair screen. A member here that nothing
+/// can set is worse than no member at all: <see cref="Stage.StagePalette"/> carried an accent for
+/// it that nothing could ever paint with.
+/// </para>
 /// </remarks>
 public enum DeviceState
 {
@@ -24,9 +39,6 @@ public enum DeviceState
     /// <summary>Agent version differs from the version this server serves (§2.8).</summary>
     VersionMismatch,
 
-    /// <summary>A resource drifted or was never applied.</summary>
-    Reconciling,
-
     /// <summary>Everything verified.</summary>
     InSync,
 }
@@ -35,7 +47,7 @@ public enum DeviceState
 /// One rung of the ladder, resolved for a specific cause and ready to render.
 /// </summary>
 /// <remarks>
-/// The ladder has six rungs but the handshake has more outcomes than that — <c>pending</c>,
+/// The ladder has five rungs but the handshake has more outcomes than that — <c>pending</c>,
 /// <c>blocked</c> and <c>bad-signature</c> all sit on <see cref="DeviceState.NotAdopted"/>.
 /// They are still three different things to a person standing in front of the frame, so the
 /// rung is the <i>coarse</i> classification and this record carries the distinct wording that

@@ -206,7 +206,12 @@ public sealed class AgentLocalOriginTests : IAsyncLifetime
         await _channel.PublishAsync(
             new StageMessage
             {
-                Condition = "Reconciling",
+                // The shape a repairing frame actually sends, and the reason decision 82 took
+                // `Reconciling` off the ladder: the rung is what the Fleet Manager said, so an
+                // adopted frame stays `InSync` there, and `ProductRuns` false is the drift the
+                // frame observed of itself. This fixture used to seed `Reconciling`, which is a
+                // condition no frame has ever been able to put on this channel.
+                Condition = "InSync",
                 ProductRuns = false,
                 Detected = "The speaker volume setting is not what it should be.",
             },

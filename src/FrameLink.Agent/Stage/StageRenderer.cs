@@ -41,6 +41,16 @@ public static class StagePalette
     public const int Grey = 244;
 
     /// <summary>The accent for a condition.</summary>
+    /// <remarks>
+    /// <b>The rung, and only the rung.</b> This took a <c>DeviceState.Reconciling</c> arm
+    /// until decision 82, which nothing could reach because nothing produced that rung — local
+    /// drift is <see cref="AgentStatus.Drifted"/>, deliberately not on the ladder. The consequence
+    /// is stated rather than hidden: a frame the Fleet Manager has cleared and that is repairing
+    /// itself keeps <see cref="Green"/> here while <see cref="ReconcileVoice.Headline"/> says it is
+    /// fixing something, because the accent is composed from the condition alone. Painting that
+    /// amber means composing this the way the headline is composed, which is a change to what the
+    /// screen does rather than a dead branch, and is left for the operator to ask for.
+    /// </remarks>
     public static int For(DeviceCondition condition)
     {
         ArgumentNullException.ThrowIfNull(condition);
@@ -48,7 +58,6 @@ public static class StagePalette
         return condition.State switch
         {
             DeviceState.InSync => Green,
-            DeviceState.Reconciling => Amber,
             DeviceState.VersionMismatch => Amber,
             DeviceState.ControlNotConfigured => Blue,
             DeviceState.NotAdopted => condition.Cause is "blocked" or "bad-signature" ? Red : Blue,
