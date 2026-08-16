@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-15T23:32:58Z",
+  "updatedUtc": "2026-08-16T03:42:48Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -19,8 +19,7 @@
     "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
     "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199. The mule's agent is pointed at http://10.20.30.200:5199 and is retrying forever; its journal is a wall of connection warnings until this is up.",
     "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
-    "THE FRONTIER (M3): 69 of 79 catalog resources are implemented and only 9 have ever converged on hardware. The first full provision of the whole catalog on a frame has not happened and is the largest unknown in the build. Do it against a freshly flashed card, and watch it on the panel.",
-    "Finish the catalog: 10 resources are still unimplemented. reference/resource-catalog.md is the spec; the count above is read from the assertion in tests/FrameLink.Tests/AgentResourceGraphTests.cs, which goes red when the graph and the catalog disagree.",
+    "THE FRONTIER (M3): 79 of 79 catalog resources are implemented and only 35 have ever converged on hardware. The first full provision of the whole catalog on a frame has not happened and is the largest unknown in the build. Do it against a freshly flashed card, and watch it on the panel.",
     "Settle the WirePlumber question, which is one read-only command and has blocked the audio mixer resources' design since the catalog was written: list ~/.local/state/wireplumber/ on the mule. If stored device state is there it is a second owner of every audio.mixer.* value and wins, because it applies after alsa-restore. See reference/resource-catalog.md, suspected-reverts item 4.",
     "M2.5 is NOT done and cannot be finished at this desk: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is attached. Ask the user for one."
   ],
@@ -29,19 +28,19 @@
       "id": "fl-pw-unset",
       "what": "FL_PW is not set, so no command can reach the mule.",
       "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-15T23:32:58Z"
+      "since": "2026-08-16T03:42:48Z"
     },
     {
       "id": "ha-token-unset",
       "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
       "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
-      "since": "2026-08-15T23:32:58Z"
+      "since": "2026-08-16T03:42:48Z"
     },
     {
       "id": "operator-password-unset",
       "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
       "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
-      "since": "2026-08-15T23:32:58Z"
+      "since": "2026-08-16T03:42:48Z"
     }
   ],
   "milestones": [
@@ -82,11 +81,11 @@
       "stateFrom": "witness",
       "evidence": {
         "how": "observed-on-hardware",
-        "what": "Nine resources converged on the mule and each was verified after a real reboot, not after a service restart. The console stage rendered on the physical DSI panel and read correctly. The nine are listed under resources.hardwareVerified.",
-        "whenUtc": "2026-08-15",
+        "what": "Three separate observations, all on the mule. (1) 2026-08-15: nine resources converged and each was verified after a real reboot, not after a service restart, and the console stage rendered on the physical DSI panel and read correctly. (2) 2026-08-16: the console stage's own terminal and the handover both ways - fl-agent holds /dev/tty8 while agetty keeps /dev/tty1, /sys/class/tty/tty0/active reads tty8 with no compositor up, getty@tty1 is still active so 5.5's physical login survives, and the EIO line 874823b removed does not appear on this boot; with a compositor up the log carries 'The screen is now the product's - tty1 is in front'. PASS on 874823b's own criteria. (3) 2026-08-16: 2.5 rung 3's operator retry used for the first time in production, over POST /api/devices/{id}/retry/{resource} - six presses, all HTTP 200 'sent', each one reaching the frame's journal as 'the attempt budget was reset by the Fleet Manager'. boot.autologin.getty-tty1 left Escalated and its twelve dependents left Blocked; session.bash-profile-exec-labwc went straight to InSync from the retry alone with no reboot, which is what a resource that was never actually broken looks like when the ladder lets go of it. The frame reached 72 of 79 in-sync.",
+        "whenUtc": "2026-08-16",
         "where": "mule framelink@10.20.30.53, physical panel on card0-DSI-2",
-        "recordedIn": "git log (011cf3a reconciler engine, 28a5264 agent seams and honest console, 9eedf91 telemetry payloads, 6d77144 console stage); the panel was photographed by `fl.py collect` - see artifacts.lastCollection",
-        "notWitnessed": "Only those nine. Everything the catalog has gained since is code with tests and has never run on hardware - see resources.hardwareVerified versus resources.implemented."
+        "recordedIn": "git log (011cf3a reconciler engine, 28a5264 agent seams and honest console, 9eedf91 telemetry payloads, 6d77144 console stage, 874823b console stage on tty8, 97862c6 and a95958b the two halves of retry, fe00f40 the retry button and its bundle, 74cdedf the session-readiness gate); the panel was photographed by `fl.py collect` - the tty8 observation's screenshot is runs/20260816T021133Z-collect/screenshot.png, which shows the console stage painting the catalog on the physical panel",
+        "notWitnessed": "The retry presses were made through the API, not through the GUI button committed in fe00f40 - the button, its client method and its rendered bundle are covered by GuiFreshnessTests but no operator has clicked one on a screen. The 409 'offline' branch was never exercised against a real disconnected frame; every press landed on a live socket. tool.xvf-host.installed remains Escalated and was deliberately not retried. Reboot-verification is claimed for 35 resources and not for all 72 that are in-sync - see the comment on _HARDWARE_VERIFIED_RESOURCES for why that is an evidence limit."
       }
     },
     {
@@ -114,8 +113,8 @@
       "stateFrom": "resources",
       "evidence": {
         "how": "derived-from-the-repository",
-        "what": "69 of 79 catalog resources are implemented in the agent; 9 of 79 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
-        "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. No state-diff harness exists yet."
+        "what": "79 of 79 catalog resources are implemented in the agent; 35 of 79 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
+        "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. The state-diff harness now exists (`fl.py parity`, judged by tools/FrameLink.Parity) and is tested against fixtures, but it has never been run against a frame: no observation has ever been collected and no parity verdict has ever been issued. The other two bars have no harness."
       }
     },
     {
@@ -148,9 +147,9 @@
       "title": "Native AOT linux-arm64 binary built in an emulated container",
       "state": "proven",
       "provenBy": "fl.py build",
-      "provenUtc": "2026-08-15T23:21:43Z",
+      "provenUtc": "2026-08-16T02:59:48Z",
       "provenCommand": "fl.py build",
-      "detail": "0.0.0+2f43094.dirty linux-arm64 10131568 bytes in framelink-build:arm64"
+      "detail": "0.0.0+74cdedf.dirty linux-arm64 10332168 bytes in framelink-build:arm64"
     },
     "test-runner": {
       "title": "Test suite runs and propagates its exit code",
@@ -172,9 +171,9 @@
       "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
       "state": "proven",
       "provenBy": "fl.py deploy",
-      "provenUtc": "2026-08-15T23:22:15Z",
+      "provenUtc": "2026-08-16T02:07:30Z",
       "provenCommand": "fl.py deploy",
-      "detail": "0.0.0+2f43094.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
+      "detail": "0.0.0+a95958b.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
     },
     "power-cycle": {
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
@@ -188,26 +187,26 @@
       "title": "Screenshot and journal tail come back from the mule",
       "state": "proven",
       "provenBy": "fl.py collect",
-      "provenUtc": "2026-08-15T19:14:48Z",
+      "provenUtc": "2026-08-16T02:11:35Z",
       "provenCommand": "fl.py collect",
-      "detail": "screenshot via framebuffer, journal 200 lines"
+      "detail": "screenshot via framebuffer, journal 202 lines"
     },
     "closed-loop": {
       "title": "A code change reaches the mule and is verified with no human help (M0 done)",
       "state": "proven",
       "provenBy": "fl.py build + fl.py deploy",
-      "provenUtc": "2026-08-15T23:22:15Z",
+      "provenUtc": "2026-08-16T02:07:30Z",
       "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
-      "detail": "fl-agent 0.0.0+2f43094.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
+      "detail": "fl-agent 0.0.0+a95958b.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
     }
   },
   "resources": {
     "catalogTotal": 79,
     "catalogTotalReadFrom": "reference/resource-catalog.md",
-    "implemented": 69,
+    "implemented": 79,
     "implementedReadFrom": "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
-    "remaining": 10,
-    "hardwareVerifiedCount": 9,
+    "remaining": 0,
+    "hardwareVerifiedCount": 35,
     "hardwareVerified": [
       "boot.config.dtoverlay-waveshare-panel",
       "boot.cmdline.fbcon-rotate",
@@ -217,7 +216,33 @@
       "identity.hostname",
       "unit.cpu-performance.content",
       "unit.cpu-performance.enabled",
-      "cpu.governor.performance"
+      "cpu.governor.performance",
+      "agent.keypair",
+      "app.config.identity",
+      "app.config.immich-kiosk-url",
+      "app.config.livekit-token",
+      "app.config.room",
+      "apt.unattended-upgrades.allowed-origins",
+      "boot.autologin.getty-tty1",
+      "boot.config.dtoverlay-vc4-kms-v3d-noaudio",
+      "camera.pipewire-node.framelink-cam",
+      "kiosk.binary.pinned-release",
+      "kiosk.config.immich-api-key",
+      "kiosk.config.immich-url",
+      "kiosk.config.offline-asset-count",
+      "kiosk.config.offline-mode-enabled",
+      "kiosk.listen-address",
+      "kiosk.offline-cache.dir",
+      "labwc.autostart.executable",
+      "labwc.rc-xml.touch-map",
+      "portal.permission-store.camera",
+      "session.bash-profile-exec-labwc",
+      "unit.chromium-kiosk.content",
+      "unit.chromium-kiosk.enabled",
+      "unit.framelink-camera.content",
+      "unit.framelink-camera.enabled",
+      "unit.xdg-desktop-portal.dropin-desktop",
+      "wireplumber.conf.camera-monitors-disabled"
     ],
     "meaning": {
       "implemented": "The resource exists in the agent's catalog with tests. It has never necessarily run on a frame.",
@@ -229,6 +254,7 @@
     "specification": "version2.md - the build specification. Section 5.1 is the milestone ladder mirrored below, section 5.5 is why this file exists, Appendix A preserves every decision with its reasoning.",
     "resourceSpec": "reference/resource-catalog.md - the enumeration of all 79 device settings extracted from build guides 3-12, one block per resource with its Observe, Act and Verify. This is what M3 is migrating, and it is the spec each new resource is written against.",
     "parityTarget": "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, config contents and hashes, mixer values, firmware versions. This is what Mn+3 measures 'at parity' against, and the catalog's cross-check.",
+    "parityHarness": "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes over SSH, then tools/FrameLink.Parity judges the result against the parity target, an expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be completed.",
     "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",
     "repoRules": "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
     "harness": "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does and what it refuses to do; flh/config.py holds every host, path and default in one place.",
@@ -280,48 +306,49 @@
   "artifacts": {
     "agentBinary": {
       "path": "build/out/fl-agent",
-      "version": "0.0.0+2f43094.dirty",
+      "version": "0.0.0+74cdedf.dirty",
       "runtimeIdentifier": "linux-arm64",
-      "sha256": "ece680d8440954a0a265b2eb4bb769a0babad1d96608d9deb7119192f22f051e",
-      "sizeBytes": 10131568,
+      "sha256": "18d53573752a2b745bb7ab7f6b1c4b895cdb5a61f1bae77c04b5b04f747c222f",
+      "sizeBytes": 10332168,
       "image": "framelink-build:arm64",
-      "builtUtc": "2026-08-15T23:21:43Z"
+      "builtUtc": "2026-08-16T02:59:48Z"
     },
     "deployed": {
       "host": "10.20.30.53",
       "binary": "/usr/local/bin/fl-agent",
-      "version": "0.0.0+2f43094.dirty",
-      "sha256": "ece680d8440954a0a265b2eb4bb769a0babad1d96608d9deb7119192f22f051e",
+      "version": "0.0.0+a95958b.dirty",
+      "sha256": "43cbafd92f02a89e4671d75c5bfdb7584d432a26c15b4a71a7a91d8784169ef0",
       "isActive": "active",
       "isEnabled": "enabled",
       "sudoMode": "sudo -S (password on stdin)",
-      "deployedUtc": "2026-08-15T23:22:15Z"
+      "deployedUtc": "2026-08-16T02:07:29Z"
     },
     "lastCollection": {
-      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260815T191447Z-collect",
-      "capturedUtc": "2026-08-15T19:14:48Z",
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T021133Z-collect",
+      "capturedUtc": "2026-08-16T02:11:35Z",
       "screenshot": {
         "method": "framebuffer",
-        "bytes": 16825,
+        "bytes": 29708,
         "geometry": "800x1280",
         "bitsPerPixel": 32,
         "stride": 3200,
         "pixelFormat": "bgrx",
         "rotate": 0,
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T191447Z-collect\\screenshot.png"
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T021133Z-collect\\screenshot.png"
       },
       "journal": {
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260815T191447Z-collect\\journal-fl-agent.service.txt",
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T021133Z-collect\\journal-fl-agent.service.txt",
         "unit": "fl-agent.service",
-        "lines": 200
+        "lines": 202
       }
-    }
+    },
+    "lastParityRun": null
   },
   "counters": {
-    "builds": 6,
-    "deploys": 4,
+    "builds": 10,
+    "deploys": 5,
     "testRuns": 13,
-    "collections": 4,
+    "collections": 7,
     "relayOperations": 2
   },
   "log": [
@@ -565,6 +592,66 @@
       "ok": true,
       "summary": "succeeded: 857",
       "exitCode": 0
+    },
+    {
+      "utc": "2026-08-16T01:39:38Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+aa5b77f.dirty 10265520B f21ae8cb80ba"
+    },
+    {
+      "utc": "2026-08-16T01:57:37Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+5e9d01a.dirty 10331352B 1e75bd94db5a"
+    },
+    {
+      "utc": "2026-08-16T02:04:37Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T020436Z-collect"
+    },
+    {
+      "utc": "2026-08-16T02:04:48Z",
+      "command": "parity",
+      "ok": true,
+      "summary": "at parity - C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T020443Z-parity"
+    },
+    {
+      "utc": "2026-08-16T02:07:18Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+a95958b.dirty 10331352B 43cbafd92f02"
+    },
+    {
+      "utc": "2026-08-16T02:07:30Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+a95958b.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-16T02:07:46Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T020745Z-collect"
+    },
+    {
+      "utc": "2026-08-16T02:10:28Z",
+      "command": "parity",
+      "ok": false,
+      "summary": "FL_PW is not set - cannot reach the mule."
+    },
+    {
+      "utc": "2026-08-16T02:11:35Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T021133Z-collect"
+    },
+    {
+      "utc": "2026-08-16T02:59:48Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+74cdedf.dirty 10332168B 18d53573752a"
     }
   ]
 }

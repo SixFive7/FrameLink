@@ -237,21 +237,44 @@ _MILESTONES: list[dict[str, Any]] = [
         "evidence": {
             "how": "observed-on-hardware",
             "what": (
-                "Nine resources converged on the mule and each was verified after a real reboot, "
-                "not after a service restart. The console stage rendered on the physical DSI "
-                "panel and read correctly. The nine are listed under resources.hardwareVerified."
+                "Three separate observations, all on the mule. (1) 2026-08-15: nine resources "
+                "converged and each was verified after a real reboot, not after a service "
+                "restart, and the console stage rendered on the physical DSI panel and read "
+                "correctly. (2) 2026-08-16: the console stage's own terminal and the handover "
+                "both ways - fl-agent holds /dev/tty8 while agetty keeps /dev/tty1, "
+                "/sys/class/tty/tty0/active reads tty8 with no compositor up, getty@tty1 is "
+                "still active so 5.5's physical login survives, and the EIO line 874823b removed "
+                "does not appear on this boot; with a compositor up the log carries 'The screen "
+                "is now the product's - tty1 is in front'. PASS on 874823b's own criteria. "
+                "(3) 2026-08-16: 2.5 rung 3's operator retry used for the first time in "
+                "production, over POST /api/devices/{id}/retry/{resource} - six presses, all "
+                "HTTP 200 'sent', each one reaching the frame's journal as 'the attempt budget "
+                "was reset by the Fleet Manager'. boot.autologin.getty-tty1 left Escalated and "
+                "its twelve dependents left Blocked; session.bash-profile-exec-labwc went "
+                "straight to InSync from the retry alone with no reboot, which is what a "
+                "resource that was never actually broken looks like when the ladder lets go of "
+                "it. The frame reached 72 of 79 in-sync."
             ),
-            "whenUtc": "2026-08-15",
+            "whenUtc": "2026-08-16",
             "where": f"mule {MULE_USER}@{MULE_HOST}, physical panel on card0-DSI-2",
             "recordedIn": (
                 "git log (011cf3a reconciler engine, 28a5264 agent seams and honest console, "
-                "9eedf91 telemetry payloads, 6d77144 console stage); the panel was photographed "
-                "by `fl.py collect` - see artifacts.lastCollection"
+                "9eedf91 telemetry payloads, 6d77144 console stage, 874823b console stage on "
+                "tty8, 97862c6 and a95958b the two halves of retry, fe00f40 the retry button and "
+                "its bundle, 74cdedf the session-readiness gate); the panel was photographed by "
+                "`fl.py collect` - the tty8 observation's screenshot is "
+                "runs/20260816T021133Z-collect/screenshot.png, which shows the console stage "
+                "painting the catalog on the physical panel"
             ),
             "notWitnessed": (
-                "Only those nine. Everything the catalog has gained since is code with tests and "
-                "has never run on hardware - see resources.hardwareVerified versus "
-                "resources.implemented."
+                "The retry presses were made through the API, not through the GUI button "
+                "committed in fe00f40 - the button, its client method and its rendered bundle "
+                "are covered by GuiFreshnessTests but no operator has clicked one on a screen. "
+                "The 409 'offline' branch was never exercised against a real disconnected frame; "
+                "every press landed on a live socket. tool.xvf-host.installed remains Escalated "
+                "and was deliberately not retried. Reboot-verification is claimed for 35 "
+                "resources and not for all 72 that are in-sync - see the comment on "
+                "_HARDWARE_VERIFIED_RESOURCES for why that is an evidence limit."
             ),
         },
     },
@@ -335,12 +358,29 @@ _MILESTONES: list[dict[str, Any]] = [
 ]
 
 #: The only resources that have ever converged on real hardware, each verified after a real
-#: reboot rather than after a service restart. Witnessed 2026-08-15 on the mule; this is the
-#: M2 acceptance set and it has not grown since. Everything the catalog has gained after these
+#: reboot rather than after a service restart. Everything the catalog has gained beyond these
 #: is code with tests, which is a different and much weaker claim - keeping the two apart is
 #: the single most load-bearing distinction in this file, because "implemented" reads like
 #: "working" to a session that has forgotten which is which.
+#:
+#: Two witnessed sessions, kept in one list because the claim is identical:
+#:
+#:   2026-08-15, the M2 acceptance nine (first block below).
+#:   2026-08-16, twenty-six more (second block), on mule T1RJ-6JCQ-9HN8-3920 during the first
+#:     provision of the whole 79-resource catalog. The membership test was mechanical rather
+#:     than eyeballed: a resource is listed only if the Fleet Manager's device-event history
+#:     recorded a `boot` event for it - "Booted, and came back to verify X", which the loop
+#:     emits only after a real reboot - AND it was `in-sync` in the live reconcile report at
+#:     sequence 787. Either half alone is weaker: the boot event alone does not say the verify
+#:     passed, and in-sync alone does not say a reboot was ever involved.
+#:
+#: THE LIST IS A FLOOR, NOT A CENSUS, and the gap is evidence and not doubt. 72 of 79 were
+#: in-sync at sequence 787; only these 35 can be shown to have been reboot-verified from the
+#: evidence held, because /api/devices/{id}/events returns the last 50 events and the rest of
+#: this frame's history had already rolled off before it was read. The other 37 in-sync
+#: resources are very probably in the same condition and are deliberately not claimed.
 _HARDWARE_VERIFIED_RESOURCES: list[str] = [
+    # 2026-08-15 - M2's acceptance set.
     "boot.config.dtoverlay-waveshare-panel",
     "boot.cmdline.fbcon-rotate",
     "journal.storage-persistent",
@@ -350,6 +390,33 @@ _HARDWARE_VERIFIED_RESOURCES: list[str] = [
     "unit.cpu-performance.content",
     "unit.cpu-performance.enabled",
     "cpu.governor.performance",
+    # 2026-08-16 - the first provision of the full catalog, evidence as described above.
+    "agent.keypair",
+    "app.config.identity",
+    "app.config.immich-kiosk-url",
+    "app.config.livekit-token",
+    "app.config.room",
+    "apt.unattended-upgrades.allowed-origins",
+    "boot.autologin.getty-tty1",
+    "boot.config.dtoverlay-vc4-kms-v3d-noaudio",
+    "camera.pipewire-node.framelink-cam",
+    "kiosk.binary.pinned-release",
+    "kiosk.config.immich-api-key",
+    "kiosk.config.immich-url",
+    "kiosk.config.offline-asset-count",
+    "kiosk.config.offline-mode-enabled",
+    "kiosk.listen-address",
+    "kiosk.offline-cache.dir",
+    "labwc.autostart.executable",
+    "labwc.rc-xml.touch-map",
+    "portal.permission-store.camera",
+    "session.bash-profile-exec-labwc",
+    "unit.chromium-kiosk.content",
+    "unit.chromium-kiosk.enabled",
+    "unit.framelink-camera.content",
+    "unit.framelink-camera.enabled",
+    "unit.xdg-desktop-portal.dropin-desktop",
+    "wireplumber.conf.camera-monitors-disabled",
 ]
 
 #: The durable artifacts a session starting from nothing needs, and what each one is *for*.
