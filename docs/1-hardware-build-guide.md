@@ -42,3 +42,11 @@ Step-by-step instructions for physically assembling a FrameLink unit. **This doc
    ![Raspberry Pi 27W USB-C Power Supply](1-hardware-build-guide/power-supply-psu.jpg)
 
    ![Pi 5 USB-C power connection](1-hardware-build-guide/power-supply.png)
+
+---
+
+<br>
+
+![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
+
+All seven steps above are done and nothing has been switched on. Walk once round the frame and check each connection by eye: the heatsink sits flat with both push pins clicked down; the display has **both** of its connections — the wide ribbon into the port beside the heatsink and the small 5V lead onto the GPIO pins; the camera ribbon is in the port beside the network socket with its latch closed; the ReSpeaker microphone board is in one of the Pi's USB sockets and the speaker is plugged into the ReSpeaker; the network cable runs from the Pi to your router or switch (skip this one if the frame will use WiFi instead); and the power supply is plugged into the Pi but still out of the wall. Nothing should look forced: no ribbon cable kinked, none sitting half-out of its socket, and the protective film peeled off the screen. There is no microSD card in the Pi yet and the frame has never been powered on — that is exactly where this guide is meant to leave you, because the card is prepared on your computer first in [guide 2](2-sd-flash-first-boot.md).

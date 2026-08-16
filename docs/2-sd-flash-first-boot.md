@@ -247,4 +247,10 @@ Flash Raspberry Pi OS Lite (Trixie, 64-bit) onto the microSD card from your work
 
     Notice the kernel version in the banner has moved on from step 19 — it now reads `6.12.75+rpt-rpi-2712` (up from `6.12.47+rpt-rpi-2712`), confirming the upgrade-then-reboot cycle picked up the new kernel. The `Last login:` line shows the previous session — the one you used to run `sudo reboot`.
 
-**Checkpoint:** you can reach the Pi over the network via `ssh framelink@<hostname>.local`, `apt full-upgrade` completes cleanly, and the Pi comes back up after the reboot. The DSI display is still dark (the Waveshare overlay is added in the next guide) and the ReSpeaker XVF3800 mic array shows some LEDs flickering without a real pattern — both are expected at this stage.
+---
+
+<br>
+
+![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
+
+The Pi boots on its own and answers to the name you gave it. From your workstation, `ssh framelink@<hostname>.local` now asks only for your password — the one-off question about trusting the host key is gone — and leaves you sitting at a `framelink@<hostname>:~ $` prompt. `sudo apt update && sudo apt full-upgrade -y` ran through to the end without stopping on an error, and the kernel version in the login banner is higher after the reboot than it was in step 19, which is what proves the update and the restart both took effect. The frame's own screen is still dark and the ReSpeaker XVF3800 mic array shows some LEDs flickering without a real pattern — both are expected at this stage; the display is brought to life in [guide 3](3-hardware-configuration.md).
