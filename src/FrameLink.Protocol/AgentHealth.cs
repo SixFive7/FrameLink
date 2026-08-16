@@ -27,7 +27,16 @@ public static class AgentResourceStatus
     /// <summary>Attempt budget exhausted; carries the expected-vs-observed delta (§2.5).</summary>
     public const string Degraded = "Degraded";
 
-    /// <summary>Held back by a failed dependency in the DAG (§2.2).</summary>
+    /// <summary>Not attempted, because something it depends on is not in sync (§2.2).</summary>
+    /// <remarks>
+    /// Not "a <i>failed</i> dependency", which is what this said and is narrower than the loop
+    /// that writes it: <c>ReconcileLoop.Blocker</c> returns any dependency that is not
+    /// <see cref="InSync"/> — including one that is merely still being applied, and including the
+    /// whole catalog on a bare frame whose adoption has not landed yet. It is also what an
+    /// unevaluable observation lands on, where the frame could not ask the Fleet Manager at all.
+    /// None of those is a failure, which is why <see cref="AgentHealth.Classify"/> does not read
+    /// it as one.
+    /// </remarks>
     public const string Blocked = "Blocked";
 
     /// <summary>The operator has been notified (§2.5 rung 3).</summary>
@@ -71,10 +80,41 @@ public static class AgentHealth
     /// <summary>The agent reports everything verified.</summary>
     public const string InSync = "in-sync";
 
-    /// <summary>Busy, not broken: progressing or waiting for a verifying reboot.</summary>
+    /// <summary>
+    /// Busy, not broken: progressing, waiting for a verifying reboot, or waiting on something else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b><see cref="AgentResourceStatus.Blocked"/> belongs here and not under
+    /// <see cref="Degraded"/>, and the specification says so three times.</b> §2.3 lists it as its
+    /// own term beside <c>Degraded(reason, delta, attempts)</c> rather than as a flavour of it.
+    /// §2.5's ladder — budget exhausted, notify, give up — never passes through it, and a blocked
+    /// resource spends no attempt against that budget. And §2.2 introduces it for the express
+    /// purpose of stopping a dependent from reading as a failure: the loop "marks dependents
+    /// <c>Blocked(dependency)</c> rather than letting them fail confusingly on their own".
+    /// Classifying it as a fault undoes the one thing it was added to do.
+    /// </para>
+    /// <para>
+    /// It is also the common case rather than an edge one. §2.4 reboots for every resource, so
+    /// for most of a first provision most of the catalog is waiting on something upstream — the
+    /// first full provision reported twelve blocked behind one escalation, and a bare frame that
+    /// has not been adopted yet has the entire catalog blocked behind
+    /// <c>agent.adoption</c>. Amber on all of that is the same false alarm this type was written
+    /// to remove, arriving from the server instead of from the browser.
+    /// </para>
+    /// <para>
+    /// The coarse vocabulary cannot see which kind of waiting it is, because
+    /// <see cref="Classify"/> reads only the head and the dependency is in the parenthesis. A
+    /// resource blocked on <c>the Fleet Manager</c> — the frame could not ask, so it concluded
+    /// nothing — is therefore also <c>working</c> here. That is the safe direction: the fine
+    /// distinction is drawn on the reconciliation screen, which has the whole report, and the one
+    /// thing this must not do is report a defect on a frame that behaved correctly while a server
+    /// was quiet.
+    /// </para>
+    /// </remarks>
     public const string Working = "working";
 
-    /// <summary>Something is wrong and named: degraded, blocked or escalated.</summary>
+    /// <summary>Something is wrong and named: degraded or escalated.</summary>
     public const string Degraded = "degraded";
 
     /// <summary>Given up on. The operator has been told more than once (§2.5).</summary>
@@ -114,9 +154,10 @@ public static class AgentHealth
         // brittleness this whole type exists to remove.
         return
             Is(head, AgentResourceStatus.InSync) ? InSync
-            : Is(head, AgentResourceStatus.Progressing) || Is(head, AgentResourceStatus.AwaitingReboot) ? Working
+            : Is(head, AgentResourceStatus.Progressing)
+                || Is(head, AgentResourceStatus.AwaitingReboot)
+                || Is(head, AgentResourceStatus.Blocked) ? Working
             : Is(head, AgentResourceStatus.Degraded)
-                || Is(head, AgentResourceStatus.Blocked)
                 || Is(head, AgentResourceStatus.Escalated) ? Degraded
             : Is(head, AgentResourceStatus.Halted) ? Halted
             : Unknown;

@@ -211,7 +211,13 @@ public sealed class ControlOperatorApiTests
     [InlineData("Progressing(display.overlay)", AgentHealth.Working)]
     [InlineData("AwaitingReboot(audio.volume)", AgentHealth.Working)]
     [InlineData("Degraded(audio.volume, expected 75 observed 40, attempt 3)", AgentHealth.Degraded)]
-    [InlineData("Blocked(kiosk.stack)", AgentHealth.Degraded)]
+
+    // Waiting, not failing. §2.2 added Blocked so a dependent would not "fail confusingly on
+    // their own", §2.5's ladder never passes through it, and it spends no attempt — so amber here
+    // would contradict the reconciliation screen, which renders the same status muted, and would
+    // paint most of the catalog for most of a first provision.
+    [InlineData("Blocked(kiosk.stack)", AgentHealth.Working)]
+    [InlineData("Blocked(the Fleet Manager)", AgentHealth.Working)]
     [InlineData("Escalated(firmware)", AgentHealth.Degraded)]
     [InlineData("Halted(firmware)", AgentHealth.Halted)]
     [InlineData("degraded", AgentHealth.Degraded)]
