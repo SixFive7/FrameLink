@@ -531,13 +531,24 @@ def _resource_ledger() -> dict[str, Any]:
 
     * the catalog total, from the Counts table in ``reference/resource-catalog.md``;
     * how many are implemented, from the assertion in ``AgentResourceGraphTests.cs`` that
-      pins ``graph.Count`` - which is not a proxy for the count, it is the count, enforced by
-      a test that goes red the moment the catalog and the graph disagree.
+      pins ``graph.Count`` - which is not a proxy for the count, it is the count.
 
     Measuring rather than recording is the point. A frozen number would be wrong within a day
     of a workstream landing resources, and wrong in the direction that matters least visibly:
     it would keep claiming less progress than exists, and nobody re-checks a number that only
     ever understates.
+
+    **The graph is no longer a subset of the catalog, and the arithmetic used to assume it
+    was.** ``kiosk.config.albums`` was added to the agent deliberately without being added to
+    ``reference/resource-catalog.md`` (see c855027): it comes from neither guide 9 nor the
+    catalog, it exists because a frame whose account owns no photographs can only reach any
+    through a shared album. So implemented legitimately exceeded the catalog total and
+    ``remaining`` went to -1, which the frontier line then rendered as "80 of 79 catalog
+    resources are implemented" - a sentence that reads as a bug in the counting rather than as
+    the real thing it was describing. Both numbers were right the whole time; the subtraction
+    was not. ``remaining`` is now floored at zero and the excess is reported as
+    ``beyondCatalog``, so a resource the agent has and the catalog does not is visible as
+    itself rather than as a negative.
     """
     total, total_source = _read_number(
         "reference/resource-catalog.md",
@@ -553,7 +564,8 @@ def _resource_ledger() -> dict[str, Any]:
         "catalogTotalReadFrom": total_source,
         "implemented": implemented,
         "implementedReadFrom": implemented_source,
-        "remaining": (total - implemented) if (total is not None and implemented is not None) else None,
+        "remaining": max(0, total - implemented) if (total is not None and implemented is not None) else None,
+        "beyondCatalog": max(0, implemented - total) if (total is not None and implemented is not None) else None,
         "hardwareVerifiedCount": len(verified),
         "hardwareVerified": verified,
         "meaning": {
@@ -1017,9 +1029,14 @@ def _milestone_state_from_resources(ledger: dict[str, Any]) -> tuple[str, dict[s
     return state, {
         "how": "derived-from-the-repository",
         "what": (
-            f"{implemented} of {total} catalog resources are implemented in the agent; "
-            f"{verified} of {total} have ever converged on real hardware. Both numbers are "
-            "measured on every write, not recorded."
+            (
+                f"All {total} catalog resources are implemented in the agent, plus "
+                f"{implemented - total} the catalog does not describe; "
+                if implemented > total
+                else f"{implemented} of {total} catalog resources are implemented in the agent; "
+            )
+            + f"{verified} of {implemented} have ever converged on real hardware. Both numbers "
+            "are measured on every write, not recorded."
         ),
         "notWitnessed": (
             "The triple bar this milestone is graded on - state-diff against the frozen v1 "

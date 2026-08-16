@@ -273,11 +273,20 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
     implemented, total = ledger.get("implemented"), ledger.get("catalogTotal")
     verified = ledger.get("hardwareVerifiedCount")
     if implemented is not None and total is not None:
+        # The agent's graph is allowed to exceed the catalog - kiosk.config.albums is in the
+        # graph and deliberately not in reference/resource-catalog.md - so this says which
+        # number is which rather than subtracting one from the other and printing "80 of 79".
+        scope = (
+            f"all {total} catalog resources are implemented, plus {implemented - total} the "
+            "catalog does not describe"
+            if implemented > total
+            else f"{implemented} of {total} catalog resources are implemented"
+        )
         actions.append(
-            f"THE FRONTIER (M3): {implemented} of {total} catalog resources are implemented and "
-            f"only {verified} have ever converged on hardware. The first full provision of the "
-            "whole catalog on a frame has not happened and is the largest unknown in the build. "
-            "Do it against a freshly flashed card, and watch it on the panel."
+            f"THE FRONTIER (M3): {scope} and only {verified} of {implemented} have ever "
+            "converged on hardware. The first full provision of the whole catalog on a frame "
+            "has not happened and is the largest unknown in the build. Do it against a freshly "
+            "flashed card, and watch it on the panel."
         )
         if implemented < total:
             actions.append(
