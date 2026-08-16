@@ -767,6 +767,108 @@ _HARDWARE_FINDINGS.append(
     }
 )
 
+_HARDWARE_FINDINGS.append(
+    {
+        "id": "the-page-refresh-stood-down-on-the-update-that-introduced-it",
+        "question": (
+            "`0384c01` adds §2.10's fifth supervised behaviour: the page reports its own document "
+            "age, the agent compares it against its process uptime, and a document a *previous* "
+            "agent served is told to `location.reload()`. Decision 84's roll-out safety property is "
+            "that the behaviour is **inert for the update that introduces it** - the running "
+            "document predates the reporting half, so it cannot say how old it is, so the verdict "
+            "is `Unknown` and nothing happens. That property has to hold on the first deploy or it "
+            "never holds at all: if the acting half can fire against a page that has no `inCall` to "
+            "report, the first frame it ever touches is the one least able to defend itself. Does "
+            "it hold on hardware?"
+        ),
+        "measured": (
+            "**It held, and the stand-down was total: not one supervision action of any kind for "
+            "the whole boot.** Deployed to T1RJ-6JCQ-9HN8-3920 at 11:38:39Z, `fl-agent` active "
+            "again at 11:38:48Z as `0.0.0+0384c01.dirty`, remote `sha256sum` "
+            "`b7f6f5a181ea5213...` equal to the built binary. Four readings, all read-only:\n"
+            "  * **`/var/lib/fl-agent/app-build` does not exist** - checked at T+0, T+14 min and "
+            "T+33 min, and `find /var/lib/fl-agent -newermt <deploy>` lists only "
+            "`agent-memory.json`, `reconcile-journal.json` and `kiosk/offline-assets`. "
+            "`PageFreshness.Record()` runs on a `Fresh` verdict and on nothing else, so an absent "
+            "record *is* the `Unknown` verdict, sampled three times over half an hour.\n"
+            "  * **`journalctl -u fl-agent.service -b | grep -c 'Supervision ('` is `0`.** No "
+            "`page-refresh`, and no reload command was published: the only page-shaped narration "
+            "this boot is `The page checked in after 0 s`, which is the WebSocket reconnect "
+            "decision 84 exists to distinguish from a load.\n"
+            "  * **chromium pid 1246 still dates from 11:09:28**, 10,992 s old at 12:12Z against a "
+            "boot at 11:09:13 - the browser was neither restarted nor reloaded across an agent "
+            "restart 2.5 hours younger than it.\n"
+            "  * **Both halves were live, so the silence is a stand-down and not an absence.** The "
+            "frame is serving the new page - `frame-stage.js` is 15,576 bytes where it was 12,298, "
+            "and carries `documentAgeMs` - and `EmbeddedApp.BuildId` **recomputed from the bytes "
+            "the frame itself serves** (path + NUL + content over the eight assets, ordinal order, "
+            "SHA-256 truncated to 16 hex) is `8c8a78a905da2e5c`, identical to the digest computed "
+            "from the repository's `app/` tree. The acting half is in the running ELF too: "
+            "`strings -e l /usr/local/bin/fl-agent` finds `The page on this frame is running app`, "
+            "`expected the page to be running app`, `tell the page to reload` and `so it runs app`.\n"
+            "**Nothing regressed.** The 35 minutes after the deploy are 71 consecutive censuses, "
+            "11:39:16Z - 12:14:17Z, one every 30 s, every one `converged / inSync 81 / drifted 0 / "
+            "blocked 0 / rebootsExpected 0` with `health: in-sync`, spanning **eight distinct "
+            "sequences (1313-1320)** so it is eight full reconcile passes rather than one cached "
+            "report. The one deviation in the whole "
+            "run is the restart transient at 11:38:46Z - `backing-off, inSync 80, blocked 1 "
+            "(agent.version), rebootsExpected 1` - gone by the next reading, the same shape the "
+            "`fe61154` deploy showed. Three `grim` captures at 11:40Z, 11:53Z and 12:13Z are colour "
+            "photographs (mean channel spread 35.6 / 41.3 / 42.7), each a different photograph, so "
+            "the slideshow kept advancing inside the un-reloaded document. `repair.countdownSeconds "
+            "= 60` and `slideshow.albums = shared` unchanged at settings revision 9."
+        ),
+        "answer": (
+            "**The roll-out safety property is true on hardware.** The first page this behaviour "
+            "could ever reload is one loaded under a binary that already reports its own call "
+            "state, exactly as decision 84 claims. **The corollary is the part worth writing down: "
+            "`app-build` is *not* written by the deploy that introduces the behaviour, and its "
+            "absence is the proof that the behaviour worked** - not evidence that the deploy "
+            "failed. The record can only appear once something reloads the browser, which on this "
+            "frame means a reboot or the 03:00 restart; until then the agent knows nothing about "
+            "the document and says nothing about it."
+        ),
+        "rulesOut": (
+            "Reading an absent `/var/lib/fl-agent/app-build` after deploying `0384c01` as a broken "
+            "deploy, a state-directory permission problem, or a supervisor that failed to start - "
+            "it is the designed `Unknown` branch and the only branch reachable here. It also rules "
+            "out expecting any narration of that verdict: `PageFreshness.Observe` logs on the "
+            "record and `Supervisor.PageTickAsync` logs on the action, and `Unknown` reaches "
+            "neither, so **the agent's honest report of concluding nothing is an empty journal**. "
+            "What it does *not* establish is the acting half itself: no page has yet reported a "
+            "document age on this frame, so `Fresh`, `Stale`, the reload, the cooldown and the "
+            "in-call deferral remain unexercised on hardware and are still carried only by the "
+            "suite's 1223 tests. The reboot arm of the record - that `app-build` survives one - is "
+            "**undetermined**: the frame did not reboot inside the window (uptime unbroken from "
+            "11:09:13) and was deliberately not made to."
+        ),
+        "consistentWith": (
+            "The finding directly above it, which is the defect this closes: chromium pid 1246 and "
+            "boot 11:09:13 are the *same* browser and the *same* document that finding caught "
+            "running 86 minutes behind the agent serving it, still running now, two agent restarts "
+            "later. Nothing about this deploy changed that, and that is the point - the served app "
+            "moved from `5578e1d1...` to `d1184f45...` (frame-stage.js) while the document on the "
+            "glass did not, which is decision 84's premise reproduced rather than assumed."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}, dev Fleet Manager at {CONTROL_URL}",
+        "recordedIn": (
+            "commit 0384c01, deployed as 0.0.0+0384c01.dirty (the `.dirty` is `fl.py`'s own "
+            "progress.json in-flight marker, as on fe61154). Gates before it: "
+            "`dotnet run --project tests/FrameLink.Tests -c Release` 1223 passed / 0 failed, and "
+            "`dotnet build FrameLink.slnx -c Release` 0 warnings / 0 errors. The census series is "
+            "C:/Users/jori/framelink-scratch/v-census.jsonl (one reading every 30 s either side of "
+            "the deploy; the sampler kept running past the 71-reading window quoted above), the "
+            "panel captures are v-panel-before.png and v-panel-after-1..3.png beside "
+            "it, the whole post-deploy journal is v-journal-after.txt, and the deploy transcript is "
+            "v-deploy.log. That directory is outside the repository, so these are local-only "
+            "evidence. The served release feed was checked after deploying - "
+            "GET /agent/release/linux-arm64 answers 0.0.0+0384c01.dirty with the matching sha256, "
+            "so §2.8 cannot walk the frame back to the previous build"
+        ),
+    }
+)
+
 #: The durable artifacts a session starting from nothing needs, and what each one is *for*.
 #: The progress file is deliberately not the specification; it is the pointer to it.
 _ORIENTATION: dict[str, str] = {
