@@ -125,12 +125,113 @@ public sealed class AgentKioskStackTests
 
         var drifted = await resource.ObserveAsync(None);
 
-        // The number nobody had when this resource escalated, and the one that separates the two
-        // surviving explanations on sight: sampled before the login happened, or a console that
-        // logs nobody in. Reported, never acted on — a threshold now would be behaviour justified
-        // by a cause nobody has established.
+        // The number nobody had when this resource escalated, and the one that turned out to
+        // explain it. 47 s is well past the settling window, so the absence is counted and the age
+        // travels with it — which is what makes the next occurrence diagnosable from the delta
+        // alone rather than from thirty boots of journal.
         Assert.False(drifted.InSync);
         Assert.Contains("getty@tty1.service active for 47s", drifted.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_getty_that_has_only_just_gone_active_is_not_drift_and_says_how_long_it_has_been_up()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+
+        // The exact instant this resource failed five times running. Active since 4.2 s into a boot
+        // that is now 10.0 s old, which is where the agent's first Observe lands: measured on the
+        // mule, fl-agent reaches active 4.2-4.3 s after the getty does and the console session is
+        // created 0.52-0.89 s later still. The old code called this window drift, acted, rebooted,
+        // and landed in the identical window on the next boot — five times, then escalated, with
+        // twelve resources blocked behind it on a frame that was logging itself in correctly.
+        files.Seed(ConsoleAutologinResource.UptimePath, "10.02 60.11\n");
+        systemd.Answer(ShowGetty, AutologinLoaded);
+        processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var observation = await resource.ObserveAsync(None);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("has been active for 5s", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("has not opened a session yet", observation.Observed, StringComparison.Ordinal);
+
+        // logind is still asked. Not counting the answer is a verdict about this instant; skipping
+        // the question would make the window a place where the check simply stops existing.
+        Assert.Contains(ListSessions, processes.Commands);
+    }
+
+    [Fact]
+    public async Task The_settling_window_ends_and_the_same_frame_is_then_reported()
+    {
+        // One boundary, both sides, so the window is a threshold rather than an escape hatch. The
+        // ceiling is PassInterval: at a tenth of the five-minute drift sweep, the longest a console
+        // that logs nobody in can stay unreported is one pass.
+        Assert.Equal(30, ConsoleAutologinResource.SettleSeconds);
+
+        Assert.True(await Settled("33.90 200.00"), "29s inside the window is not drift");
+        Assert.False(await Settled("34.90 200.00"), "30s is outside the window and is drift");
+
+        static async Task<bool> Settled(string uptime)
+        {
+            using var files = new TemporaryFiles();
+            var systemd = new RecordingSystemControl();
+            var processes = new RecordingProcessRunner();
+            var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+            files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+            files.Seed(ConsoleAutologinResource.UptimePath, uptime + "\n");
+            systemd.Answer(ShowGetty, AutologinLoaded);
+            processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+            return (await resource.ObserveAsync(None)).InSync;
+        }
+    }
+
+    [Fact]
+    public async Task A_wrong_drop_in_is_still_drift_inside_the_settling_window()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        // The window forgives one clause and one only. The durable pair — the bytes on disk and the
+        // ExecStart systemd actually loaded — is what decides whether this console will ever log
+        // anybody in, so it is checked on every observation whatever the clock says.
+        files.Seed(ConsoleAutologinResource.UptimePath, "10.02 60.11\n");
+        systemd.Answer(ShowGetty, AutologinLoaded);
+        processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var drifted = await resource.ObserveAsync(None);
+
+        Assert.False(drifted.InSync);
+        Assert.Contains("autologin.conf absent", drifted.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_age_that_cannot_be_computed_is_not_gated()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        systemd.Answer(ShowGetty, AutologinLoaded);
+        processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+        // No /proc/uptime, so there is no age — and therefore no evidence that this sample was
+        // early. A window that opened on "cannot tell" would be a place for a real fault to go and
+        // be quiet on exactly the machines least able to report it.
+        var drifted = await resource.ObserveAsync(None);
+
+        Assert.False(drifted.InSync);
+        Assert.Contains("logind has no session for framelink on tty1", drifted.Observed, StringComparison.Ordinal);
+        Assert.DoesNotContain("active for", drifted.Observed, StringComparison.Ordinal);
     }
 
     [Fact]

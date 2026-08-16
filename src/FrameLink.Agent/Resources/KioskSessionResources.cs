@@ -148,16 +148,33 @@ public sealed class SwapZramResource : IResource
 /// seconds after a boot.
 /// </para>
 /// <para>
-/// <b>What is left is two candidates and no way to choose between them from what was captured.</b>
-/// Either the sample was taken before the login had happened — which the timing above makes
-/// possible on every attempt rather than on one — or the console autologin genuinely was not
-/// producing a session in that window, in which case the check was telling the truth and the
-/// resource did its job. Nobody sampled the frame at boot-plus-one-second while it was failing, and
-/// the session that exists now started <i>after</i> the last failure, so neither candidate is
-/// excluded. A third is not excluded either: <see cref="HostProcessRunner"/> returns empty output
-/// when a command fails to launch, so the old code reported "nobody is logged in" for a <c>who</c>
-/// that never ran, and the journal cannot tell the two apart. The honest position is that the
-/// observable was fragile, it has been replaced, and the original failure is not fully explained.
+/// <b>It is explained now, and it was the first candidate: every sample was taken before the login
+/// had happened.</b> The frame's journal is persistent (guide 12), so the five failing boots were
+/// still on the card and each one carries the agent's own verdict and the login beside it on the
+/// same monotonic clock. Attempt 4, boot <c>-17</c>: the agent wrote <i>"did not survive the
+/// reboot — nobody is logged in as framelink on tty1"</i> at <c>10.018670</c>, and
+/// <c>login[921]: pam_unix(login:session): session opened for user framelink</c> landed at
+/// <c>10.358098</c>, with <c>systemd-logind: New session 1 of user framelink</c> at
+/// <c>10.370673</c>. The verdict was <b>352 ms early</b>. Attempt 5, boot <c>-13</c>: verdict at
+/// <c>11.188142</c>, login at <c>11.631500</c>, session at <c>11.660292</c> — <b>472 ms early</b>.
+/// </para>
+/// <para>
+/// It is not a coincidence of two boots. Across the thirty boots the card still holds,
+/// <c>fl-agent.service</c> reaches <i>active</i> at 9.7–11.3 s and the console session is created
+/// 0.52–0.89 s later, on <b>every single boot</b> — including the one this frame is running now.
+/// The agent's first Observe is the first thing a pass does, within ~100–250 ms of the process
+/// starting, so it lands inside that gap every time. That is why the resource failed on all five
+/// attempts rather than on one, and why a frame whose console autologin has worked perfectly the
+/// whole time burned five reboots, an escalation and twelve blocked dependents.
+/// </para>
+/// <para>
+/// The other two candidates are retired by the same evidence. "The console genuinely was not
+/// producing a session in that window" is <b>excluded</b>: the journal shows the session being
+/// created 350–470 ms after each verdict, on the very boots that failed. "<c>who</c> never ran and
+/// returned empty" is no longer <i>needed</i> — there was genuinely no session to find at that
+/// instant, so a <c>who</c> that ran correctly would have printed exactly what was recorded. It is
+/// not disproven, because the two are indistinguishable in the log; it simply explains nothing that
+/// the timing does not already explain.
 /// </para>
 /// <para>
 /// <b>Why logind is still the right observable, independent of all of that.</b> It is the authority
@@ -167,20 +184,43 @@ public sealed class SwapZramResource : IResource
 /// as an absent session, which is the distinction the old code could not draw.
 /// </para>
 /// <para>
-/// <b>The <c>ActiveState</c> gate, and the number that will settle this next time.</b> A login
+/// <b>The <c>ActiveState</c> gate, and why it was on the wrong side of the window.</b> A login
 /// session is a runtime fact, and a runtime fact sampled at the wrong instant is exactly how a
 /// correct configuration gets reported as drift. So the same <c>systemctl show</c> that reads the
 /// effective <c>ExecStart</c> also reads <c>ActiveState</c>: while the unit is still
 /// <c>activating</c> — which it genuinely is for up to five seconds of every boot, because
 /// <c>getty@.service</c> is <c>Type=idle</c> — the absence of a session is not a verdict about
-/// anything and is not counted. Every settled state is counted, and a getty that is
-/// <c>inactive</c> or <c>failed</c> is reported as itself, because that will never log anybody in.
-/// Beyond the gate, the delta now carries <b>how long the getty had been active</b> when no session
-/// was found, computed from the unit's own <c>ActiveEnterTimestampMonotonic</c> against
-/// <c>/proc/uptime</c>. That single number separates the two surviving candidates on sight — "active
-/// for 1s" is a sample taken too early, "active for 47s" is a console that is genuinely not logging
-/// anybody in — and it is deliberately <i>reported</i> rather than acted on, because a threshold
-/// chosen now would be a behaviour justified by a cause nobody has established.
+/// anything and is not counted. A getty that is <c>inactive</c> or <c>failed</c> is reported as
+/// itself, because that will never log anybody in.
+/// </para>
+/// <para>
+/// What that gate did not cover is the window the measurement found, and it is the larger one.
+/// <c>Started getty@tty1.service</c> and <c>ActiveEnterTimestampMonotonic</c> agree to the
+/// microsecond, so the unit is <i>active</i> from the moment <c>agetty</c> is exec'd — and
+/// <c>agetty</c> then takes <b>4.77, 4.77, 4.89 and 4.94 seconds</b> on the four boots sampled in
+/// full before <c>login</c> opens the PAM session it execs into. The agent starts 4.2–4.3 s after
+/// the getty goes active, which is inside that window on every boot. So the whole failure happened
+/// with <c>ActiveState=active</c>, three quarters of the way through a settling period the gate
+/// said nothing about.
+/// </para>
+/// <para>
+/// <b><see cref="SettleSeconds"/> covers it, and the number is the measurement's rather than a
+/// taste.</b> When the durable pair is right, the getty is active, and no session has appeared yet,
+/// the absence is counted only once the getty has been active longer than that — which is the same
+/// verdict the <c>activating</c> branch already reaches, for the same reason, one state later.
+/// Nothing sleeps and nothing retries: the pass carries on immediately, and the loop is
+/// level-triggered, so a console that genuinely logs nobody in is asked again on the next drift
+/// sweep, by which time the getty has been active for minutes and the window cannot reach it. The
+/// delta still carries <b>how long the getty had been active</b> when no session was found, from
+/// the unit's own <c>ActiveEnterTimestampMonotonic</c> against <c>/proc/uptime</c>, because that is
+/// the number that made this diagnosable and it is the number that will make the next one
+/// diagnosable too.
+/// </para>
+/// <para>
+/// An age that cannot be computed is <b>not</b> gated. Both halves come from the machine, and a
+/// frame that cannot answer either has given no evidence that its sample was early — so the
+/// absence is counted exactly as it was before this window existed, which is the direction that
+/// fails towards a visible escalation rather than towards silence.
 /// </para>
 /// </remarks>
 public sealed class ConsoleAutologinResource : IResource
@@ -199,6 +239,33 @@ public sealed class ConsoleAutologinResource : IResource
 
     /// <summary>Where the kernel publishes how long this boot has lasted.</summary>
     public const string UptimePath = "/proc/uptime";
+
+    /// <summary>
+    /// How long an active getty is allowed to have no session on it before that counts (§2.6).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Thirty, from two numbers rather than from taste.</b> The floor is the measurement: on the
+    /// mule, <c>agetty</c> takes 4.77–4.94 s from the unit going active to <c>login</c> opening the
+    /// PAM session, four samples with 0.18 s of spread. Thirty is six times the slowest of those,
+    /// so it is not a threshold fitted to the sample it came from.
+    /// </para>
+    /// <para>
+    /// The ceiling is <see cref="Reconcile.ReconcileOptions.PassInterval"/>, five minutes: this
+    /// window has to be small against it, or a console that logs nobody in could hide inside the
+    /// window across successive sweeps instead of being caught by the next one. At a tenth of the
+    /// sweep, the longest a real fault can stay unreported is one pass.
+    /// </para>
+    /// <para>
+    /// It buys the wrong answer in one direction only, and it is the survivable one. A frame whose
+    /// console is genuinely broken reads healthy for the first thirty seconds of each boot and is
+    /// then reported — the durable pair is still checked on every single observation, and that pair
+    /// is what decides whether the console logs anybody in. The opposite error is the one this
+    /// resource has already paid for: five reboots, an escalation and twelve blocked dependents on
+    /// a frame that was logging itself in correctly the whole time.
+    /// </para>
+    /// </remarks>
+    public const long SettleSeconds = 30;
 
     private readonly ISystemFiles _files;
     private readonly ISystemControl _systemControl;
@@ -276,6 +343,7 @@ public sealed class ConsoleAutologinResource : IResource
         }
 
         var state = ActiveStateIn(shown.Output);
+        string? settling = null;
 
         if (state is null or "activating" or "reloading")
         {
@@ -308,20 +376,37 @@ public sealed class ConsoleAutologinResource : IResource
 
             if (!HasSessionOnTty1(sessions.StandardOutput, user))
             {
-                // The age is evidence, not a verdict. It is the one number that separates "sampled
-                // before the login happened" from "this console logs nobody in", and neither of
-                // those has been established — so it is written down where the next occurrence will
-                // carry it, and nothing branches on it.
-                wrong.Add(sessions.Succeeded
-                    ? $"logind has no session for {user} on {Tty}{Age(shown.Output)}"
-                    : $"logind would not say which sessions exist ({Summarise(sessions)})");
+                var age = ActiveForSeconds(shown.Output, _files.ReadText(UptimePath));
+
+                if (!sessions.Succeeded)
+                {
+                    // A tool that would not answer is not an absent session, and never was.
+                    wrong.Add($"logind would not say which sessions exist ({Summarise(sessions)})");
+                }
+                else if (age is { } seconds && seconds < SettleSeconds)
+                {
+                    // Inside the settling window the measurement found: the getty is active
+                    // because agetty has been exec'd, and agetty is still on its way to login.
+                    // Sampled here the absence says nothing about the setting, exactly as it says
+                    // nothing while the unit is still activating — so it is recorded and not
+                    // counted, and the durable pair above carries the verdict.
+                    settling = string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{DropInPath} autologin {user}, systemd agrees, {UnitName} has been active for {seconds}s and its login has not opened a session yet");
+                }
+                else
+                {
+                    // Past the window, or with no age to judge it by. This is the fault the third
+                    // clause exists for: nothing that draws on the screen will ever start.
+                    wrong.Add($"logind has no session for {user} on {Tty}{Age(age)}");
+                }
             }
         }
 
         return new ResourceObservation(
             wrong.Count == 0,
             expected,
-            wrong.Count == 0 ? expected : string.Join("; ", wrong));
+            wrong.Count > 0 ? string.Join("; ", wrong) : settling ?? expected);
     }
 
     /// <inheritdoc/>
@@ -446,9 +531,15 @@ public sealed class ConsoleAutologinResource : IResource
     }
 
     /// <summary>The age clause of the delta, or nothing when it could not be computed.</summary>
-    private string Age(string shown) =>
-        ActiveForSeconds(shown, _files.ReadText(UptimePath)) is { } seconds
-            ? string.Create(CultureInfo.InvariantCulture, $" ({UnitName} active for {seconds}s)")
+    /// <remarks>
+    /// Takes the value rather than recomputing it, because the same number decides whether the
+    /// absence is counted at all (<see cref="SettleSeconds"/>). Reading <c>/proc/uptime</c> a
+    /// second time to print what a first read had already judged is how a delta ends up
+    /// contradicting the verdict it accompanies.
+    /// </remarks>
+    private static string Age(long? seconds) =>
+        seconds is { } value
+            ? string.Create(CultureInfo.InvariantCulture, $" ({UnitName} active for {value}s)")
             : string.Empty;
 
     private static string? Value(string shown, string name)
