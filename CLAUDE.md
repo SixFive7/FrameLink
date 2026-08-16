@@ -154,7 +154,7 @@ Never present inferred output as captured. On request, produce the honest invent
 
 ## 2. Markdown conventions for the build guides
 
-The build guides live under `docs/` and are numbered `1-hardware-build-guide.md` through `13-multi-device-deploy.md`. Every image a guide references lives in a sibling folder of the same stem, e.g. `docs/2-sd-flash-first-boot/1.png`.
+The build guides live under `docs/` and are numbered `1-hardware-build-guide.md` through `15-local-fleet-manager.md`. Every image a guide references lives in a sibling folder of the same stem, e.g. `docs/2-sd-flash-first-boot/1.png`.
 
 ### 2.1 The seven-block step structure
 
