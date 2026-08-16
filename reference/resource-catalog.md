@@ -68,8 +68,8 @@ writing `—`. Under this definition that is the same thing, and it is kept rath
 because their whole point is running ahead of adoption; see the carve-out at the head of that
 section.
 
-**Counts.** 71 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
-are listed in their own section. Total **79**.
+**Counts.** 72 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
+are listed in their own section. Total **80**.
 
 | Guide | Resources |
 | --- | ---: |
@@ -154,7 +154,7 @@ attached to them:
 - **dependsOn** — `agent.version`
 - **Value source** — fleet setting `display.consoleRotation` (fixed at `1` today; guide names `3` as the upside-down remedy). Applied from the catalog default when no fleet value has been issued, which is the normal case at position 2 — the frame is not adopted yet. A later fleet override is ordinary drift and reconciles like any other. This is the worked example the `dependsOn` rule at the head of this document points at: a fleet setting with a catalog default that is correct before adoption declares no adoption edge.
 - **Risk** — **brick-capable** (`cmdline.txt`; a malformed single line is unbootable). The riskier of the two display writes and the one the write discipline above exists for: `config.txt` tolerates an unknown overlay line, a broken `cmdline.txt` does not boot.
-- **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL`, which is its own resource (`boot.cmdline.wifi-regdom`), and `ds=nocloud;i=rpi-imager-…`, which is **not** owned by any resource: it is Raspberry Pi Imager's datasource pin, present because the v1 card was Imager-flashed and absent on the raw-flashed mule. No resource writes it, and it is worth leaving alone rather than normalising, because it is the one piece of evidence distinguishing an Imager-provisioned card from a raw-written one — see the hypothesis under `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 78, so one line-aware editor must serve both ends of the order.
+- **Notes** — Scheduled **2nd**, and ahead of the overlay on purpose: nothing is visible until the overlay lands, so applying the rotation first costs nothing and makes the panel's *first* lit frame legible instead of sideways. That is an ordering preference, not a dependency — `boot.config.dtoverlay-waveshare-panel` deliberately does **not** declare this resource, because a failed cosmetic rotation must never leave the panel dark by marking the overlay `Blocked`. `cmdline.txt` must stay one line. The v1 reference line also carries `cfg80211.ieee80211_regdom=NL`, which is its own resource (`boot.cmdline.wifi-regdom`), and `ds=nocloud;i=rpi-imager-…`, which is **not** owned by any resource: it is Raspberry Pi Imager's datasource pin, present because the v1 card was Imager-flashed and absent on the raw-flashed mule. No resource writes it, and it is worth leaving alone rather than normalising, because it is the one piece of evidence distinguishing an Imager-provisioned card from a raw-written one — see the hypothesis under `identity.hostname`. Any writer that appends here competes with kernel-package postinst hooks from `raspberrypi-sys-mods` — and `boot.cmdline.wifi-regdom` now edits the same single line from position 79, so one line-aware editor must serve both ends of the order.
 
 **`boot.config.dtoverlay-waveshare-panel`**
 
@@ -165,7 +165,7 @@ attached to them:
 - **dependsOn** — `agent.version`
 - **Value source** — fixed by the catalog (panel model is a hardware fact). The `,dsi0` suffix variant applies only if the ribbon is on the LAN-side DSI port.
 - **Risk** — **brick-capable** (`config.txt`), scheduled **3rd** by operator decision — see the carve-out at the head of this section.
-- **Notes** — Duplicate-line detection matters: `grep -c` rather than `grep -q`, because a non-idempotent write history is the failure this guards. **This resource is what the console stage costs.** Until it is `InSync` the agent narrates into the dark and the Fleet Manager is the only surface left, which is exactly the state [§1.2](../version2.md) principle 3 says must be named rather than silent. It also gates diagnostics: the screenshot path allowlisted by [§3.6](../version2.md) reads `/dev/fb0`, so a frame that has not reached this resource cannot be looked at remotely either. `boot.config.camera-auto-detect` and `boot.config.dtoverlay-vc4-kms-v3d-noaudio` write the same file from positions 76 and 77 — different lines, same file, opposite ends of the order.
+- **Notes** — Duplicate-line detection matters: `grep -c` rather than `grep -q`, because a non-idempotent write history is the failure this guards. **This resource is what the console stage costs.** Until it is `InSync` the agent narrates into the dark and the Fleet Manager is the only surface left, which is exactly the state [§1.2](../version2.md) principle 3 says must be named rather than silent. It also gates diagnostics: the screenshot path allowlisted by [§3.6](../version2.md) reads `/dev/fb0`, so a frame that has not reached this resource cannot be looked at remotely either. `boot.config.camera-auto-detect` and `boot.config.dtoverlay-vc4-kms-v3d-noaudio` write the same file from positions 77 and 78 — different lines, same file, opposite ends of the order.
 
 ---
 
@@ -995,7 +995,7 @@ Not extracted from guides 3–12, but required for a complete catalog. Provenanc
 - **dependsOn** — `agent.adoption`
 - **Value source** — fleet setting `locale.wifiCountry`. No catalog default: a regulatory domain is a property of the country the frame is standing in, `NL` is the operator's own and not a universal, and the only value that would be safe everywhere (`00`) is the most restrictive one rather than a correct one.
 - **Risk** — **brick-capable** (`cmdline.txt`).
-- **Notes** — Low operational importance on a wired frame, high parity importance: it is part of the single `cmdline.txt` line that `boot.cmdline.fbcon-rotate` also edits, so both resources write the same file and must not fight. Any `cmdline.txt` writer must be a single line-aware editor, not two independent appenders. **The adoption edge is new**, and it is the `locale.*` family being made consistent: `system.timezone` and `system.locale` both declare it, this is the third member and the only one with legal consequences. It costs nothing in the ordering — adoption is position 5 and this resource is 78th — and the two writers of that one line are unaffected, since the early one is the display carve-out and needs no fleet value at all.
+- **Notes** — Low operational importance on a wired frame, high parity importance: it is part of the single `cmdline.txt` line that `boot.cmdline.fbcon-rotate` also edits, so both resources write the same file and must not fight. Any `cmdline.txt` writer must be a single line-aware editor, not two independent appenders. **The adoption edge is new**, and it is the `locale.*` family being made consistent: `system.timezone` and `system.locale` both declare it, this is the third member and the only one with legal consequences. It costs nothing in the ordering — adoption is position 5 and this resource is 79th — and the two writers of that one line are unaffected, since the early one is the display carve-out and needs no fleet value at all.
 
 **`eeprom.config`**
 
@@ -1093,26 +1093,36 @@ dependency: guide 4 states the mixer levels are validated against firmware 2.0.1
 | 48–53 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
 | 54 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
 | 55–62 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.wireplumber.playback-volume` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
-| 62–75 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
-| 76–79 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+| 63–76 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
+| 77–80 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
 
 **`identity.hostname` moved out of the last phase, from 75 to 37.** It was scheduled there because
 the trap made its Act a `/boot/firmware` write; with the trap disproved the Act is `hostnamectl`
 plus an `/etc/hosts` rewrite and the resource is not brick-capable at all. Its new slot is the end
 of system configuration, immediately before the session and kiosk stack, so the frame is answering
 to its own name — and resolving that name to loopback — before anything binds to it. The shift
-cancels out at the tail: removing one resource from the final phase and adding one ahead of it
-leaves `boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio` and
-`boot.cmdline.wifi-regdom` at the same positions 76, 77 and 78 that the prose elsewhere in this
-document cites, and the last phase is four resources rather than five.
+cancels out at the tail: removing one resource from the final phase and adding one ahead of it left
+`boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio` and
+`boot.cmdline.wifi-regdom` where they already were, and the last phase is four resources rather than
+five.
+
+**`audio.wireplumber.playback-volume` then moved everything after the audio phase by one, and the
+row labels above did not follow it.** It is the catalog's 80th entry, added when the mixer revert was
+measured (decision 80), and it lands inside the audio phase — so the two rows below it each start one
+later than they used to. The labels now say what the membership always said: the product layer is
+63–76 and the final phase 77–80, which is where `boot.config.camera-auto-detect`,
+`boot.config.dtoverlay-vc4-kms-v3d-noaudio`, `boot.cmdline.wifi-regdom` and `eeprom.config` actually
+sit, and the positions prose elsewhere in this document cites have been moved with them. The
+arithmetic is checkable rather than asserted: the rows' memberships sum to 80 with no gap and no
+overlap, and 80 is what `CatalogDocument.Parse` counts in this file.
 
 **What moving the display early costs elsewhere.** Three things get worse, and they are worth naming
 rather than smoothing over.
 
 1. **Both boot files now have writers at opposite ends of the order.** `boot.cmdline.fbcon-rotate`
-   runs 2nd and `boot.cmdline.wifi-regdom` 78th, editing the *same single line* of `cmdline.txt`;
+   runs 2nd and `boot.cmdline.wifi-regdom` 79th, editing the *same single line* of `cmdline.txt`;
    `boot.config.dtoverlay-waveshare-panel` runs 3rd while `boot.config.camera-auto-detect` and
-   `boot.config.dtoverlay-vc4-kms-v3d-noaudio` run 76th and 77th in `config.txt`. The catalog already
+   `boot.config.dtoverlay-vc4-kms-v3d-noaudio` run 77th and 78th in `config.txt`. The catalog already
    asked for one line-aware editor shared by every boot-partition resource; that is now a hard
    requirement rather than good practice, because the late writer must merge into a file the early
    writer has already changed and neither may re-serialise from a stale read.
@@ -1137,7 +1147,7 @@ with no exceptions. The earlier figure here — 40–60 s per cycle, **75–80 m
 resources — was an estimate, and it was roughly **2.5× too pessimistic**. Measured on the mule
 2026-08-15 and recorded in [§6.1](../version2.md): **22.3 s from `systemctl reboot` to SSH accepting
 again**, taken twice (22.3 s and ~20 s) with loss of port 22 confirmed in between, so it is a real
-round trip and not a connection that never dropped. At ~22 s a cycle, 79 resources cost **about 29
+round trip and not a connection that never dropped. At ~22 s a cycle, 80 resources cost **about 30
 minutes of reboot overhead** — call the budget **30 minutes** to leave room for each resource's
 Observe pass, which is a handful of cheap reads and not a second boot. Before apt download time
 (~350 MB across the two package steps) a first bare-metal provision is therefore well under an hour
@@ -1151,7 +1161,7 @@ changing.
 
 **The countdown is not a term in a provision's budget at all, and that is a decision rather than an
 omission.** [§2.7](../version2.md) puts a countdown bar before each verifying reboot, defaulting to
-60 s under [decision 48](../version2.md). Across 79 resources that is **79 minutes** — it would
+60 s under [decision 48](../version2.md). Across 80 resources that is **80 minutes** — it would
 dominate everything above, and roughly three quarters of a bare provision would be spent holding a
 screen still for a reader who does not exist yet, since a frame being provisioned has never
 displayed anything and nobody is standing in front of it.
@@ -1166,7 +1176,7 @@ after its first convergence.
 
 **The carve-out does not change that total — it changes who can watch it.** The resource count and
 the per-cycle cost are untouched, so the 30 minutes stands. What moves is the dark window: under
-the literal §5.5 ordering the panel lit near position 76, so roughly 75 of the 79 cycles — around
+the literal §5.5 ordering the panel lit near position 77, so roughly 76 of the 80 cycles — around
 half an hour — ran with nothing on screen and §2.7's narration became real only in the last minutes.
 Under the carve-out the dark window is **three cycles** — `agent.version` plus the two display
 resources themselves, the panel lighting on the overlay's own verifying reboot. That is the floor:

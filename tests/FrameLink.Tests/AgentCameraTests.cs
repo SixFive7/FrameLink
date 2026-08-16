@@ -492,7 +492,7 @@ public sealed class AgentCameraTests
 
         // §5.5 schedules brick-capable resources last and the display group is the only carve-out.
         // This one is not part of it, so it must come after the whole camera chain it belongs to
-        // and after the product layer — it is 76th of 79 in the catalog's own table.
+        // and after the product layer — it is 77th of 80 in the catalog's own table.
         Assert.True(order.IndexOf(CameraNodeResource.ResourceName) < order.IndexOf(CameraAutoDetectResource.ResourceName));
         Assert.True(order.IndexOf("app.config.livekit-token") < order.IndexOf(CameraAutoDetectResource.ResourceName));
 

@@ -421,7 +421,7 @@ public sealed class AgentReliabilityTests
         var guard = new BootPartitionGuard(files.Files, files.Store, new MutableBootIdentity(), new ManualClock(), log);
         var processes = new RecordingProcessRunner();
 
-        // Position 2 has already run and appended the rotation. Position 78 now has to merge into
+        // Position 2 has already run and appended the rotation. Position 79 now has to merge into
         // the file that writer left behind, without re-serialising from anything older.
         files.Seed(
             BootConfigText.CmdlinePath,

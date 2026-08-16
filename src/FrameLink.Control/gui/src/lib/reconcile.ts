@@ -234,7 +234,7 @@ const FAULTED: readonly ResourceStatus[] = ['escalated', 'degraded'];
  * §2.5's ladder is an ordering, so this is one too: `escalated` outranks `degraded`, the two
  * differing only in whether the notification actually reached this server. Everything else on a
  * stopped frame is downstream of these, which is why the screen leads with them instead of putting
- * them in row 41 of a list of 79.
+ * them in row 41 of a list of 81.
  */
 export function faults(resources: readonly ResourceReport[]): ResourceReport[] {
 	return resources

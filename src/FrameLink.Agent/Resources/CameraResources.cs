@@ -959,7 +959,7 @@ public sealed class PortalCameraInterfaceResource : IResource
 /// </para>
 /// <para>
 /// <b>Brick-capable, and scheduled last for it.</b> §5.5 puts <c>/boot/firmware</c> writes at the
-/// end of the order and the catalog schedules this one 76th of 79. The display group is the one
+/// end of the order and the catalog schedules this one 77th of 80. The display group is the one
 /// carve-out from that rule and this is not part of it — a dark panel makes §2.7's narration
 /// worthless, while a camera that is missing for another twenty minutes of provisioning costs
 /// nothing. It keeps every mitigation the rule attaches: the content is a known-good literal, the

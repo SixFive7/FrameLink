@@ -43,7 +43,7 @@ badee050cc4f48de9c722999fe74c69ce57015d5dc35bf3049c27a4ffe179e86  gui/src/lib/de
 49c11e7337479af79beebb48660d81f47b9853d255b450b0ee781432c90b55df  gui/src/lib/format.ts
 51c6fbd97ba848a5f8f3c1e899fa1193403696d803643dd838d89b8428303067  gui/src/lib/packages.ts
 39c26fa3b3ef6eed28ef2d5f1fe6ad694d1974752e36329c11b62d9b37252497  gui/src/lib/presence.ts
-13dd33c40d5abbaba27f99dbbeb28f260fb097a727a8d35d4f13ef4f2256fb07  gui/src/lib/reconcile.ts
+776f4db7396e89e4e6d9d43b42e3dc54e6b26c16512f4c0a3f294a5118bf9167  gui/src/lib/reconcile.ts
 26c84497bd729271f2b546095a48836cdf879479203f836969ae08acf6e47172  gui/src/lib/settings-catalog.ts
 1c5abf3a95f45fe97dd062d035fb13183da2ad7fa6a09f8d1cdfb7e4d191ced1  gui/src/lib/stores/device-actions.ts
 3f9a285b20740aa61fa5f1082c386a6f6600bcb361ee368f9b83676992207fa9  gui/src/lib/stores/fleet.svelte.ts

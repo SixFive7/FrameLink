@@ -227,7 +227,7 @@ public static class BootConfigText
     /// <para>
     /// <b>This is the "one line-aware editor" the catalog makes a hard requirement.</b> Two
     /// resources write this single line from opposite ends of the order —
-    /// <c>boot.cmdline.fbcon-rotate</c> at position 2 and <c>boot.cmdline.wifi-regdom</c> at 78 —
+    /// <c>boot.cmdline.fbcon-rotate</c> at position 2 and <c>boot.cmdline.wifi-regdom</c> at 79 —
     /// so the late writer has to merge into a file the early one already changed, and neither may
     /// re-serialise from a read taken before the other's write. Every path here reads the file it
     /// is handed and rebuilds the whole line from it, so a token added by somebody else survives

@@ -620,9 +620,11 @@ _ORIENTATION: dict[str, str] = {
         "its reasoning."
     ),
     "resourceSpec": (
-        "reference/resource-catalog.md - the enumeration of all 79 device settings extracted "
-        "from build guides 3-12, one block per resource with its Observe, Act and Verify. This "
-        "is what M3 is migrating, and it is the spec each new resource is written against."
+        "reference/resource-catalog.md - the enumeration of all 80 device settings extracted "
+        "from build guides 3-12 and the cross-guide section, one block per resource with its "
+        "Observe, Act and Verify. This is what M3 migrated, and it is the spec each new "
+        "resource is written against. The count is the file's own Total row, which is what "
+        "the resources ledger below reads."
     ),
     "parityTarget": (
         "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, "
@@ -705,8 +707,16 @@ def _resource_ledger() -> dict[str, Any]:
     resources are implemented" - a sentence that reads as a bug in the counting rather than as
     the real thing it was describing. Both numbers were right the whole time; the subtraction
     was not. ``remaining`` is now floored at zero and the excess is reported as
-    ``beyondCatalog``, so a resource the agent has and the catalog does not is visible as
-    itself rather than as a negative.
+    ``beyondCatalog``, so an agent that carries more than the catalog is visible as itself
+    rather than as a negative.
+
+    **``beyondCatalog`` is a net and not a membership count**, and it is worth saying so where
+    it is computed. It is ``implemented - catalogTotal``. Today that is 81 - 80 = 1, while the
+    memberships behind it are *two* resources the catalog does not carry
+    (``agent.device-name``, ``kiosk.config.albums``) less *one* the catalog carries and the
+    agent deliberately does not (``pkg.git``, excluded by the catalog's open question 3). The
+    two sets are named in ``AgentResourceGraphTests`` and asserted there; this number cannot
+    see them and must not be read as though it could.
     """
     total, total_source = _read_number(
         "reference/resource-catalog.md",
@@ -732,14 +742,18 @@ def _resource_ledger() -> dict[str, Any]:
                 "run on a frame."
             ),
             "hardwareVerified": (
-                "The resource converged on the mule and was verified after a real reboot. Only "
-                "the M2 nine have ever done this."
+                "The resource converged on the mule and was verified after a real reboot, and "
+                "the evidence for both halves is still held. This is a floor and not a census - "
+                "see the comment on _HARDWARE_VERIFIED_RESOURCES - so it undercounts, and it is "
+                "a strictly stronger claim than the in-sync count a frame reports."
             ),
         },
         "gap": (
-            "The first full provision of the whole catalog on hardware has not happened. That is "
-            "the largest single unknown in the build: every resource beyond the nine is code that "
-            "has never met a real device."
+            "The first full provision has happened: on 2026-08-16 the mule reached 81 of 81 "
+            "in sync, converged, 0 drifted, 0 blocked, with photographs on the panel - see the "
+            "WirePlumber finding. What is still not held is the *evidence* for most of it: "
+            "hardwareVerified is the subset that can still be shown to have been reboot-verified "
+            "from records not yet rolled off, so the gap now is proof rather than convergence."
         ),
     }
     return ledger
@@ -1189,13 +1203,14 @@ def _milestone_state_from_resources(ledger: dict[str, Any]) -> tuple[str, dict[s
         "how": "derived-from-the-repository",
         "what": (
             (
-                f"All {total} catalog resources are implemented in the agent, plus "
-                f"{implemented - total} the catalog does not describe; "
+                f"The agent's graph carries {implemented} resources against the catalog's "
+                f"{total}, {implemented - total} net beyond it; "
                 if implemented > total
                 else f"{implemented} of {total} catalog resources are implemented in the agent; "
             )
-            + f"{verified} of {implemented} have ever converged on real hardware. Both numbers "
-            "are measured on every write, not recorded."
+            + f"{verified} of {implemented} can still be shown to have been reboot-verified on "
+            "real hardware, which is a floor and not a census. Both numbers are measured on "
+            "every write, not recorded."
         ),
         "notWitnessed": (
             "The triple bar this milestone is graded on - state-diff against the frozen v1 "

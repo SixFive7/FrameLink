@@ -123,12 +123,13 @@ public sealed record ReconcileOptions
     /// </para>
     /// <para>
     /// <b>120, sized against a whole first provision rather than against a rate.</b> The rates do not
-    /// separate: a bare provision of the 80-resource catalog runs at roughly 80 reboots in 30 minutes
+    /// separate: a bare provision runs one reboot per resource in the shipped graph — 81, the
+    /// catalog's 80 less <c>pkg.git</c> plus the two it does not carry — in about 30 minutes
     /// (decision 64's measured 21.0 s mean), which is 2.6 per minute, and the measured livelock ran
     /// ~25 reboots in eleven minutes, which is 2.3 per minute. A bound on frequency would therefore
     /// have to stop one to stop the other. A bound on the <i>total inside a window long enough to
     /// contain a whole provision</i> separates them cleanly, because a provision ends and a livelock
-    /// does not. 120 leaves 40 reboots of headroom over the catalog's 80 — enough for half of it to
+    /// does not. 120 leaves 39 reboots of headroom over those 81 — enough for nearly half of it to
     /// need a second attempt — and a retry grants a fresh window.
     /// </para>
     /// </remarks>
@@ -434,7 +435,7 @@ public static class ProvisioningPace
 /// <para>
 /// <b>Initial provisioning has neither.</b> A frame that has never been green has never displayed
 /// anything, nobody is waiting in front of it, and no product is being interrupted. Sixty seconds
-/// of reading time per resource is a pause with no reader, and at 79 resources it is 79 minutes
+/// of reading time per resource is a pause with no reader, and at 80 resources it is 80 minutes
 /// of it — roughly three quarters of the whole provision spent waiting for nobody. So a frame
 /// that has never reached <c>InSync</c> reboots as soon as a resource is applied; once it has
 /// been green, every later repair gets the full countdown, because then §2.7's transparency

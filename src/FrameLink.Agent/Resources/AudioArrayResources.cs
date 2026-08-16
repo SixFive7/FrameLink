@@ -236,7 +236,7 @@ public sealed class SndUsbAudioIndexResource : IResource
 /// <remarks>
 /// <para>
 /// From guide 4 step 1, and brick-capable: it edits <c>/boot/firmware/config.txt</c>, which is
-/// why the catalog schedules it 77th of 79 and why it runs behind
+/// why the catalog schedules it 78th of 80 and why it runs behind
 /// <see cref="BootPartitionGuard"/> like every other writer of that partition. The frame's
 /// display is DSI and it never uses HDMI audio, so removing the competitor for card 0 costs
 /// nothing and closes the cold-boot race described under <see cref="SndUsbAudioIndexResource"/>.

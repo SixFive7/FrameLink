@@ -154,14 +154,25 @@ public sealed record DeviceCatalogContext
 /// <remarks>
 /// <para>
 /// <b>M3 is complete: this is the whole catalog.</b> <c>reference/resource-catalog.md</c>
-/// enumerates 79 resources, of which <b>78 are implementable</b> and all 78 are here.
+/// enumerates <b>80</b> resources, of which <b>79 are implementable</b> and all 79 are here.
 /// <c>pkg.git</c> is the one that is not, and it is an exclusion rather than a gap — open
 /// question 3's adopted reading obtains <c>xvf_host</c> as a pinned, checksum-verified upstream
 /// artifact rather than a clone, and the catalog says outright that "if it does not, this resource
-/// disappears". One resource here is <i>not</i> in the catalog: <c>agent.device-name</c>, the
+/// disappears". Two resources here are <i>not</i> in the catalog: <c>agent.device-name</c>, the
 /// display name the Fleet Manager assigns at adoption, which the catalog's cross-guide section
-/// never enumerated. So the shipped count is 79, and the arithmetic is 78 catalog entries plus
-/// that one.
+/// never enumerated; and <c>kiosk.config.albums</c>, which scopes what the slideshow selects from
+/// and which neither guide 9 nor the catalog ever had — a gap the frame proved by finding no
+/// photographs at all. <b>So the shipped count is 81</b>, and the arithmetic is 79 catalog entries
+/// plus those two.
+/// </para>
+/// <para>
+/// <b>The two totals are read, never typed.</b> 80 is what <c>CatalogDocument.Parse</c> counts in
+/// the catalog file and what <c>ParityHarnessTests</c> asserts; 81 is
+/// <c>graph.Count</c> in <c>AgentResourceGraphTests</c>, and the harness's progress ledger reads
+/// both back out of those two files rather than carrying its own copy. The graph exceeding the
+/// catalog is legitimate and is the reason the ledger reports a <c>beyondCatalog</c> figure at all:
+/// it is the <i>net</i> — two resources the catalog does not carry, less the one it carries and
+/// this does not — and not a count of either set.
 /// </para>
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
@@ -194,7 +205,7 @@ public sealed record DeviceCatalogContext
 /// <c>—</c> <i>means</i> "agent.version and nothing else", is the same statement an empty
 /// <see cref="IResource.DependsOn"/> makes. Materialising them would be actively wrong: a frame
 /// whose Fleet Manager is unreachable cannot evaluate <c>agent.version</c>, so an edge on it would
-/// mark all seventy-eight other resources <see cref="ResourceStatusKind.Blocked"/> and the frame
+/// mark all eighty other resources <see cref="ResourceStatusKind.Blocked"/> and the frame
 /// would provision nothing — the exact opposite of §1.2.2's "a frame must provision and self-heal
 /// with the server unreachable". Declaration order gives the roots their positions; the DAG gives
 /// them no veto.
@@ -317,29 +328,29 @@ public static class DeviceCatalog
             // a reading of a value something else may still change (see SessionAudio).
             .. AudioCatalog.Build(context),
 
-            // Position 75, the last of the product layer. Guide 11 keeps only two resources and
+            // Position 76, the last of the product layer. Guide 11 keeps only two resources and
             // this is the second of them; the daemon that used to hold this line is inside the
             // agent now (see ButtonWatch), so what is left on the device is the claim itself.
             new GpioButtonLineResource(context.Processes, context.Values, context.Button),
 
-            // Position 76, first of §5.5's last phase. Guide 6's, and it stays here rather than
+            // Position 77, first of §5.5's last phase. Guide 6's, and it stays here rather than
             // moving up beside the rest of the camera chain: the display group is the only
             // carve-out from "brick-capable last", and a camera that appears twenty minutes later
             // costs nothing, where a dark panel costs §2.7's whole honesty mechanism.
             new CameraAutoDetectResource(context.Files, guard, context.Session, context.Log),
 
-            // Position 77, in §5.5's last phase with the other brick-capable boot-partition
+            // Position 78, in §5.5's last phase with the other brick-capable boot-partition
             // writes. It is guide 4's, and it is here rather than beside its siblings because a
             // `/boot/firmware` write is scheduled by risk rather than by subject.
             new HdmiAudioOffResource(context.Files, guard, context.Log),
 
-            // Position 78. The second writer of `cmdline.txt`'s single line — the first is the
+            // Position 79. The second writer of `cmdline.txt`'s single line — the first is the
             // console rotation, seventy-five positions earlier — so it goes through the same
             // line-aware editor and reads the file at Act time rather than re-serialising from
             // anything older.
             new WifiRegulatoryDomainResource(context.Files, guard, context.Processes, context.Values, context.Log),
 
-            // Position 79, and last of everything by recovery cost: a bad EEPROM write is the one
+            // Position 80, and last of everything by recovery cost: a bad EEPROM write is the one
             // change on this frame that no software can put back.
             new EepromConfigResource(context.Processes, context.Files, context.Store, guard, context.Log),
         ];

@@ -501,11 +501,12 @@ public sealed class AgentConflictDriftTests
     public async Task The_shipped_floor_is_above_a_whole_first_provision_rather_than_above_a_rate()
     {
         // The number has to clear a bare provision or it is useless, and the rates do not separate
-        // it from the fault: a provision runs at ~2.6 reboots a minute (80 resources, ~30 minutes
-        // at decision 64's measured 21.0 s mean) and the measured livelock ran at ~2.3. So the
-        // floor is sized against the *total* a provision takes, and this asserts the shipped value
-        // against the catalog as it stands rather than against a comment.
-        var resources = new IResource[80];
+        // it from the fault: a provision runs at ~2.6 reboots a minute (81 resources — the shipped
+        // graph, which is the catalog's 80 less pkg.git plus the two it does not carry — in ~30
+        // minutes at decision 64's measured 21.0 s mean) and the measured livelock ran at ~2.3. So
+        // the floor is sized against the *total* a provision takes, and this asserts the shipped
+        // value against the graph as it stands rather than against a comment.
+        var resources = new IResource[81];
         for (var index = 0; index < resources.Length; index++)
         {
             resources[index] = new ScriptedResource(

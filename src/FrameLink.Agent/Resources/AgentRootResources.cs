@@ -33,7 +33,7 @@ namespace FrameLink.Agent.Resources;
 /// resource declares an edge on this one, because the catalog's <c>—</c> already <i>means</i>
 /// "depends on <c>agent.version</c> and nothing else" and the implementation spells that as an
 /// empty <see cref="IResource.DependsOn"/>. Materialising the edges would mean a frame that cannot
-/// reach its Fleet Manager reports all seventy-eight other resources as
+/// reach its Fleet Manager reports all eighty other resources as
 /// <see cref="ResourceStatusKind.Blocked"/> and provisions nothing at all — the exact opposite of
 /// what §1.2.2 requires. Declaration order gives it position 1; the DAG gives it no veto.
 /// </para>

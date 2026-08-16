@@ -223,7 +223,7 @@ public sealed class AgentCountdownTests
 /// </summary>
 /// <remarks>
 /// <para>
-/// The arithmetic that forced it: 79 resources at decision 48's 60 s default is 79 minutes of
+/// The arithmetic that forced it: 80 resources at decision 48's 60 s default is 80 minutes of
 /// countdown against 29 minutes of measured reboot, so roughly three quarters of a bare provision
 /// would be spent holding a screen still for somebody who is not there. §2.7's reason for the
 /// pause is a viewer in front of a working frame watching a repair, and a frame that has never

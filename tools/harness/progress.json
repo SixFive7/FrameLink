@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-16T09:10:22Z",
+  "updatedUtc": "2026-08-16T09:39:25Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -13,15 +13,13 @@
   "currentMilestone": "M2.5",
   "inFlight": null,
   "nextActions": [
-    "FIRST - a previous session died during `fl.py build` (started 2026-08-16T06:48:01Z). Whatever it was changing is unverified; re-run that subcommand before trusting anything downstream of it.",
     "Orient before touching anything: version2.md section 5.1 is the milestone ladder, reference/resource-catalog.md is the resource spec M3 is migrating, reference/v1-state-inventory.txt is the parity target, `git log --oneline -40` is the reasoning record. The 'orientation' block in this file says what each one is for.",
     "dotnet run --project tests/FrameLink.Tests  - the only gate between a change and a release (version2.md section 7.2: no red test ships). Not `dotnet test`, which discovers zero tests under xunit.v3 on this SDK. `fl.py test` wraps it with telemetry off and a deadline.",
     "Ask the user for FL_PW and supply it inline (FL_PW='...' python tools/harness/fl.py <cmd>) to unlock deploy / collect / any SSH to the mule. Never store it.",
     "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
     "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199. The mule's agent is pointed at http://10.20.30.200:5199 and is retrying forever; its journal is a wall of connection warnings until this is up.",
     "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
-    "THE FRONTIER (M3): all 79 catalog resources are implemented, plus 1 the catalog does not describe and only 36 of 80 have ever converged on hardware. The first full provision of the whole catalog on a frame has not happened and is the largest unknown in the build. Do it against a freshly flashed card, and watch it on the panel.",
-    "Settle the WirePlumber question, which is one read-only command and has blocked the audio mixer resources' design since the catalog was written: list ~/.local/state/wireplumber/ on the mule. If stored device state is there it is a second owner of every audio.mixer.* value and wins, because it applies after alsa-restore. See reference/resource-catalog.md, suspected-reverts item 4.",
+    "THE FRONTIER (M3): the agent's graph carries 81 resources against the catalog's 80 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 81 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
     "M2.5 is NOT done and cannot be finished at this desk: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is attached. Ask the user for one."
   ],
   "blockers": [
@@ -114,7 +112,7 @@
       "stateFrom": "resources",
       "evidence": {
         "how": "derived-from-the-repository",
-        "what": "All 80 catalog resources are implemented in the agent, plus 1 the catalog does not describe; 36 of 81 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
+        "what": "The agent's graph carries 81 resources against the catalog's 80, 1 net beyond it; 36 of 81 can still be shown to have been reboot-verified on real hardware, which is a floor and not a census. Both numbers are measured on every write, not recorded.",
         "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. The state-diff harness now exists (`fl.py parity`, judged by tools/FrameLink.Parity) and is tested against fixtures, but it has never been run against a frame: no observation has ever been collected and no parity verdict has ever been issued. The other two bars have no harness."
       }
     },
@@ -249,9 +247,9 @@
     ],
     "meaning": {
       "implemented": "The resource exists in the agent's catalog with tests. It has never necessarily run on a frame.",
-      "hardwareVerified": "The resource converged on the mule and was verified after a real reboot. Only the M2 nine have ever done this."
+      "hardwareVerified": "The resource converged on the mule and was verified after a real reboot, and the evidence for both halves is still held. This is a floor and not a census - see the comment on _HARDWARE_VERIFIED_RESOURCES - so it undercounts, and it is a strictly stronger claim than the in-sync count a frame reports."
     },
-    "gap": "The first full provision of the whole catalog on hardware has not happened. That is the largest single unknown in the build: every resource beyond the nine is code that has never met a real device."
+    "gap": "The first full provision has happened: on 2026-08-16 the mule reached 81 of 81 in sync, converged, 0 drifted, 0 blocked, with photographs on the panel - see the WirePlumber finding. What is still not held is the *evidence* for most of it: hardwareVerified is the subset that can still be shown to have been reboot-verified from records not yet rolled off, so the gap now is proof rather than convergence."
   },
   "findings": [
     {
@@ -261,6 +259,7 @@
       "answer": "It is a DEFAULT, not a restore. WirePlumber holds no stored route volume for this sink, so there is nothing stored to correct.",
       "rulesOut": "The catalog's original proposed fix - owning or clearing ~/.local/state/wireplumber/ - repairs nothing and must not be implemented. There is no file there to own. The correct fix is to set the volume THROUGH WirePlumber (audio.wireplumber.playback-volume, wpctl), which overrides a default and is also what would make restore-device persist a stored one, so it is right under both readings.",
       "consistentWith": "The arithmetic, which remains arithmetic and not a measurement: WirePlumber 0.5's device.routes.default-sink-volume is 0.064 linear = -23.88 dB, and on this control's measured 1-step-per-decibel scale the nearest step at or above that is exactly 37. The file listing is the observation; the constant is the explanation it fits.",
+      "sequel": "Later the same day, once audio.wireplumber.playback-volume finally executed and succeeded, **`default-routes` appeared in that directory beside `stream-properties`** - so WirePlumber now has a stored route volume where it had none, written by the agent's own `wpctl set-volume`. Both halves of this finding are therefore confirmed: it was applying a default because nothing was stored, and setting it through wpctl is what stores it.",
       "whenUtc": "2026-08-16",
       "where": "mule framelink@10.20.30.53",
       "recordedIn": "reference/resource-catalog.md audio.wireplumber.playback-volume; commit 1ce597d"
@@ -277,20 +276,20 @@
       "recordedIn": "ReconcileJournal.Normalise and AgentHost.WhenAllOrFirstFaultAsync, each with the test that reproduces the pre-fix behaviour"
     },
     {
-      "id": "wpctl-cannot-resolve-default-audio-sink",
-      "question": "audio.wireplumber.playback-volume was written to out-argue WirePlumber for the mixer value, and until 2026-08-16 it had never executed on hardware - it was ordered behind the resource it rescues, which cannot converge until it runs. With that ordering corrected it ran for the first time. Does it work?",
-      "measured": "No. Both halves fail for one reason. Observe: `wpctl get-volume @DEFAULT_AUDIO_SINK@` returns an empty string, which the resource reports as \"wpctl answered '', which carries no volume\". Act: `wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.00` is refused with **\"Translate ID error: '-1' is not a valid ID (returned by default-nodes-api)\"**. The `@DEFAULT_AUDIO_SINK@` token resolves to -1: WirePlumber has no default sink recorded to translate it against.",
-      "answer": "The token is the defect, and it is the same root as the finding above: ~/.local/state/wireplumber/ holds only `stream-properties`, so there is no `default-nodes` file for default-nodes-api to answer from. A resource that addresses the sink symbolically therefore cannot address it at all on this frame.",
-      "rulesOut": "wpctl-with-@DEFAULT_AUDIO_SINK@ as the mechanism, whatever else is decided. It is not a permissions problem, not a session-gate problem and not a PATH problem: the session is up, wireplumber is active, and wpctl runs and answers - it answers that the sink has no id. Any fix must either name the sink explicitly (id or node.name) or establish a default sink first.",
-      "consistentWith": "The observed consequence, which is why this is written down as urgently as it is: the resource can never converge, so every walk that reaches it acts and reboots. At ~21 s per cycle the login session never finishes settling, which drags session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift behind it - each of which acts and reboots in turn. 55 boots. The escalation ladder does not stop it because the three resources take turns and each keeps its own budget; decision 79's floor does, at 120 in six hours, which is the case it was written for and the first time it has held on hardware.",
+      "id": "a-zero-countdown-reboots-the-frame-before-wireplumber-has-a-sink",
+      "question": "With the ordering corrected, audio.wireplumber.playback-volume ran on hardware for the first time - and failed every cycle: `wpctl get-volume @DEFAULT_AUDIO_SINK@` answered an empty string and `wpctl set-volume` was refused with **\"Translate ID error: '-1' is not a valid ID (returned by default-nodes-api)\"**. Is @DEFAULT_AUDIO_SINK@ simply the wrong way to address the sink on this frame?",
+      "measured": "**No, and the first answer to this was wrong.** The refusal is real but it is a symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had settled far enough to have a default sink, so the token had nothing to translate to. The fast cycle then fed itself: the login session never finished starting, which put session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift too, each of which acted and rebooted in turn. 55 boots. Setting `repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its own default - was the whole fix. One further repair cycle and the frame reached **81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel.",
+      "answer": "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` now answers `Volume: 1.00`, PCM,0 reads `60 [100%] [0.00dB] [on]` and holds across a boot for the first time in this project's history, and PCM,1 reads the same.",
+      "rulesOut": "Renaming the sink, addressing it by id or node.name, a config fragment, and api.alsa.soft-mixer - none of them is needed. It also rules out reading a repair failure on a fast-cycling frame as a fact about the repair: three of the four resources that looked broken here were only ever being asked too early.",
+      "consistentWith": "The finding above, and it closes the loop on it. Before the repair succeeded, ~/.local/state/wireplumber/ held only `stream-properties` - no stored route volume, so a default was being applied. **After the first successful `wpctl set-volume`, `default-routes` appeared in that directory.** That is decision 80's stated reasoning confirmed on hardware: setting the volume *through* WirePlumber is what makes it persist a stored one, so the value now survives a boot by WirePlumber's own mechanism rather than by the agent winning a race against it.",
       "whenUtc": "2026-08-16",
       "where": "mule framelink@10.20.30.53",
-      "recordedIn": "the reconcile journal's ledger entry for audio.wireplumber.playback-volume, which carries the refusal text verbatim in its `change` field"
+      "recordedIn": "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim in its `change` field while it was failing"
     }
   ],
   "orientation": {
     "specification": "version2.md - the build specification. Section 5.1 is the milestone ladder mirrored below, section 5.5 is why this file exists, Appendix A preserves every decision with its reasoning.",
-    "resourceSpec": "reference/resource-catalog.md - the enumeration of all 79 device settings extracted from build guides 3-12, one block per resource with its Observe, Act and Verify. This is what M3 is migrating, and it is the spec each new resource is written against.",
+    "resourceSpec": "reference/resource-catalog.md - the enumeration of all 80 device settings extracted from build guides 3-12 and the cross-guide section, one block per resource with its Observe, Act and Verify. This is what M3 migrated, and it is the spec each new resource is written against. The count is the file's own Total row, which is what the resources ledger below reads.",
     "parityTarget": "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, config contents and hashes, mixer values, firmware versions. This is what Mn+3 measures 'at parity' against, and the catalog's cross-check.",
     "parityHarness": "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes over SSH, then tools/FrameLink.Parity judges the result against the parity target, an expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be completed.",
     "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",

@@ -276,17 +276,24 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
         # The agent's graph is allowed to exceed the catalog - kiosk.config.albums is in the
         # graph and deliberately not in reference/resource-catalog.md - so this says which
         # number is which rather than subtracting one from the other and printing "80 of 79".
+        #
+        # It also stops short of saying "all N catalog resources are implemented", which was
+        # false: pkg.git is in the catalog and deliberately not in the graph, so the excess is a
+        # net of two-not-in-the-catalog less one-not-in-the-graph. The two numbers are stated and
+        # the reader is sent to the assertion that names the memberships, rather than being given
+        # a subtraction dressed up as a census.
         scope = (
-            f"all {total} catalog resources are implemented, plus {implemented - total} the "
-            "catalog does not describe"
+            f"the agent's graph carries {implemented} resources against the catalog's {total} "
+            f"({implemented - total} net beyond it; AgentResourceGraphTests names which)"
             if implemented > total
             else f"{implemented} of {total} catalog resources are implemented"
         )
         actions.append(
-            f"THE FRONTIER (M3): {scope} and only {verified} of {implemented} have ever "
-            "converged on hardware. The first full provision of the whole catalog on a frame "
-            "has not happened and is the largest unknown in the build. Do it against a freshly "
-            "flashed card, and watch it on the panel."
+            f"THE FRONTIER (M3): {scope}, and {verified} of {implemented} can still be shown to "
+            "have been reboot-verified on hardware. That is a floor, not a census - the mule has "
+            "reached full convergence, and what is thin is the evidence retained for each row, "
+            "not the convergence. Re-establish it against a freshly flashed card, and watch it "
+            "on the panel."
         )
         if implemented < total:
             actions.append(
@@ -295,13 +302,13 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
                 "assertion in tests/FrameLink.Tests/AgentResourceGraphTests.cs, which goes red "
                 "when the graph and the catalog disagree."
             )
-    actions.append(
-        "Settle the WirePlumber question, which is one read-only command and has blocked the "
-        "audio mixer resources' design since the catalog was written: list "
-        "~/.local/state/wireplumber/ on the mule. If stored device state is there it is a second "
-        "owner of every audio.mixer.* value and wins, because it applies after alsa-restore. See "
-        "reference/resource-catalog.md, suspected-reverts item 4."
-    )
+    # The WirePlumber question that stood here from the day the catalog was written is
+    # answered and is not a next action any more. Decision 80 records it: WirePlumber is a
+    # second owner of the ALSA mixer, measured on the frame - ~/.local/state/wireplumber/ held
+    # only stream-properties until the first successful `wpctl set-volume`, after which
+    # default-routes appeared, which is the second owner writing itself down. The consequences
+    # shipped with it: every audio.mixer.* Observe sits behind the session gate, and
+    # audio.wireplumber.playback-volume owns the value at the layer that sets it.
     actions.append(
         "M2.5 is NOT done and cannot be finished at this desk: the generator is built and "
         "measured against the real base image, but its acceptance test is to flash a card and "
