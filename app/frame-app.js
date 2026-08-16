@@ -330,6 +330,11 @@ class FrameApp extends LitElement {
   async enterCall() {
     if (this.mode === 'call') return;
     this.mode = 'call';
+    // Told before the camera is published rather than after, so the window in which the agent
+    // believes this frame is idle closes before there is a call to interrupt. §2.10 lets two
+    // behaviours act on the browser while it is idle — the 03:00 restart and the page refresh —
+    // and both of them read this.
+    if (window.frameLinkStage) window.frameLinkStage.callStarted();
     clearTimeout(this._iframeTimer);
     clearTimeout(this._probeTimer);
     if (this.call) await this.call.enableCall();

@@ -4,7 +4,7 @@ using FrameLink.Agent.Resources;
 namespace FrameLink.Agent.Supervise;
 
 /// <summary>
-/// §2.10's eleven constants, as fleet settings.
+/// §2.10's constants, as fleet settings.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -52,6 +52,9 @@ public sealed class SupervisionSettings
     /// <summary>Fleet setting: per-call camera recycle; off at PipeWire ≥ 1.6.</summary>
     public const string CameraRestartOnCallEndKey = "supervision.cameraRestartOnCallEnd";
 
+    /// <summary>Fleet setting: minimum spacing between page refreshes.</summary>
+    public const string PageRefreshCooldownKey = "supervision.pageRefreshCooldown";
+
     /// <summary>Fleet setting: when an unrecovered supervision action becomes drift.</summary>
     public const string RecoveryDeadlineKey = "supervision.recoveryDeadline";
 
@@ -96,6 +99,18 @@ public sealed class SupervisionSettings
 
     /// <summary>Whether the camera node is recycled after every call.</summary>
     public bool CameraRestartOnCallEnd => Flag(CameraRestartOnCallEndKey, fallback: true);
+
+    /// <summary>
+    /// Five minutes between page refreshes, matching the liveness restart's floor.
+    /// </summary>
+    /// <remarks>
+    /// A refresh that does not take — a page that ignores the command, or one that cannot fetch the
+    /// document it is being sent for — must not become a frame reloading itself every fifteen
+    /// seconds. The same floor as <see cref="KioskRestartCooldown"/> because it answers the same
+    /// question about the same page, and because it is the spacing at which
+    /// <see cref="FaultRateThreshold"/> turns a repeat into a reported fault within the hour.
+    /// </remarks>
+    public TimeSpan PageRefreshCooldown => Duration(PageRefreshCooldownKey, TimeSpan.FromMinutes(5));
 
     /// <summary>Two minutes, after which an unrecovered action becomes ordinary drift (§2.10).</summary>
     public TimeSpan RecoveryDeadline => Duration(RecoveryDeadlineKey, TimeSpan.FromMinutes(2));

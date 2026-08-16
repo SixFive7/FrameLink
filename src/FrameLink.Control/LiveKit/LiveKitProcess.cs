@@ -32,8 +32,9 @@ public sealed record LiveKitProcessState(
 /// a parent owns the child's lifetime, "the child exited" is an event it is told about rather
 /// than a symptom it has to infer, and the response is to start it again. There is no memory
 /// ceiling, no clock, no silence timeout and no health probe anywhere in this file, because
-/// §2.10's four behaviours all exist to manufacture a trigger for a restart <i>systemd</i> would
-/// never take on its own — and nothing here is a systemd unit.
+/// §2.10's behaviours all exist to manufacture a trigger for something <i>nothing else</i> would
+/// take on its own — a restart systemd would not take, or a reload a browser has no reason to —
+/// and nothing here is a systemd unit or a page.
 /// </para>
 /// <para>
 /// <b>The one structural difference is the interlock, and it is absent because there is nothing

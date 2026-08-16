@@ -64,6 +64,49 @@ public sealed record PageMessage
     /// sending the value back would put a credential in a message that is trivially logged.
     /// </remarks>
     public bool HasToken { get; init; }
+
+    /// <summary>
+    /// How long ago this document began loading, in milliseconds — the page's <c>performance.now()</c>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The one fact only the page can supply, and the fact the agent was missing.</b> A reconnect
+    /// on this channel is indistinguishable from a page load at the socket layer, which is exactly
+    /// how a frame came to report <i>"The page checked in after 0 s"</i> about a document served by
+    /// an agent that had already exited. The socket is new; the document is not. This field says
+    /// which.
+    /// </para>
+    /// <para>
+    /// <b>Monotonic, and that matters on this hardware.</b> <c>performance.now()</c> counts from the
+    /// document's own navigation and is unaffected by the clock stepping — which a Pi with no RTC
+    /// does at every boot, the moment <c>systemd-timesyncd</c> answers. A wall-clock instant sent
+    /// from the page would be compared against an agent whose clock had moved underneath it.
+    /// </para>
+    /// <para>
+    /// Null from a page that predates the field, and <see cref="Supervise.PageFreshness"/> treats
+    /// that as <i>unknown</i> rather than as stale: an agent must not refresh a page it has learned
+    /// nothing about.
+    /// </para>
+    /// </remarks>
+    public double? DocumentAgeMs { get; init; }
+
+    /// <summary>Whether the product is in a call at this instant.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A level on every check-in, never an edge.</b> <see cref="KindCallEnded"/> is an edge and
+    /// has to be, because it triggers the camera recycle at one instant; this is the state, and a
+    /// state carried on every heartbeat cannot be lost the way a missed edge is lost for ever. It is
+    /// also the signal <see cref="Supervise.Supervisor.CallActive"/> had no producer for — §2.10's
+    /// "the daily restart stands down while a call is active" was, until this field, a rule with
+    /// nothing to read.
+    /// </para>
+    /// <para>
+    /// It is reported on change as well as on the heartbeat, so the agent's copy is milliseconds
+    /// old rather than up to one heartbeat old. The page still holds the deciding vote on anything
+    /// that would interrupt a call, because only the page cannot be out of date about itself.
+    /// </para>
+    /// </remarks>
+    public bool InCall { get; init; }
 }
 
 /// <summary>What the agent pushes to the page — §2.7's repair screen, rendered in the browser.</summary>
@@ -186,6 +229,13 @@ public sealed record StageMessage
     /// press rides the one local origin the page is already connected to.
     /// </para>
     /// <para>
+    /// It carries <c>reload</c> when §2.10's page-refresh behaviour has found the running document
+    /// to be one a previous agent served. That command is handled inside <c>frame-stage.js</c> and
+    /// deliberately not re-broadcast as an app event: the whole point of a stale page is that the
+    /// app on it may be the part that is out of date, and the file that must keep working when the
+    /// rest does not is the file that has to act on this.
+    /// </para>
+    /// <para>
     /// It travels on a full, current stage frame rather than in a message of its own so that a page
     /// which does not understand commands still renders the truth instead of a default condition.
     /// </para>
@@ -303,6 +353,41 @@ public sealed class LocalChannel
         }
     }
 
+    /// <summary>
+    /// How long ago the running document began loading, as the page last reported it.
+    /// </summary>
+    /// <remarks>
+    /// Null means the page has said nothing about it — either nothing has checked in yet, or what
+    /// is running predates the field. Both are <i>unknown</i> and neither is evidence of staleness.
+    /// </remarks>
+    public TimeSpan? DocumentAge
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _documentAge;
+            }
+        }
+    }
+
+    /// <summary>Whether the product is in a call, as the page last reported.</summary>
+    /// <remarks>
+    /// False until a page says otherwise, which is the safe default in the direction that matters:
+    /// the two behaviours that read this — the daily restart and the page refresh — are the ones
+    /// that <i>defer</i> for a call, and a frame with no page at all has no call to protect.
+    /// </remarks>
+    public bool InCall
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _inCall;
+            }
+        }
+    }
+
     /// <summary>How many pages are connected right now.</summary>
     public int Peers
     {
@@ -320,6 +405,8 @@ public sealed class LocalChannel
 
     private DateTimeOffset? _lastCheckInUtc;
     private AppReport? _lastReport;
+    private TimeSpan? _documentAge;
+    private bool _inCall;
 
     /// <summary>Registers a connected page. Disposing the handle unregisters it.</summary>
     public IDisposable Attach(Func<StageMessage, CancellationToken, Task> send)
@@ -344,6 +431,16 @@ public sealed class LocalChannel
         lock (_gate)
         {
             _lastCheckInUtc = at;
+            _inCall = message.InCall;
+
+            // Only a reading that arrived replaces the last one. A page that stops reporting its
+            // document age has not told us the document got younger, and letting a null overwrite a
+            // real reading would turn "this page predates the field" into a fact about a page that
+            // does not predate it.
+            if (message.DocumentAgeMs is { } age and >= 0)
+            {
+                _documentAge = TimeSpan.FromMilliseconds(age);
+            }
 
             if (message.Identity is not null
                 || message.Room is not null
@@ -393,6 +490,8 @@ public sealed class LocalChannel
         {
             _lastCheckInUtc = null;
             _lastReport = null;
+            _documentAge = null;
+            _inCall = false;
         }
     }
 

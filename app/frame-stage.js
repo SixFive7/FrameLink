@@ -18,8 +18,20 @@
 //      repair narration on top of everything — what was detected, why it matters, what is being
 //      done, the attempt number, and the countdown with its "Reboot now" button.
 //
+//   4. Say how old this document is, and reload it when the agent says it is out of date. version2.md
+//      §2.1 puts the app inside the agent binary and §2.8 replaces that binary hourly, so a browser
+//      that has been up since before the last update is showing a page nobody serves any more —
+//      measured on 2026-08-16, where a new stage was served correctly and never reached the screen.
+//      The socket cannot tell the agent that: a reconnect and a load look identical from its end,
+//      which is exactly why the frame's journal recorded "The page checked in after 0 s" about a
+//      document an hour and a half old. `performance.now()` counts from *this document's*
+//      navigation, so reporting it is the one thing that separates the two.
+//
 // No imports on purpose. This file must keep working when the rest of the app does not, and a
-// broken vendor bundle must not be able to take the liveness signal with it.
+// broken vendor bundle must not be able to take the liveness signal with it. The reload lands here
+// for the same reason and it is the sharper case: the whole point of a stale page is that the app
+// on it may be the part that is out of date, so the reload must not be routed through anything the
+// app owns.
 
 const HEARTBEAT_MS = 15000;
 const RECONNECT_MIN_MS = 500;
@@ -44,10 +56,27 @@ let backoff = RECONNECT_MIN_MS;
 let configuration = null;
 let lastBeat = 0;
 let painted = false;
+let inCall = false;
+let reloadWanted = false;
 
+// Both new fields are stamped here rather than at each call site, because the agent reads them as
+// *levels* and a message that omitted them would read as "not in a call, document age unknown" —
+// which a button press on the repair screen must not be able to say.
+//
+//   documentAgeMs — how long ago *this document* started loading. Monotonic, and unaffected by the
+//     clock step a Pi with no RTC takes seconds after every boot: a wall-clock instant sent from
+//     here would be compared against an agent whose clock had moved underneath it.
+//   inCall — a level and not an edge, so a lost message costs one heartbeat of accuracy instead of
+//     leaving the agent permanently wrong about whether somebody is talking through this frame.
 function send(message) {
   try {
-    if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        ...message,
+        documentAgeMs: Math.round(performance.now()),
+        inCall,
+      }));
+    }
   } catch (_) { /* the channel is gone; the agent's silence timer is what notices */ }
 }
 
@@ -90,6 +119,15 @@ function connect() {
   socket.onmessage = (event) => {
     let stage;
     try { stage = JSON.parse(event.data); } catch (_) { return; }
+
+    // The one command this file acts on itself. A stale document is a document, so the narrowest
+    // repair is to fetch it again — no unit restart, no compositor teardown, no black frame. It is
+    // handled here rather than dispatched because a page whose app half failed to load is still a
+    // page that has to be replaceable, and that page never listens for `framelink-command`.
+    if (stage.command === 'reload') {
+      reload();
+      return;
+    }
 
     // A frame carrying a command is the call button, not narration: version2.md's catalog retires
     // the GPIO daemon's WebSocket server on 127.0.0.1:8889 ("with both inside one binary there is
@@ -276,12 +314,33 @@ async function loadConfiguration() {
   } catch (_) { /* reported as a null configuration, which the agent reads as "not issued" */ }
 }
 
-/** Tells the agent a call has ended — the event trigger of §2.10's camera recycle. */
-export function callEnded() {
-  send({ kind: 'call-ended' });
+// The agent asks for a reload only after checking that no call is in progress, but its copy of that
+// is up to one heartbeat old — so a call that started a second ago is not in it yet. This is the
+// other half of that guard, and it is the half that cannot be out of date: the page knows whether
+// somebody is talking through it right now. The request is kept rather than refused, and taken the
+// moment the call ends, which is exactly how §2.10's daily restart waits out a call.
+function reload() {
+  if (inCall) {
+    reloadWanted = true;
+    return;
+  }
+  location.reload();
 }
 
-window.frameLinkStage = { callEnded };
+/** Tells the agent a call has started, so nothing that would interrupt it fires. */
+export function callStarted() {
+  inCall = true;
+  report('alive');   // on the change rather than at the next heartbeat: the guard is time-sensitive
+}
+
+/** Tells the agent a call has ended — the event trigger of §2.10's camera recycle. */
+export function callEnded() {
+  inCall = false;
+  send({ kind: 'call-ended' });
+  if (reloadWanted) location.reload();
+}
+
+window.frameLinkStage = { callStarted, callEnded };
 
 loadConfiguration();
 connect();

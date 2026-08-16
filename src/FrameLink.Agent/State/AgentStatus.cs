@@ -46,7 +46,7 @@ public sealed record Narration
 /// </remarks>
 public sealed record SupervisionAnnotation
 {
-    /// <summary>Which of §2.10's four behaviours last acted.</summary>
+    /// <summary>Which of §2.10's five behaviours last acted.</summary>
     public required string Behaviour { get; init; }
 
     /// <summary>When it acted.</summary>

@@ -541,6 +541,14 @@ public sealed class AgentHost
             Settings = new SupervisionSettings(values),
             Store = store,
             DeviceId = identity.DeviceId,
+
+            // Decision 84. §2.1 puts the app inside this binary and §2.8 replaces this binary
+            // hourly, so every update ships a page the running browser has no reason to fetch — and
+            // measured on 2026-08-16 it does not: the agent served a new stage, the headline moved
+            // because it is composed here, and the half the page draws never appeared at all. This
+            // is the fact that makes the two comparable.
+            Freshness = new PageFreshness(store, EmbeddedApp.BuildId, _log),
+            Stage = () => BrowserStage.Compose(hub.Current, _clock.UtcNow),
         });
 
         var browser = new BrowserStage(new BrowserStageServices
@@ -602,7 +610,7 @@ public sealed class AgentHost
             touch.RunAsync(shutdown.Token),
 
             // Guide 9's `restart: always`, without Docker underneath it. It is not one of §2.10's
-            // four behaviours and deliberately not a fifth: the agent is this child's *parent*, so
+            // behaviours and deliberately not another one: the agent is this child's *parent*, so
             // "it exited" is an event it is told about rather than a health symptom it has to
             // infer. What it shares with §2.10 is the interlock, because the collision is identical
             // — a reconcile pass landing between an exit and the relaunch would otherwise read a

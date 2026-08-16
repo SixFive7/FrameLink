@@ -39,6 +39,27 @@ public sealed record SupervisionServices
     public SupervisionSettings Settings { get; init; } = SupervisionSettings.Defaults;
 
     /// <summary>
+    /// Whether the document on screen is the one this agent serves (§2.10, decision 84).
+    /// </summary>
+    /// <remarks>
+    /// Optional, and null switches the behaviour off entirely — which is what every test that
+    /// predates it wants, and what a host with no embedded app to compare against would want. A
+    /// supervisor without one simply never refreshes a page.
+    /// </remarks>
+    public PageFreshness? Freshness { get; init; }
+
+    /// <summary>
+    /// The narration frame as it stands right now, which the reload command rides on.
+    /// </summary>
+    /// <remarks>
+    /// The same delegate <c>ButtonWatch</c> takes, for the same reason: a command travels inside an
+    /// honest, current stage frame rather than in a bare message of its own, so a page that ignores
+    /// the command field still renders the truth. Null falls back to the two fields this class can
+    /// compose from <see cref="Hub"/> alone, which is all a test needs and never what a frame runs.
+    /// </remarks>
+    public Func<StageMessage>? Stage { get; init; }
+
+    /// <summary>
     /// Where the daily restart's last run is remembered, or null to keep it in memory only.
     /// </summary>
     /// <remarks>
@@ -88,12 +109,12 @@ public sealed record SupervisionServices
 /// </para>
 /// <para>
 /// <b>Two consequences follow and are enforced here.</b> Supervision <b>never reboots</b> — its
-/// entire vocabulary is restarting a supervised process, and a reboot blanks the frame for a
-/// minute, which is exactly the product-stopping behaviour it must not have. And it <b>defers only
-/// what can wait</b>: the daily restart stands down during a call and runs at the next
-/// opportunity, while the memory watchdog defers for nothing, because the alternative to acting
-/// during a call is an OOM kill or a hardware-watchdog reset, which ends that call anyway and
-/// takes the frame with it.
+/// whole vocabulary is restarting a supervised process or reloading a page, and a reboot blanks the
+/// frame for a minute, which is exactly the product-stopping behaviour it must not have. And it
+/// <b>defers only what can wait</b>: the daily restart and the page refresh stand down during a
+/// call and run at the next opportunity, while the memory watchdog defers for nothing, because the
+/// alternative to acting during a call is an OOM kill or a hardware-watchdog reset, which ends that
+/// call anyway and takes the frame with it.
 /// </para>
 /// <para>
 /// It runs at full strength in <c>NoContact</c> — that is the case where no help is coming — and
@@ -114,6 +135,27 @@ public sealed class Supervisor
 
     /// <summary>Behaviour id: the prophylactic camera recycle after every call.</summary>
     public const string CameraRecycle = "camera-recycle";
+
+    /// <summary>Behaviour id: the running page is a document a previous agent served.</summary>
+    /// <remarks>
+    /// <b>The fifth behaviour, and the only one not carried over from v1</b> — v1 could not have had
+    /// it, because v1's app was a git checkout served by a separate unit and the agent that replaced
+    /// it did not exist. It arrives with §2.1's embedded app and §2.8's self-update, which together
+    /// mean every agent release ships a page the running browser has no reason to fetch.
+    /// </remarks>
+    public const string PageRefresh = "page-refresh";
+
+    /// <summary>What the page is told to do when its document is out of date.</summary>
+    /// <remarks>
+    /// <b>Reloading the document, not restarting the browser.</b> The stale thing is a document, and
+    /// the narrowest action that replaces a document is the one to take: a unit restart tears down a
+    /// renderer, a compositor connection and a GPU context to fix a page that
+    /// <c>location.reload()</c> fixes in about a second without the frame going black. It is also
+    /// the action that disturbs no resource — <c>unit.chromium-kiosk.running-matches-content</c>
+    /// reads the process's argv, which a reload does not touch — so this is the one supervision
+    /// action that needs no interlock window at all.
+    /// </remarks>
+    public const string ReloadCommand = "reload";
 
     /// <summary>
     /// <c>events</c>-channel kind for one supervision action (§4.1 lists it beside drift and
@@ -172,6 +214,7 @@ public sealed class Supervisor
 
     private DateTimeOffset? _lastMemoryCheck;
     private DateTimeOffset? _lastLivenessRestart;
+    private DateTimeOffset? _lastPageRefresh;
     private DateOnly? _lastDailyRestart;
     private int _callEndsPending;
     private bool _callActive;
@@ -191,11 +234,35 @@ public sealed class Supervisor
     /// <summary>Why the last tick did nothing, for a test and for the journal.</summary>
     public string? LastStandDown { get; private set; }
 
-    /// <summary>Whether a call is in progress, which the daily restart defers for.</summary>
+    /// <summary>Whether a call is in progress, which two behaviours defer for.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Its producer used to be missing, and nothing said so.</b> §2.10 gives the daily restart a
+    /// stand-down for an active call, and until the page began reporting
+    /// <see cref="LocalChannel.InCall"/> the only thing that ever set this was a test — so on a real
+    /// frame the 03:00 restart would have ended a call in progress, silently, and the rule that
+    /// forbids it was a rule with nothing to read. The page is the only party that knows, because
+    /// the call lives entirely inside it.
+    /// </para>
+    /// <para>
+    /// The setter stays and is an <i>override</i> rather than the value: anything that says a call
+    /// is happening is believed, and only the absence of any such claim is taken as no call. That
+    /// asymmetry is deliberate — the cost of a false "in a call" is a restart deferred to the next
+    /// tick, and the cost of a false "no call" is somebody's conversation ending.
+    /// </para>
+    /// </remarks>
     public bool CallActive
     {
         get
         {
+            // Read outside the gate rather than inside it. The channel has a lock of its own and
+            // nothing here needs the two held together, so keeping them unnested removes a lock
+            // ordering that would otherwise have to stay correct for ever.
+            if (_services.Channel.InCall)
+            {
+                return true;
+            }
+
             lock (_gate)
             {
                 return _callActive;
@@ -247,6 +314,7 @@ public sealed class Supervisor
         taken += await DailyTickAsync(now, cancellationToken).ConfigureAwait(false);
         taken += await LivenessTickAsync(now, cancellationToken).ConfigureAwait(false);
         taken += await CameraTickAsync(now, cancellationToken).ConfigureAwait(false);
+        taken += await PageTickAsync(now, cancellationToken).ConfigureAwait(false);
 
         return taken;
     }
@@ -470,6 +538,90 @@ public sealed class Supervisor
 
         return 1;
     }
+
+    /// <summary>
+    /// Refreshes a page a previous agent served — §2.10's fifth behaviour, decision 84.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Four stand-downs before anything is sent, and each is a different way of being wrong at a
+    /// bad moment.</b> A verdict short of <see cref="PageVerdict.Stale"/> means the page is either
+    /// current or unknown, and neither is a reason to interrupt anybody. A call in progress means
+    /// the frame is a telephone somebody is talking into. A reconciler working on the browser is
+    /// §2.10 clause 1. And the cooldown means a refresh that did not take cannot become a frame
+    /// reloading itself every fifteen seconds.
+    /// </para>
+    /// <para>
+    /// <b>The one that is not enough on its own is the call check, and the page holds the other
+    /// half.</b> This reading is up to one heartbeat old, so a call that started a second ago is not
+    /// in it yet — which is why <c>frame-stage.js</c> refuses a reload it is in a call for and takes
+    /// it the moment the call ends. Two guards in series, with the deciding vote held by the only
+    /// party that cannot be out of date about itself.
+    /// </para>
+    /// <para>
+    /// <b>No interlock window is opened, and that is a statement rather than an omission.</b> A
+    /// window exists to excuse transient wrongness in a resource, and a reload produces none: the
+    /// browser process, its command line, the compositor and the display transform are all exactly
+    /// as they were. What a reload does disturb is this channel, for about a second, and the rule
+    /// that watches it allows ninety.
+    /// </para>
+    /// </remarks>
+    private async Task<int> PageTickAsync(DateTimeOffset now, CancellationToken cancellationToken)
+    {
+        if (_services.Freshness is not { } freshness)
+        {
+            return 0;
+        }
+
+        if (freshness.Observe(_services.Channel.DocumentAge) is not PageVerdict.Stale)
+        {
+            return 0;
+        }
+
+        if (CallActive)
+        {
+            LastStandDown = "a call is in progress, so the page is refreshed when it ends";
+            return 0;
+        }
+
+        if (_services.Interlock.FirstHeld(BrowserResources) is { } held)
+        {
+            LastStandDown = $"the reconciler is working on '{held}', so the page was left alone";
+            return 0;
+        }
+
+        if (_lastPageRefresh is { } previous && now - previous < _services.Settings.PageRefreshCooldown)
+        {
+            LastStandDown = "the page was refreshed recently, so this one is in its cooldown";
+            return 0;
+        }
+
+        _lastPageRefresh = now;
+
+        // The command rides a full, current narration frame for the reason ButtonWatch's does: a
+        // page that does not understand the command still renders the truth rather than a default
+        // condition. Composed from the same hub the console paints from, so the two surfaces cannot
+        // disagree about the frame in the instant it is asked to reload.
+        await _services.Channel
+            .PublishAsync(Compose() with { Command = ReloadCommand }, cancellationToken)
+            .ConfigureAwait(false);
+
+        await RecordAsync(
+            PageRefresh,
+            freshness.Delta,
+            $"tell the page to reload, so it runs app {freshness.Served}",
+            now,
+            cancellationToken).ConfigureAwait(false);
+
+        return 1;
+    }
+
+    private StageMessage Compose() =>
+        _services.Stage?.Invoke() ?? new StageMessage
+        {
+            Condition = _services.Hub.Current.Condition.State.ToString(),
+            ProductRuns = _services.Hub.Current.ProductRuns,
+        };
 
     /// <summary>Restarts the browser, unless §2.10 clause 1 says the reconciler owns it.</summary>
     private async Task<bool> RestartBrowserAsync(

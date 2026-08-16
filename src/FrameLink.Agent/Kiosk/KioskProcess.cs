@@ -194,15 +194,17 @@ public sealed record KioskProcessSettings
 /// </para>
 /// <para>
 /// <b>A different shape of supervision from the browser's, and the difference is structural.</b>
-/// §2.10's four behaviours restart <c>chromium-kiosk.service</c>, a systemd <i>user</i> unit with
-/// its own <c>Restart=always</c>: systemd owns that lifetime, the agent is not its parent, and what
-/// supervision contributes is a <i>health trigger</i> — a memory ceiling, a clock, a silent local
-/// channel — for a restart systemd would never take on its own. Nothing here has a health trigger.
-/// The agent is the parent, "the child exited" is an event it is told about rather than a symptom
-/// it has to infer, and the response is to start it again. That is §3.7's shape — the Fleet Manager
+/// §2.10's behaviours act on things the agent does not own: <c>chromium-kiosk.service</c> and
+/// <c>framelink-camera.service</c> are systemd <i>user</i> units with their own
+/// <c>Restart=always</c>, and the document inside the browser belongs to the browser. Systemd owns
+/// those lifetimes, the agent is not their parent, and what supervision contributes is a
+/// <i>trigger</i> — a memory ceiling, a clock, a silent local channel, a document that predates the
+/// app being served — for an action nothing else would take on its own. Nothing here needs one. The
+/// agent is the parent, "the child exited" is an event it is told about rather than a symptom it has
+/// to infer, and the response is to start it again. That is §3.7's shape — the Fleet Manager
 /// supervising <c>livekit-server</c> "as a child process with the same restart-and-report
-/// discipline" — not §2.10's, and the fifth supervised behaviour §2.10 does not list is deliberately
-/// not being added here.
+/// discipline" — not §2.10's, and a supervised behaviour for this child is deliberately not being
+/// added.
 /// </para>
 /// <para>
 /// <b>What the two shapes do share is the interlock, and they have to.</b> §2.10's collision is

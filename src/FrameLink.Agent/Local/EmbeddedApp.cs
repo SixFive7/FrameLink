@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace FrameLink.Agent.Local;
 
@@ -33,6 +35,34 @@ public static class EmbeddedApp
     public const string IndexPath = "index.html";
 
     private static readonly Lazy<IReadOnlyDictionary<string, byte[]>> Assets = new(Load);
+
+    private static readonly Lazy<string> Build = new(Digest);
+
+    /// <summary>
+    /// A stable identifier of the app <i>this binary</i> carries.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It answers "did the page change", not "which version is this".</b> §2.8 updates the agent
+    /// and the app travels inside it, so every release ships an <c>app/</c> whether or not a byte of
+    /// it moved. Keying a refresh on <see cref="AgentBuild.Version"/> would reload the product on
+    /// every agent release, including the ones that only touch a resource. This is a digest of the
+    /// served bytes, so it moves when — and only when — the page a browser would load is a different
+    /// page.
+    /// </para>
+    /// <para>
+    /// The path is hashed beside the content, so a file renamed with its bytes intact, and an asset
+    /// added or removed, both change the answer. Ordinal sort for the same reason the names are
+    /// normalised at read time: the digest has to be identical whether the binary was built on the
+    /// workstation or in §5.2's arm64 container.
+    /// </para>
+    /// <para>
+    /// <b>SHA-256 truncated to sixteen hex characters</b>, because this is compared for equality and
+    /// never for order, and the value is written into a state file and a log line a person reads.
+    /// Sixty-four bits is far past what an accidental collision between two builds of one app needs.
+    /// </para>
+    /// </remarks>
+    public static string BuildId => Build.Value;
 
     /// <summary>Every embedded asset path, sorted.</summary>
     public static IReadOnlyList<string> Paths
@@ -97,6 +127,23 @@ public static class EmbeddedApp
             ".woff2" => "font/woff2",
             _ => "application/octet-stream",
         };
+    }
+
+    private static string Digest()
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+        foreach (var path in Paths)
+        {
+            // The separator is a byte no path can contain, so "ab" + "c" and "a" + "bc" cannot
+            // hash alike. Cheap here, and the alternative is a digest that is silently ambiguous
+            // about which file a change was in.
+            hash.AppendData(Encoding.UTF8.GetBytes(path));
+            hash.AppendData([0]);
+            hash.AppendData(Assets.Value[path]);
+        }
+
+        return Convert.ToHexStringLower(hash.GetCurrentHash().AsSpan(0, 8));
     }
 
     private static Dictionary<string, byte[]> Load()
