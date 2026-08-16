@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-16T09:39:25Z",
+  "updatedUtc": "2026-08-16T10:56:23Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -27,19 +27,19 @@
       "id": "fl-pw-unset",
       "what": "FL_PW is not set, so no command can reach the mule.",
       "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-16T06:49:13Z"
+      "since": "2026-08-16T10:56:22Z"
     },
     {
       "id": "ha-token-unset",
       "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
       "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
-      "since": "2026-08-16T06:49:13Z"
+      "since": "2026-08-16T10:56:22Z"
     },
     {
       "id": "operator-password-unset",
       "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
       "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
-      "since": "2026-08-16T06:49:13Z"
+      "since": "2026-08-16T10:56:23Z"
     }
   ],
   "milestones": [
@@ -146,9 +146,9 @@
       "title": "Native AOT linux-arm64 binary built in an emulated container",
       "state": "proven",
       "provenBy": "fl.py build",
-      "provenUtc": "2026-08-16T08:53:30Z",
+      "provenUtc": "2026-08-16T10:35:00Z",
       "provenCommand": "fl.py build",
-      "detail": "0.0.0+1ce597d.dirty linux-arm64 10530448 bytes in framelink-build:arm64"
+      "detail": "0.0.0+fe61154.dirty linux-arm64 10530872 bytes in framelink-build:arm64"
     },
     "test-runner": {
       "title": "Test suite runs and propagates its exit code",
@@ -170,9 +170,9 @@
       "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
       "state": "proven",
       "provenBy": "fl.py deploy",
-      "provenUtc": "2026-08-16T08:47:11Z",
+      "provenUtc": "2026-08-16T10:35:03Z",
       "provenCommand": "fl.py deploy",
-      "detail": "0.0.0+1ce597d.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
+      "detail": "0.0.0+fe61154.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
     },
     "power-cycle": {
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
@@ -186,17 +186,17 @@
       "title": "Screenshot and journal tail come back from the mule",
       "state": "proven",
       "provenBy": "fl.py collect",
-      "provenUtc": "2026-08-16T09:10:22Z",
+      "provenUtc": "2026-08-16T10:52:38Z",
       "provenCommand": "fl.py collect",
-      "detail": "screenshot via grim, journal 202 lines"
+      "detail": "screenshot via grim, journal 0 lines"
     },
     "closed-loop": {
       "title": "A code change reaches the mule and is verified with no human help (M0 done)",
       "state": "proven",
       "provenBy": "fl.py build + fl.py deploy",
-      "provenUtc": "2026-08-16T08:03:45Z",
+      "provenUtc": "2026-08-16T10:35:03Z",
       "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
-      "detail": "fl-agent 0.0.0+1ce597d.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
+      "detail": "fl-agent 0.0.0+fe61154.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
     }
   },
   "resources": {
@@ -278,13 +278,35 @@
     {
       "id": "a-zero-countdown-reboots-the-frame-before-wireplumber-has-a-sink",
       "question": "With the ordering corrected, audio.wireplumber.playback-volume ran on hardware for the first time - and failed every cycle: `wpctl get-volume @DEFAULT_AUDIO_SINK@` answered an empty string and `wpctl set-volume` was refused with **\"Translate ID error: '-1' is not a valid ID (returned by default-nodes-api)\"**. Is @DEFAULT_AUDIO_SINK@ simply the wrong way to address the sink on this frame?",
-      "measured": "**No, and the first answer to this was wrong.** The refusal is real but it is a symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had settled far enough to have a default sink, so the token had nothing to translate to. The fast cycle then fed itself: the login session never finished starting, which put session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift too, each of which acted and rebooted in turn. 55 boots. Setting `repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its own default - was the whole fix. One further repair cycle and the frame reached **81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel.",
+      "measured": "**No, and the first answer to this was wrong.** The refusal is real but it is a symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had settled far enough to have a default sink, so the token had nothing to translate to. The fast cycle then fed itself: the login session never finished starting, which put session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift too, each of which acted and rebooted in turn. 55 boots. Setting `repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its own default - was the whole fix. One further repair cycle and the frame reached **81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel - and held it: eight consecutive converged censuses, telemetry sequence 1281 through 1288, one every five minutes across 35 minutes, online throughout, with **no reboot between any of them**. That last part is the claim worth having, because everything this frame did wrong tonight it did by rebooting. Re-measured 90 minutes later, immediately before the deploy of 958ac9c and fe61154, from two records that do not share a source: the Fleet Manager's device-event history holds **no event of any kind after the `boot` at 2026-08-16T09:09:23Z** - no boot, no drift, and the 50 it does return are the 25 boot/25 drift pairs of the storm that preceded it - and census sequence 1296 at 10:25:05Z still read converged, 81 in sync, 0 drifted, 0 blocked, 0 reboots expected. **The frame's own process table is the stronger witness**, because it is not the server's word: chromium pid 1246 had been up continuously since 09:09:28Z and was still 5,306 s old at 10:37:54Z, so the 88 quiet minutes are attested by a process a reboot would have killed.",
       "answer": "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` now answers `Volume: 1.00`, PCM,0 reads `60 [100%] [0.00dB] [on]` and holds across a boot for the first time in this project's history, and PCM,1 reads the same.",
       "rulesOut": "Renaming the sink, addressing it by id or node.name, a config fragment, and api.alsa.soft-mixer - none of them is needed. It also rules out reading a repair failure on a fast-cycling frame as a fact about the repair: three of the four resources that looked broken here were only ever being asked too early.",
       "consistentWith": "The finding above, and it closes the loop on it. Before the repair succeeded, ~/.local/state/wireplumber/ held only `stream-properties` - no stored route volume, so a default was being applied. **After the first successful `wpctl set-volume`, `default-routes` appeared in that directory.** That is decision 80's stated reasoning confirmed on hardware: setting the volume *through* WirePlumber is what makes it persist a stored one, so the value now survives a boot by WirePlumber's own mechanism rather than by the agent winning a race against it.",
       "whenUtc": "2026-08-16",
       "where": "mule framelink@10.20.30.53",
-      "recordedIn": "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim in its `change` field while it was failing"
+      "recordedIn": "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim in its `change` field while it was failing. **The photograph itself is tools/harness/runs/20260816T091021Z-collect/screenshot.png**, a grim capture off the live Wayland surface at 09:10:21Z - 58 seconds after that last boot - and it is the first photograph this project has put on a panel under agent control. That is a measurement rather than a flourish: every earlier screenshot under runs/ is the console stage or the repair screen, and the largest of them (20260816T061834Z-collect, 194,701 bytes) is the composed-headline defect itself - 'Everything is working / This frame is adopted, up to date and showing your photos' printed directly above 'unit.chromium-kiosk.running-matches-content failed after 3 tries' and a Try again button, on a panel showing no photographs at all. runs/ is gitignored, so these paths are local-only evidence"
+    },
+    {
+      "id": "the-fleet-list-told-the-truth-about-a-frame-for-the-first-time",
+      "question": "`fe61154` computes the agent's self-report from the loop's own `loopState` and pushes it when it changes, instead of composing one `Progressing(...)` string at startup and never recomputing it. Every frame therefore told its operator it was *part-way through applying something*, always, and a frame that had given up read the same. Does the operator's own device list actually read as in sync once a frame converges - on hardware, not in a test host?",
+      "measured": "**Yes, and both directions of §2.6's honesty rule were exercised in the same 40 seconds.** Device T1RJ-6JCQ-9HN8-3920 against the dev Fleet Manager, four readings of `GET /api/devices`, each one paired with the census `GET /api/devices/{id}/reconcile` reported at the same instant:\n  * 10:35:01Z, agent `0.0.0+1ce597d.dirty` - `agentStatus: \"Progressing(linux-arm64, endpoints resolved by boot-file)\"`, `health: \"working\"`, while its own census (sequence 1297) read `loopState: converged, inSync 81, drifted 0, blocked 0`. **That is the defect, captured live on a frame that was completely converged.**\n  * 10:35:04Z, agent `0.0.0+fe61154.dirty`, one second after the new binary's handshake and before its first census - `agentStatus: \"linux-arm64, endpoints resolved by boot-file\"` with **no vocabulary head at all**, classifying as `health: \"unknown\"`. This is the arm that matters most and is the easiest to mistake for a regression: *I have not looked at myself yet* is a real answer, and `InSync` before the first observation would break §2.6 in the direction that hides trouble.\n  * 10:35:13Z - back to `Progressing(...)` / `working`, and now **true**: census 1298 read `loopState: backing-off, inSync 80, drifted 0, blocked 1, rebootsExpected 1`.\n  * 10:35:43Z - `agentStatus: \"InSync(linux-arm64, endpoints resolved by boot-file)\"`, `health: \"in-sync\"`, census 1299 `loopState: converged, inSync 81, drifted 0, blocked 0, rebootsExpected 0`.\nThe frame narrated both transitions in its own journal - `This frame now reports itself as Progressing(...)` and then `... as InSync(...)` - so the push fired from the loop rather than from a reconnect. **`last_seen_utc` stayed at 2026-08-16T10:35:03.0074154Z across both pushes**, which is fe61154's stated intent verified rather than assumed: the column is the last proven handshake and doubles as the offline clock, and a status update must not touch it.",
+      "answer": "The operator's device list is correct about a frame for the first time in this project. A converged frame reads *in sync*; a frame that has not observed itself yet reads *unknown* rather than claiming convergence; and `Progressing` now appears only while the loop is actually progressing.",
+      "rulesOut": "The hello alone as a sufficient carrier, confirmed on hardware rather than argued: the frame's session opened at 10:35:03Z and both later values arrived over it with no reconnect, so a per-handshake fix would have pinned this row to `unknown` - whatever the loop was doing in its first second - for the entire life of the session. It also rules out reading `health: \"unknown\"` on a freshly restarted frame as a fault; it is the designed answer and lasts about ten seconds.",
+      "consistentWith": "The three renderings before it - the animation, the headline (c3116bc) and the accent (958ac9c) - all of which derived a user-visible property from something other than what the frame had observed of itself. This is the fourth and the only one an operator sees before deciding whether to look at a frame at all.",
+      "whenUtc": "2026-08-16",
+      "where": "mule framelink@10.20.30.53, dev Fleet Manager at http://10.20.30.200:5199",
+      "recordedIn": "commit fe61154. The readings are tools/harness/runs/20260816T103511Z-repairing-window/fleet-timeline.jsonl (the deploy window, one sample every 3 s) and hold-timeline.jsonl beside it (the 20 minutes after, one every 10 s: censuses 1299-1303, five consecutive converged passes across 104 readings with zero deviations, and no reboot - the frame's uptime and chromium pid 1246 both still date from 09:09Z). The post-deploy panel is tools/harness/runs/20260816T103808Z-collect/screenshot.png. runs/ is gitignored, so these are local-only evidence"
+    },
+    {
+      "id": "an-agent-restart-does-not-reload-the-page-the-agent-serves",
+      "question": "`958ac9c` gives the browser stage an accent: the agent composes a colour name and `app/frame-stage.js` draws it as a dot beside the headline. After deploying it, the frame was caught mid-repair with the composed headline **'Putting this frame right'** on the panel - and no dot of any colour. Did the accent fail to compose?",
+      "measured": "**No. The agent's half shipped and the page's half did not run, because the page was never re-fetched.** Three readings, all read-only:\n  * The panel capture at 10:35:14Z is **entirely greyscale** - every one of its twelve most common colours is (n, n, n), and a scan for saturated warm pixels finds zero. So there was no accent rather than a wrong one.\n  * The agent *is* serving the new page: `curl http://127.0.0.1:8888/frame-stage.js` on the frame returns 12,298 bytes containing the `ACCENTS` map and `amber: '#f0a52a'` verbatim.\n  * **chromium pid 1246 started at 09:09:28Z and was still 5,306 s old at 10:37:54Z**, while `fl-agent` restarted at 10:35:10Z. The browser is 86 minutes older than the binary serving it, so the document it is running was fetched from the *previous* agent - one with no `ACCENTS` map and no `headline()` function. The journal says so too: `The page checked in after 0 s`, which is a websocket reconnect, not a load.\nThe headline updated because it is composed server-side and arrives as text over that reconnected socket; the dot needs client code the running document does not have.",
+      "answer": "`fl.py deploy` restarts `fl-agent` and `fl-agent` restarts Immich Kiosk (pid 8370 at 10:35:10Z), but **nothing reloads chromium**. Any change to `app/frame-stage.js` is therefore invisible on the panel until the browser itself is restarted or the frame reboots, however many times the agent is redeployed.",
+      "rulesOut": "A defect in `StagePalette`, in `BrowserStage.Compose` or in the accent's composition - none of them was reached, and none should be changed on this evidence. It also rules out reading 'no amber on the panel after deploying 958ac9c' as the fix failing: the amber arm has still never been *seen*, and the next repair window on this frame will still show no dot until chromium is reloaded. Anyone verifying a page-side change must restart the browser first, or they will measure the old document and blame the new agent.",
+      "consistentWith": "The pre-fix screenshot 20260816T061834Z-collect/screenshot.png, which shows the same page with no accent beside a headline - 958ac9c's own note that 'the page had no accent at all before this'. The captures either side of the deploy are the same document, which is exactly the point.",
+      "whenUtc": "2026-08-16",
+      "where": "mule framelink@10.20.30.53, panel on card0-DSI-2",
+      "recordedIn": "commit 958ac9c. The capture the greyscale scan was run over is tools/harness/runs/20260816T103511Z-repairing-window/panel-103514-putting-this-frame-right.png, with the stage appearing 3 s earlier and photographs returning 30 s later in the same directory; samples.txt there is the whole 2-second series with the frame's journal beside each shot. runs/ is gitignored, so these are local-only evidence"
     }
   ],
   "orientation": {
@@ -346,45 +368,41 @@
   "artifacts": {
     "agentBinary": {
       "path": "build/out/fl-agent",
-      "version": "0.0.0+1ce597d.dirty",
+      "version": "0.0.0+fe61154.dirty",
       "runtimeIdentifier": "linux-arm64",
-      "sha256": "922a0d5c2d0d1b325c984cbe9d7255ed08a73248deb066cedcb5102fc97f5997",
-      "sizeBytes": 10530448,
+      "sha256": "8553f97cfd80811627e21837880de266a0064cfff3a2918c84014327f7a3e4b1",
+      "sizeBytes": 10530872,
       "image": "framelink-build:arm64",
-      "builtUtc": "2026-08-16T08:53:30Z"
+      "builtUtc": "2026-08-16T10:35:00Z"
     },
     "deployed": {
       "host": "10.20.30.53",
       "binary": "/usr/local/bin/fl-agent",
-      "version": "0.0.0+1ce597d.dirty",
-      "sha256": "2980f3e78fe007550ea4a179909b3fbd7ddf70a3dbe8cb53f8dbac854caff786",
+      "version": "0.0.0+fe61154.dirty",
+      "sha256": "8553f97cfd80811627e21837880de266a0064cfff3a2918c84014327f7a3e4b1",
       "isActive": "active",
       "isEnabled": "enabled",
       "sudoMode": "sudo -S (password on stdin)",
-      "deployedUtc": "2026-08-16T08:47:11Z"
+      "deployedUtc": "2026-08-16T10:35:03Z"
     },
     "lastCollection": {
-      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T091021Z-collect",
-      "capturedUtc": "2026-08-16T09:10:22Z",
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T105238Z-collect",
+      "capturedUtc": "2026-08-16T10:52:38Z",
       "screenshot": {
         "method": "grim",
-        "bytes": 711999,
+        "bytes": 743687,
         "waylandDisplay": "wayland-0",
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T091021Z-collect\\screenshot.png"
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T105238Z-collect\\screenshot.png"
       },
-      "journal": {
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T091021Z-collect\\journal-fl-agent.service.txt",
-        "unit": "fl-agent.service",
-        "lines": 202
-      }
+      "journal": null
     },
     "lastParityRun": null
   },
   "counters": {
-    "builds": 15,
-    "deploys": 10,
+    "builds": 16,
+    "deploys": 11,
     "testRuns": 13,
-    "collections": 12,
+    "collections": 14,
     "relayOperations": 2
   },
   "log": [
@@ -796,6 +814,30 @@
       "command": "collect",
       "ok": true,
       "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T091021Z-collect"
+    },
+    {
+      "utc": "2026-08-16T10:35:00Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+fe61154.dirty 10530872B 8553f97cfd80"
+    },
+    {
+      "utc": "2026-08-16T10:35:03Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+fe61154.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-16T10:38:09Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T103808Z-collect"
+    },
+    {
+      "utc": "2026-08-16T10:52:39Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T105238Z-collect"
     }
   ]
 }

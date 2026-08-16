@@ -583,7 +583,16 @@ _HARDWARE_FINDINGS.append(
             "- and held it: eight consecutive converged censuses, telemetry sequence 1281 through "
             "1288, one every five minutes across 35 minutes, online throughout, with **no reboot "
             "between any of them**. That last part is the claim worth having, because everything "
-            "this frame did wrong tonight it did by rebooting."
+            "this frame did wrong tonight it did by rebooting. Re-measured 90 minutes later, "
+            "immediately before the deploy of 958ac9c and fe61154, from two records that do not "
+            "share a source: the Fleet Manager's device-event history holds **no event of any kind "
+            "after the `boot` at 2026-08-16T09:09:23Z** - no boot, no drift, and the 50 it does "
+            "return are the 25 boot/25 drift pairs of the storm that preceded it - and census "
+            "sequence 1296 at 10:25:05Z still read converged, 81 in sync, 0 drifted, 0 blocked, 0 "
+            "reboots expected. **The frame's own process table is the stronger witness**, because "
+            "it is not the server's word: chromium pid 1246 had been up continuously since "
+            "09:09:28Z and was still 5,306 s old at 10:37:54Z, so the 88 quiet minutes are attested "
+            "by a process a reboot would have killed."
         ),
         "answer": (
             "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` "
@@ -610,7 +619,150 @@ _HARDWARE_FINDINGS.append(
         "recordedIn": (
             "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's "
             "ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim "
-            "in its `change` field while it was failing"
+            "in its `change` field while it was failing. **The photograph itself is "
+            "tools/harness/runs/20260816T091021Z-collect/screenshot.png**, a grim capture off the "
+            "live Wayland surface at 09:10:21Z - 58 seconds after that last boot - and it is the "
+            "first photograph this project has put on a panel under agent control. That is a "
+            "measurement rather than a flourish: every earlier screenshot under runs/ is the "
+            "console stage or the repair screen, and the largest of them "
+            "(20260816T061834Z-collect, 194,701 bytes) is the composed-headline defect itself - "
+            "'Everything is working / This frame is adopted, up to date and showing your photos' "
+            "printed directly above 'unit.chromium-kiosk.running-matches-content failed after 3 "
+            "tries' and a Try again button, on a panel showing no photographs at all. runs/ is "
+            "gitignored, so these paths are local-only evidence"
+        ),
+    }
+)
+
+_HARDWARE_FINDINGS.append(
+    {
+        "id": "the-fleet-list-told-the-truth-about-a-frame-for-the-first-time",
+        "question": (
+            "`fe61154` computes the agent's self-report from the loop's own `loopState` and pushes "
+            "it when it changes, instead of composing one `Progressing(...)` string at startup and "
+            "never recomputing it. Every frame therefore told its operator it was *part-way through "
+            "applying something*, always, and a frame that had given up read the same. Does the "
+            "operator's own device list actually read as in sync once a frame converges - on "
+            "hardware, not in a test host?"
+        ),
+        "measured": (
+            "**Yes, and both directions of §2.6's honesty rule were exercised in the same 40 "
+            "seconds.** Device T1RJ-6JCQ-9HN8-3920 against the dev Fleet Manager, four readings of "
+            "`GET /api/devices`, each one paired with the census `GET /api/devices/{id}/reconcile` "
+            "reported at the same instant:\n"
+            "  * 10:35:01Z, agent `0.0.0+1ce597d.dirty` - `agentStatus: \"Progressing(linux-arm64, "
+            "endpoints resolved by boot-file)\"`, `health: \"working\"`, while its own census "
+            "(sequence 1297) read `loopState: converged, inSync 81, drifted 0, blocked 0`. **That "
+            "is the defect, captured live on a frame that was completely converged.**\n"
+            "  * 10:35:04Z, agent `0.0.0+fe61154.dirty`, one second after the new binary's "
+            "handshake and before its first census - `agentStatus: \"linux-arm64, endpoints "
+            "resolved by boot-file\"` with **no vocabulary head at all**, classifying as `health: "
+            "\"unknown\"`. This is the arm that matters most and is the easiest to mistake for a "
+            "regression: *I have not looked at myself yet* is a real answer, and `InSync` before "
+            "the first observation would break §2.6 in the direction that hides trouble.\n"
+            "  * 10:35:13Z - back to `Progressing(...)` / `working`, and now **true**: census 1298 "
+            "read `loopState: backing-off, inSync 80, drifted 0, blocked 1, rebootsExpected 1`.\n"
+            "  * 10:35:43Z - `agentStatus: \"InSync(linux-arm64, endpoints resolved by boot-file)\"`, "
+            "`health: \"in-sync\"`, census 1299 `loopState: converged, inSync 81, drifted 0, blocked "
+            "0, rebootsExpected 0`.\n"
+            "The frame narrated both transitions in its own journal - `This frame now reports itself "
+            "as Progressing(...)` and then `... as InSync(...)` - so the push fired from the loop "
+            "rather than from a reconnect. **`last_seen_utc` stayed at 2026-08-16T10:35:03.0074154Z "
+            "across both pushes**, which is fe61154's stated intent verified rather than assumed: "
+            "the column is the last proven handshake and doubles as the offline clock, and a status "
+            "update must not touch it."
+        ),
+        "answer": (
+            "The operator's device list is correct about a frame for the first time in this "
+            "project. A converged frame reads *in sync*; a frame that has not observed itself yet "
+            "reads *unknown* rather than claiming convergence; and `Progressing` now appears only "
+            "while the loop is actually progressing."
+        ),
+        "rulesOut": (
+            "The hello alone as a sufficient carrier, confirmed on hardware rather than argued: "
+            "the frame's session opened at 10:35:03Z and both later values arrived over it with no "
+            "reconnect, so a per-handshake fix would have pinned this row to `unknown` - whatever "
+            "the loop was doing in its first second - for the entire life of the session. It also "
+            "rules out reading `health: \"unknown\"` on a freshly restarted frame as a fault; it is "
+            "the designed answer and lasts about ten seconds."
+        ),
+        "consistentWith": (
+            "The three renderings before it - the animation, the headline (c3116bc) and the accent "
+            "(958ac9c) - all of which derived a user-visible property from something other than "
+            "what the frame had observed of itself. This is the fourth and the only one an "
+            "operator sees before deciding whether to look at a frame at all."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}, dev Fleet Manager at {CONTROL_URL}",
+        "recordedIn": (
+            "commit fe61154. The readings are "
+            "tools/harness/runs/20260816T103511Z-repairing-window/fleet-timeline.jsonl (the deploy "
+            "window, one sample every 3 s) and hold-timeline.jsonl beside it (the 20 minutes "
+            "after, one every 10 s: censuses 1299-1303, five consecutive converged passes across "
+            "104 readings with zero deviations, and no reboot - the frame's uptime and chromium "
+            "pid 1246 both still date from 09:09Z). The post-deploy panel is "
+            "tools/harness/runs/20260816T103808Z-collect/screenshot.png. runs/ is gitignored, so "
+            "these are local-only evidence"
+        ),
+    }
+)
+
+_HARDWARE_FINDINGS.append(
+    {
+        "id": "an-agent-restart-does-not-reload-the-page-the-agent-serves",
+        "question": (
+            "`958ac9c` gives the browser stage an accent: the agent composes a colour name and "
+            "`app/frame-stage.js` draws it as a dot beside the headline. After deploying it, the "
+            "frame was caught mid-repair with the composed headline **'Putting this frame right'** "
+            "on the panel - and no dot of any colour. Did the accent fail to compose?"
+        ),
+        "measured": (
+            "**No. The agent's half shipped and the page's half did not run, because the page was "
+            "never re-fetched.** Three readings, all read-only:\n"
+            "  * The panel capture at 10:35:14Z is **entirely greyscale** - every one of its twelve "
+            "most common colours is (n, n, n), and a scan for saturated warm pixels finds zero. So "
+            "there was no accent rather than a wrong one.\n"
+            "  * The agent *is* serving the new page: `curl http://127.0.0.1:8888/frame-stage.js` "
+            "on the frame returns 12,298 bytes containing the `ACCENTS` map and `amber: '#f0a52a'` "
+            "verbatim.\n"
+            "  * **chromium pid 1246 started at 09:09:28Z and was still 5,306 s old at 10:37:54Z**, "
+            "while `fl-agent` restarted at 10:35:10Z. The browser is 86 minutes older than the "
+            "binary serving it, so the document it is running was fetched from the *previous* "
+            "agent - one with no `ACCENTS` map and no `headline()` function. The journal says so "
+            "too: `The page checked in after 0 s`, which is a websocket reconnect, not a load.\n"
+            "The headline updated because it is composed server-side and arrives as text over that "
+            "reconnected socket; the dot needs client code the running document does not have."
+        ),
+        "answer": (
+            "`fl.py deploy` restarts `fl-agent` and `fl-agent` restarts Immich Kiosk (pid 8370 at "
+            "10:35:10Z), but **nothing reloads chromium**. Any change to `app/frame-stage.js` is "
+            "therefore invisible on the panel until the browser itself is restarted or the frame "
+            "reboots, however many times the agent is redeployed."
+        ),
+        "rulesOut": (
+            "A defect in `StagePalette`, in `BrowserStage.Compose` or in the accent's composition - "
+            "none of them was reached, and none should be changed on this evidence. It also rules "
+            "out reading 'no amber on the panel after deploying 958ac9c' as the fix failing: the "
+            "amber arm has still never been *seen*, and the next repair window on this frame will "
+            "still show no dot until chromium is reloaded. Anyone verifying a page-side change must "
+            "restart the browser first, or they will measure the old document and blame the new "
+            "agent."
+        ),
+        "consistentWith": (
+            "The pre-fix screenshot 20260816T061834Z-collect/screenshot.png, which shows the same "
+            "page with no accent beside a headline - 958ac9c's own note that 'the page had no "
+            "accent at all before this'. The captures either side of the deploy are the same "
+            "document, which is exactly the point."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}, panel on card0-DSI-2",
+        "recordedIn": (
+            "commit 958ac9c. The capture the greyscale scan was run over is "
+            "tools/harness/runs/20260816T103511Z-repairing-window/"
+            "panel-103514-putting-this-frame-right.png, with the stage appearing 3 s earlier and "
+            "photographs returning 30 s later in the same directory; samples.txt there is the "
+            "whole 2-second series with the frame's journal beside each shot. runs/ is gitignored, "
+            "so these are local-only evidence"
         ),
     }
 )
