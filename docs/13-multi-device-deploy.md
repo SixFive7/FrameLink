@@ -17,7 +17,7 @@ Treat the finished first unit as the master copy: clone its SD card into every n
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-Everything the first unit knows — the display and audio configuration, the kiosk, the camera path, the slideshow, the app, the button daemon, the reliability hardening — was built up in sequence by guides 02 through 12. The golden image captured in the next step freezes all of that work into one file, which is why the master must be in a known-good state first: any fault cloned now becomes a fault in every household later. The table below is the full per-unit build sequence the golden image compresses.
+Everything the first unit knows — the display and audio configuration, the kiosk, the camera path, the slideshow, the app, the button daemon, the reliability hardening — was built up in sequence by guides 02 through 12. The golden image captured in the next step freezes all of that work into one file, which is why the master must be in a known-good state first: any fault cloned now becomes a fault in every household later. The table below is the full per-unit build sequence the golden image compresses, with one row listed alongside it rather than inside it: guide 08 is a measurement of a finished frame under a real call between the household's own units, it needs the FrameLink Agent running and the frame adopted in a Fleet Manager, and it is neither cloned nor repeated per unit — so nothing in the sequence waits on it and its dependency is not a guide.
 
 | Guide                                                              | What                                            | Estimated effort | Depends on                 |
 | ---                                                                | ---                                             | ---              | ---                        |
@@ -26,15 +26,15 @@ Everything the first unit knows — the display and audio configuration, the kio
 | [04 Audio configuration](4-audio-configuration.md)                 | XVF3800 pinning, amp enable, mixer persistence  | 0.5-1 day        | 03                         |
 | [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
 | [06 Camera](6-camera.md)                                           | Dedicated PipeWire camera node (H.264 1080p30 FoV) | 0.5 day       | 05                         |
-| [07 LiveKit server](7-livekit-server.md)                           | LiveKit in Docker + token minting               | 1 day            | 06                         |
-| [08 WebRTC call-load validation](8-webrtc-validation.md)           | Soak a real call to prove 2 GB holds (go/no-go) | 2-3 days         | 06                         |
-| [09 Immich Kiosk](9-immich-kiosk.md)                               | Docker slideshow (offline-capable cache)        | 0.5 day          | 08                         |
+| [07 LiveKit server](7-livekit-server.md)                           | LiveKit in Docker + token minting (superseded)  | 1 day            | 06                         |
+| [08 WebRTC call-load validation](8-webrtc-validation.md)           | Soak a real call to prove 2 GB holds (go/no-go) | 2-3 days         | An adopted frame, not a guide |
+| [09 Immich Kiosk](9-immich-kiosk.md)                               | Docker slideshow (offline-capable cache)        | 0.5 day          | 07                         |
 | [10 SPA](10-spa.md)                                                | Build the kiosk shell + LiveKit client          | 3-5 days         | 09                         |
 | [11 GPIO button daemon](11-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 10                         |
 | [12 systemd & reliability](12-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 11                         |
 | [13 Multi-device deploy](13-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 12                         |
 
-Total estimated: ~10-15 days of focused work, assuming the call-load validation gate (guide 08) passes. That estimate is what the golden image saves on every unit after the first — a clone goes from blank SD card to verified frame in well under a day.
+Total estimated: ~10-15 days of focused work. Guide 08 is the call-load gate and the only go/no-go in the set — a 2 GB Pi 5 that cannot hold a call is a hardware decision, not a software one — but it is answered on frames that already exist rather than ahead of building them, so the estimate above does not wait on it. That estimate is what the golden image saves on every unit after the first — a clone goes from blank SD card to verified frame in well under a day.
 
 The two commands are the master's health check, run on the first unit. The first asks systemd for the live state of the four FrameLink user services — the app server and kiosk browser from [guide 10](10-spa.md), the button daemon from [guide 11](11-gpio-button.md), and the camera node from [guide 6](6-camera.md). The second lists the running Docker containers, which must include the `immich-kiosk` slideshow from [guide 9](9-immich-kiosk.md).
 
