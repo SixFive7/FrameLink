@@ -71,7 +71,6 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 ```
 [Docker host]
   +-- LiveKit server (SFU + built-in TURN)
-  +-- Token service (JWT generation for device auth)
   +-- nginx reverse proxy (SSL + Authelia)
 ```
 
@@ -134,7 +133,9 @@ The build is split into one hardware guide and twelve software guides, each step
 
 ## Key Risk
 
-**2GB RAM + 5 software-decoded WebRTC streams is unvalidated.** Pi 5 has no hardware H.264 decode. Estimated 770-1130 MB during a 6-way call, but Chromium leaks memory over hours and nobody has publicly run this workload. ZRAM, two-layer simulcast publishing (180p + 720p @ 56 fps, matching the IMX708's native sensor mode end-to-end), and LiveKit adaptive-layer selection (small tiles subscribe to the 180p layer) are the planned mitigations. Hardware validation on a real Pi 5 prototype is the **first step before any production code** — see the [validation plan](research/ram-feasibility.md#hardware-validation-plan).
+**2GB RAM + 5 software-decoded WebRTC streams — measured on hardware, and it holds.** Pi 5 has no hardware H.264 decode, so Chromium software-decodes every incoming stream and a call is by a wide margin the heaviest thing a frame ever does. That is no longer an estimate: on a real Pi 5, a full six-way call runs a *stable* Chromium process tree of about 1.3 GB, and the worst case — five decoded streams plus this unit's own 1080p publish — settles at 80.7 °C on a bare heatsink. Those measurements are what set the memory watchdog's thresholds in [guide 12](docs/12-systemd-and-reliability.md), and the mitigations are shipped rather than planned: ZRAM compressed swap, three-layer H.264 simulcast publishing (180p, 360p and 1080p at 30 fps), LiveKit adaptive-layer selection so the small grid tiles subscribe to a cheap layer, and the slideshow iframe unloaded for the duration of every call.
+
+**What is still open is duration and thermal margin, not feasibility.** The multi-hour soak defined in [guide 8](docs/8-webrtc-validation.md) has not been run, so nothing yet proves a call that is still healthy at bedtime; every expected output in that guide is an explicit placeholder until it is, and a household with two frames cannot produce a six-way call to measure. And 80.7 °C is only ~4 °C under the throttle point, which is what makes ventilation in the enclosure a performance requirement rather than a finishing touch. The original budget analysis, and the mitigations as they were first planned, are kept in the [2GB RAM feasibility notes](research/ram-feasibility.md) as the pre-decision record.
 
 ## License and name
 
