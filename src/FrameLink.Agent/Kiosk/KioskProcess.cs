@@ -5,14 +5,52 @@ using FrameLink.Agent.Supervise;
 
 namespace FrameLink.Agent.Kiosk;
 
+/// <summary>
+/// <b>Which albums the slideshow draws from</b> — the value <c>KIOSK_ALBUMS</c> carries.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>A list, held as one string, because upstream reads it as one string.</b> Immich Kiosk
+/// v0.42.0 declares <c>Albums []string</c> with <c>mapstructure:"albums"</c> and loads its
+/// environment through Viper's <c>stringToWeakSliceHookFunc(",")</c>, so the environment form of a
+/// multi-album selection is one comma-separated variable and there is no indexed
+/// <c>KIOSK_ALBUMS_0</c> form to reach for. Splitting here and re-joining would only invent a
+/// second spelling of the same value; the frame records exactly what the child is given.
+/// </para>
+/// <para>
+/// <b>Normalising is what makes the <c>/proc/&lt;pid&gt;/environ</c> cross-check work.</b> That
+/// comparison is <c>string.Equals</c> against the recorded value, so a setting typed with a space
+/// after the comma would read as a running child disagreeing with a frame that had recorded the
+/// same thing. Trimming each entry and dropping the empties gives one spelling per selection, and
+/// it also removes the trailing-comma case, which Viper would otherwise turn into an album id of
+/// the empty string.
+/// </para>
+/// </remarks>
+public static class AlbumSelection
+{
+    /// <summary>The separator upstream's Viper decode hook splits on.</summary>
+    public const char Separator = ',';
+
+    /// <summary>The entries of <paramref name="value"/>, trimmed, with the empties dropped.</summary>
+    public static IReadOnlyList<string> Split(string? value) =>
+        value is null
+            ? []
+            : [.. value.Split(Separator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    /// <summary>One spelling per selection: trimmed entries, single commas, no empties.</summary>
+    public static string Normalise(string? value) => string.Join(Separator, Split(value));
+}
+
 /// <summary>The environment the Immich Kiosk child runs with.</summary>
 /// <remarks>
 /// <para>
-/// Every field is one of guide 9's Compose settings, carried across unchanged in meaning. The
-/// variable names are not guessed: <c>KIOSK_IMMICH_URL</c>, <c>KIOSK_IMMICH_API_KEY</c>,
-/// <c>KIOSK_OFFLINE_MODE_ENABLED</c>, <c>KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS</c> and
-/// <c>KIOSK_PORT</c> all appear verbatim in the v0.42.0 executable's string table, which is where
-/// they were read from.
+/// Every field is one of guide 9's Compose settings, carried across unchanged in meaning, plus
+/// the one guide 9 never had. The variable names are not guessed: <c>KIOSK_IMMICH_URL</c>,
+/// <c>KIOSK_IMMICH_API_KEY</c>, <c>KIOSK_OFFLINE_MODE_ENABLED</c>,
+/// <c>KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS</c> and <c>KIOSK_PORT</c> all appear verbatim in the
+/// v0.42.0 executable's string table, which is where they were read from, and
+/// <c>KIOSK_ALBUMS</c> is read from upstream's own configuration struct — see
+/// <see cref="Albums"/> for why the plural matters.
 /// </para>
 /// <para>
 /// <b>The offline cache is a working-directory fact, not a setting.</b> The v0.42.0 binary holds
@@ -45,6 +83,38 @@ public sealed record KioskProcessSettings
     /// <summary>How many assets that cache holds.</summary>
     public int OfflineAssetCount { get; init; } = 200;
 
+    /// <summary>
+    /// Which albums the slideshow draws from, comma-separated, or empty for upstream's own default.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The plural is load-bearing and the singular is a silent no-op.</b> Upstream renamed
+    /// <c>KIOSK_ALBUM</c> to <c>KIOSK_ALBUMS</c> in v0.22.0 — one of a family of renames that took
+    /// <c>KIOSK_PERSON</c> to <c>KIOSK_PEOPLE</c> and <c>KIOSK_TAG</c> to <c>KIOSK_TAGS</c> — and
+    /// left <b>no compatibility alias</b> behind. The pinned v0.42.0 build therefore ignores the
+    /// singular spelling without a word, which is the worst possible failure for a value whose
+    /// whole job is to stop the slideshow selecting from nothing. The struct tag is the ground
+    /// truth: <c>Albums []string `mapstructure:"albums" query:"album"`</c> — and note that the
+    /// <i>query</i> parameter is still singular, so the two consumers of this one setting
+    /// legitimately spell it differently (see <c>AppConfigCatalog.SlideshowUrl</c>).
+    /// </para>
+    /// <para>
+    /// <b>Empty means unscoped, and unscoped is a real configuration rather than a mistake.</b>
+    /// With no album set, upstream's <c>gatherAssetBuckets</c> produces no buckets and selection
+    /// falls through to <c>RandomAsset</c>, which issues an owner-scoped
+    /// <c>POST /api/search/random</c>. On a frame whose Immich account owns its own photos that is
+    /// exactly right. On a frame whose account owns <i>nothing</i> and sees photos only through
+    /// somebody else's shared album it returns nothing at all — measured against Immich v3.1.0 on
+    /// 2026-08-16: <c>/api/assets/statistics</c> <c>{"images":0,"videos":0,"total":0}</c> and an
+    /// unscoped random search returning zero assets, while the same key reached a 166-asset shared
+    /// album and an album-scoped metadata search returned five of five. The agent cannot tell those
+    /// two frames apart, so it does not guess: this value has no catalog default and an empty one
+    /// is in sync. What it must not do is stay <i>unsaid</i>, which is why
+    /// <see cref="Describe"/> names the variable on every launch whether or not it is set.
+    /// </para>
+    /// </remarks>
+    public string Albums { get; init; } = string.Empty;
+
     /// <summary>The port Kiosk serves on.</summary>
     public int Port { get; init; } = KioskProcess.DefaultPort;
 
@@ -57,24 +127,57 @@ public sealed record KioskProcessSettings
     /// </remarks>
     public bool IsComplete => ImmichUrl.Length > 0 && ImmichApiKey.Length > 0;
 
-    /// <summary>The environment block, in the order a person would read it.</summary>
+    /// <summary>The variable carrying <see cref="Albums"/>.</summary>
+    public const string AlbumsVariable = "KIOSK_ALBUMS";
+
+    /// <summary>
+    /// The environment block, in the order a person would read it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AlbumsVariable"/> is <b>omitted</b> rather than set empty when no album is
+    /// issued, because the two are not the same thing to upstream: an absent variable leaves
+    /// Viper's <c>[]</c> default in place, while an empty one goes through the comma decode hook
+    /// and can yield a one-element slice holding the empty string — a request scoped to an album
+    /// that does not exist. Every other variable here has a value that is meaningful when empty,
+    /// so this is the only one that has to be conditional.
+    /// </remarks>
     public IReadOnlyList<KeyValuePair<string, string>> Environment =>
     [
         new("KIOSK_IMMICH_URL", ImmichUrl),
         new("KIOSK_IMMICH_API_KEY", ImmichApiKey),
+        .. Albums.Length > 0
+            ? (KeyValuePair<string, string>[])[new(AlbumsVariable, Albums)]
+            : [],
         new("KIOSK_OFFLINE_MODE_ENABLED", OfflineModeEnabled ? "true" : "false"),
         new("KIOSK_OFFLINE_MODE_NUMBER_OF_ASSETS", OfflineAssetCount.ToString(CultureInfo.InvariantCulture)),
         new("KIOSK_PORT", Port.ToString(CultureInfo.InvariantCulture)),
     ];
 
-    /// <summary>The block as it may be written down — the key described, never quoted.</summary>
-    public string Describe() => string.Join(
-        ' ',
-        Environment.Select(pair => pair.Key switch
-        {
-            "KIOSK_IMMICH_API_KEY" => $"{pair.Key}=<{(pair.Value.Length > 0 ? "set" : "unset")}>",
-            _ => $"{pair.Key}={pair.Value}",
-        }));
+    /// <summary>
+    /// The block as it may be written down — the key described, never quoted, and the album
+    /// selection named whether or not there is one.
+    /// </summary>
+    /// <remarks>
+    /// This line is what the journal carries at every launch, and it is the answer to "which
+    /// photos is this frame trying to show". An unset album selection is the one condition that
+    /// used to leave no trace at all except an error loop, so it is said out loud here in the same
+    /// register the unset API key is: a phrase describing the standing of the value, in the place
+    /// the value would have gone.
+    /// </remarks>
+    public string Describe()
+    {
+        var block = string.Join(
+            ' ',
+            Environment.Select(pair => pair.Key switch
+            {
+                "KIOSK_IMMICH_API_KEY" => $"{pair.Key}=<{(pair.Value.Length > 0 ? "set" : "unset")}>",
+                _ => $"{pair.Key}={pair.Value}",
+            }));
+
+        return Albums.Length > 0
+            ? block
+            : $"{block} {AlbumsVariable}=<unset, so the slideshow selects from whatever this key owns>";
+    }
 }
 
 /// <summary>
@@ -149,6 +252,7 @@ public sealed class KioskProcess : IAsyncDisposable
     private static readonly TimeSpan StopGrace = TimeSpan.FromSeconds(5);
 
     private readonly KioskProcessServices _services;
+    private readonly ChildOutputBudget _output;
     private readonly Lock _gate = new();
 
     private Process? _child;
@@ -160,6 +264,15 @@ public sealed class KioskProcess : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(services);
         _services = services;
+
+        // One budget for the supervisor, not one per child: a child that floods, dies and is
+        // relaunched must not get a fresh allowance for doing so.
+        _output = new ChildOutputBudget(
+            services.Log,
+            services.Clock,
+            "Immich Kiosk",
+            services.OutputLinesPerWindow,
+            services.OutputWindow);
     }
 
     /// <summary>The resources a relaunch transiently disturbs (§2.10 clause 2).</summary>
@@ -256,17 +369,27 @@ public sealed class KioskProcess : IAsyncDisposable
                 return false;
             }
 
-            // Nothing is redirected, deliberately and twice over. Redirecting without draining is
-            // the pipe-buffer deadlock HostProcessRunner documents: Kiosk logs on every asset it
-            // fetches, 64 kB of unread stdout later it blocks on write(2) for ever, and the frame
-            // shows a slideshow that has silently stopped advancing. Draining would fix that and
-            // buy nothing, because inheriting is *better*: the agent's own stdout is the journal,
-            // so Kiosk's log lines land beside the agent's under one `journalctl -u fl-agent`,
-            // which is what replaces `docker logs immich-kiosk` from guide 9 step 4.
+            // Redirected and continuously drained, which is what makes the budget possible.
+            //
+            // This used to inherit the agent's own stdout, because under systemd that *is* the
+            // journal — so Kiosk's lines landed beside the agent's under one
+            // `journalctl -u fl-agent`, which is what replaces `docker logs immich-kiosk` from
+            // guide 9 step 4. That property is kept: every line still reaches the same journal,
+            // through ChildOutputBudget, prefixed with whose it is. What inheriting also gave the
+            // child was an unbounded pen on the frame's only forensic record, and on 2026-08-16 it
+            // used it — seven lines a second until every archived journal file had rotated away.
+            //
+            // The reason inheriting was chosen originally still stands and is answered rather than
+            // ignored: redirecting *without* draining is the pipe-buffer deadlock HostProcessRunner
+            // documents — 64 kB of unread output later the child blocks on write(2) for ever and
+            // the slideshow silently stops advancing. Both pipes are therefore read to the end on
+            // every line, whether the line is written out or dropped, so the child never blocks.
             var start = new ProcessStartInfo(BinaryPath)
             {
                 WorkingDirectory = settings.WorkingDirectory,
                 UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
 
             foreach (var pair in settings.Environment)
@@ -282,6 +405,11 @@ public sealed class KioskProcess : IAsyncDisposable
                     LastFailure = $"{BinaryPath} did not start";
                     return false;
                 }
+
+                child.OutputDataReceived += OnChildLine;
+                child.ErrorDataReceived += OnChildLine;
+                child.BeginOutputReadLine();
+                child.BeginErrorReadLine();
 
                 _child = child;
                 _launches++;
@@ -348,8 +476,20 @@ public sealed class KioskProcess : IAsyncDisposable
         finally
         {
             child.Dispose();
+
+            // A child that flooded and then died would otherwise take the size of its flood with
+            // it, waiting for a line that never comes.
+            _output.Flush();
         }
     }
+
+    /// <summary>One line of the child's output, on its way to the budget.</summary>
+    /// <remarks>
+    /// Both streams are handled identically. Kiosk writes its errors to one and its progress to
+    /// the other, and both are the child's voice — splitting the budget between them would let a
+    /// flood on either half push the other out of the record anyway.
+    /// </remarks>
+    private void OnChildLine(object sender, DataReceivedEventArgs line) => _output.Write(line.Data);
 
     /// <summary>Stops and starts, as the resource's Act and as the relaunch.</summary>
     public async Task<bool> RestartAsync(CancellationToken cancellationToken)
@@ -434,6 +574,7 @@ public sealed class KioskProcess : IAsyncDisposable
         {
             var code = ExitCodeOf(exited);
             exited.Dispose();
+            _output.Flush();
 
             _services.Log.Warn(string.Create(
                 CultureInfo.InvariantCulture,
@@ -544,4 +685,17 @@ public sealed record KioskProcessServices
 
     /// <summary>How often the relaunch loop looks.</summary>
     public TimeSpan Interval { get; init; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>How many lines the child may write to the journal per output window.</summary>
+    /// <remarks>
+    /// Fixed in code rather than made a fleet setting, on the same test §2.10 uses for the
+    /// supervision thresholds read backwards: those are values an operator may legitimately want
+    /// to retune on one struggling frame, and this is a safety property of the frame's own record.
+    /// A fleet setting that can be raised is a bound that can be removed from a screen, by the same
+    /// person who is about to need the history it protects.
+    /// </remarks>
+    public int OutputLinesPerWindow { get; init; } = ChildOutputBudget.DefaultLinesPerWindow;
+
+    /// <summary>The window <see cref="OutputLinesPerWindow"/> is counted over.</summary>
+    public TimeSpan OutputWindow { get; init; } = ChildOutputBudget.DefaultWindow;
 }
