@@ -264,7 +264,7 @@ def _parser() -> argparse.ArgumentParser:
             "declared with their reason, and so are the catalog resources whose state the v1 "
             "capture never recorded - those cannot be verified by a state diff at all, and are "
             "what the other two bars exist for.\n\n"
-            "Two probes need root and are skipped unless --elevate is given; a run without them "
+            "One probe needs root and is skipped unless --elevate is given; a run without it "
             "reports 'incomplete' and names them rather than calling a frame at parity on "
             "evidence it never looked at. Nothing here writes to the frame. Requires FL_PW unless "
             "--coverage or --from is used.\n\n"
@@ -275,7 +275,7 @@ def _parser() -> argparse.ArgumentParser:
     p_parity.add_argument(
         "--elevate",
         action="store_true",
-        help="also run the two probes that need root (array firmware, agent state)",
+        help="also run the probe that needs root (the array's firmware version over USB)",
     )
     p_parity.add_argument(
         "--collect-only",

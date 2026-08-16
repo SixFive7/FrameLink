@@ -74,6 +74,20 @@ public sealed class ParityHarnessTests
     }
 
     [Fact]
+    public void Exactly_one_probe_needs_root_and_it_is_the_one_the_catalog_says_needs_it()
+    {
+        // Pinned because the count is stated in prose in four places — the subcommand's help, the
+        // collector's docstring, the facet table's own remarks and decision 59 — and prose that
+        // counts something is prose that goes quietly wrong the moment the something changes.
+        var elevated = ParityFacets.All.Where(facet => facet.Elevated).Select(facet => facet.Id).ToList();
+
+        Assert.Equal(["audio.xvf3800.firmware"], elevated);
+        Assert.All(
+            ParityFacets.All.Where(facet => facet.Elevated),
+            facet => Assert.False(string.IsNullOrWhiteSpace(facet.Limitation)));
+    }
+
+    [Fact]
     public void Every_ignored_key_carries_the_reason_it_is_ignored()
     {
         // A volatile field has to be dropped or every run reports it. Dropping it silently is the

@@ -13,12 +13,14 @@ namespace FrameLink.Parity;
 /// limit and a silent one.
 /// </para>
 /// <para>
-/// <b>Every probe is read-only and, with two named exceptions, unprivileged.</b> CLAUDE.md §1.8
+/// <b>Every probe is read-only and, with one named exception, unprivileged.</b> CLAUDE.md §1.8
 /// makes inspection the default and every class of mutation a separate ask; a parity check that
-/// wrote anything would be measuring a frame it had just changed. The two exceptions are marked
-/// <see cref="ParityFacet.Elevated"/> and are skipped unless the operator asks for them, because
-/// the array's firmware version is a privileged USB control transfer and the agent's state
-/// directory is root-owned.
+/// wrote anything would be measuring a frame it had just changed. Exactly one is marked
+/// <see cref="ParityFacet.Elevated"/> and is skipped unless the operator asks for it: the array
+/// reports its firmware version only to a privileged USB control transfer, which is why the
+/// catalog's own Observe for it is written with <c>sudo</c>. Everything else a frame can be
+/// asked about here is world-readable, including the app's configuration, which is read back off
+/// the local origin over loopback rather than out of the agent's root-owned state directory.
 /// </para>
 /// <para>
 /// <b>Each probe is written to emit the same shape as the block it will be compared against</b>,

@@ -33,12 +33,14 @@ list-unit-files``, ``amixer``, ``findmnt``, ``ip``. Nothing here writes to the f
 CLAUDE.md section 1.8 needs no authorisation for any of it - and a parity check that changed the
 thing it was measuring would be worthless anyway.
 
-Two probes genuinely cannot be unprivileged: the array's firmware version is a privileged USB
-control transfer (which is why the catalog's own Observe for it is written with ``sudo``), and
-the agent's state directory is root-owned. Those are marked ``elevated`` by the judge and are
-**skipped unless ``--elevate`` is given**, with the skip written into the artifact as the
-reason it is. A default run therefore reports ``incomplete`` and names them, rather than
-quietly calling a frame at parity on evidence it never looked at.
+One probe genuinely cannot be unprivileged: the array reports its firmware version only to a
+privileged USB control transfer, which is why the catalog's own Observe for it is written with
+``sudo``. It is marked ``elevated`` by the judge and is **skipped unless ``--elevate`` is
+given**, with the skip written into the artifact as the reason it is. A default run therefore
+reports ``incomplete`` and names it, rather than quietly calling a frame at parity on evidence
+it never looked at. Everything else is world-readable - including the app's configuration,
+which is read back off the local origin over loopback rather than out of the agent's root-owned
+state directory.
 """
 
 from __future__ import annotations

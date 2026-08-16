@@ -211,9 +211,10 @@ public sealed record ParityFacet
 
     /// <summary>Whether the probe needs root, and is therefore skipped unless asked for.</summary>
     /// <remarks>
-    /// The collector is unprivileged by default and says so. Two probes genuinely cannot be:
-    /// the array's firmware version is a privileged USB control transfer, and the agent's state
-    /// directory is <c>0700 root</c>. Both are opt-in rather than silently escalating.
+    /// The collector is unprivileged by default and says so. One probe genuinely cannot be: the
+    /// array reports its firmware version only to a privileged USB control transfer. It is opt-in
+    /// rather than silently escalating, and a run that skips it says so rather than calling a
+    /// frame at parity on evidence nobody looked at.
     /// </remarks>
     public bool Elevated { get; init; }
 
