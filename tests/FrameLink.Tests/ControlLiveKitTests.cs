@@ -233,13 +233,15 @@ public sealed class LiveKitConfigurationTests
     }
 
     [Fact]
-    public void The_lan_setting_is_written_and_no_advertised_address_is()
+    public void The_lan_setting_is_written_and_a_name_produces_no_advertised_address()
     {
-        // §3.7: "Set use_external_ip: false for LAN", and "advertised IP and TURN/TLS for frames
-        // in other households" are deferred within v2. The second half is asserted as an absence,
-        // because a half-implemented advertised address is worse than none — it produces ICE
-        // candidates pointing at an address nothing can reach, and a call that fails after
-        // appearing to connect.
+        // §3.7: "Set use_external_ip: false for LAN" — external-IP discovery asks the internet
+        // what this host's public address is, which is the wrong answer for peers on the same
+        // network and a third party in the path of a call that never leaves the house. The
+        // absence of node_ip here is the other half: this options set names a host rather than an
+        // address, and an address the call server would advertise cannot be invented from a name
+        // without resolving it. TURN/TLS stays deferred within v2 and is asserted as an absence,
+        // because half of it is worse than none.
         var rendered = LiveKitConfigFile.Render(
             Options("/tmp/livekit"),
             new LiveKitCredential("APIkey", "secret", DateTimeOffset.UnixEpoch));
@@ -247,6 +249,66 @@ public sealed class LiveKitConfigurationTests
         Assert.Contains("  use_external_ip: false\n", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("node_ip", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("turn", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_address_frames_dial_is_the_address_media_is_advertised_on()
+    {
+        // The fault this closes is a container publishing its ports one-to-one onto a LAN host:
+        // signalling arrives on the published address and works, while the ICE candidates carry
+        // the container's own bridge address and the call connects and carries nothing.
+        // `node_ip` is the key that says otherwise in livekit-server 1.13.5 — its own
+        // config-sample says "use_external_ip takes precedence, for this to take effect, set
+        // use_external_ip to false", and the pinned binary carries the yaml tag `node_ip,omitempty`
+        // — so both lines are asserted together, in that order of dependence.
+        var options = Options("/tmp/livekit") with { PublicUrl = "ws://10.20.30.200:7880" };
+
+        var rendered = LiveKitConfigFile.Render(
+            options,
+            new LiveKitCredential("APIkey", "secret", DateTimeOffset.UnixEpoch));
+
+        Assert.Contains("  use_external_ip: false\n  node_ip: 10.20.30.200\n", rendered, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("ws://127.0.0.1:7880")]
+    [InlineData("ws://0.0.0.0:7880")]
+    [InlineData("wss://framelink.huisman.io")]
+    [InlineData("")]
+    [InlineData("not a url")]
+    public void An_address_that_would_advertise_nothing_reachable_is_left_out(string publicUrl)
+    {
+        // A bad node_ip is not a bad line in a file — LiveKit refuses a configuration it cannot
+        // parse and the call server does not start, so the choice is between an address that can
+        // be advertised and no line at all. Loopback advertises a frame back to itself, the
+        // unspecified address advertises nothing, and a name is not an address this container may
+        // resolve on a status read. Each leaves the server on the addresses it is locally on,
+        // which is where it was before.
+        var options = Options("/tmp/livekit") with { PublicUrl = publicUrl };
+
+        var rendered = LiveKitConfigFile.Render(
+            options,
+            new LiveKitCredential("APIkey", "secret", DateTimeOffset.UnixEpoch));
+
+        Assert.DoesNotContain("node_ip", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void An_operators_own_livekit_is_never_told_which_address_to_advertise()
+    {
+        // The escape hatch of §3.7 points at a server on somebody else's host, which this Fleet
+        // Manager does not configure and whose media path it cannot see. Deriving an address for
+        // it from the URL frames dial would be a configuration written for a machine this process
+        // does not run.
+        var external = new LiveKitOptions
+        {
+            Directory = "/tmp/livekit",
+            Mode = LiveKitMode.External,
+            PublicUrl = "ws://10.20.30.200:7880",
+            ExternalUrl = "ws://192.0.2.10:7880",
+        };
+
+        Assert.Null(external.MediaAddress);
     }
 
     [Fact]

@@ -25,16 +25,36 @@ namespace FrameLink.Control.LiveKit;
 /// <c>ports</c> with precisely the ports it asks for: <c>7880 - HTTP service</c>,
 /// <c>7881 - ICE/TCP</c>, <c>50000-50059 - ICE/UDP range</c>. A typo here is therefore a dead
 /// call server rather than a silently ignored line, which is why it is a rendered constant
-/// rather than an operator-supplied template.
+/// rather than an operator-supplied template. <b>Re-checked with <c>node_ip</c> in it</b>, against
+/// the same pinned binary and both ways round: the document below answers <c>ports</c> with that
+/// same table, and the one-letter misspelling <c>node_ipp</c> is refused with
+/// <c>line 9: field node_ipp not found in type config.RTCConfig</c> — which is what makes the
+/// acceptance evidence rather than a formality.
 /// </para>
 /// <para>
 /// <b>The exposure §3.7 says splits in two, splits here.</b> <c>port</c> carries signalling and
 /// is the one that can ride Traefik as a WebSocket over TLS; <c>rtc.tcp_port</c> and the UDP
 /// range carry WebRTC media, which cannot, so they are published directly by the stack.
-/// <c>use_external_ip: false</c> is the LAN setting: the server advertises the address it is
-/// actually on instead of asking the internet what its public address is. Advertised IP and
-/// TURN/TLS for frames in other households are deferred within v2, and there is deliberately
-/// nothing here that half-implements them.
+/// TURN/TLS for frames in other households is deferred within v2, and there is deliberately
+/// nothing here that half-implements it.
+/// </para>
+/// <para>
+/// <b><c>use_external_ip: false</c> and <c>node_ip</c> are one decision, and the order between
+/// them is the version's own.</b> External-IP discovery asks a STUN server on the internet what
+/// this host's public address is, which on a home LAN is both the wrong answer — frames are on
+/// the same network and need the LAN address — and a dependency on a third party for a call that
+/// never leaves the house. So it stays off, and §3.7's LAN setting is unchanged. What it does
+/// <i>not</i> do is say where media should come from, and a container publishing its ports
+/// one-to-one onto a LAN host is on an address no frame can route to. <c>node_ip</c> is the key
+/// that says it, and in <c>livekit-server 1.13.5</c> the two interact in exactly one direction:
+/// the pinned <c>rtcconfig</c> re-determines the node address whenever external-IP discovery is
+/// on, so a configured <c>node_ip</c> only survives while <c>use_external_ip</c> is false — which
+/// is why turning the second on to "also" advertise an address would silently discard the first.
+/// With it off and the address set, the server rewrites its host ICE candidates to that address,
+/// and stops adding public STUN servers to the ICE configuration it would otherwise reach for.
+/// The value comes from <see cref="LiveKitOptions.MediaAddress"/>, which is the address frames
+/// are already told to dial; when the public URL names a host rather than an address the line is
+/// absent entirely and the server advertises what it is locally on, as before.
 /// </para>
 /// <para>
 /// <b>No telemetry section, which is how "no telemetry unless configured" is kept true.</b>
@@ -81,6 +101,12 @@ public static class LiveKitConfigFile
         text.Append(CultureInfo.InvariantCulture, $"  port_range_start: {options.UdpPortStart}\n");
         text.Append(CultureInfo.InvariantCulture, $"  port_range_end: {options.UdpPortEnd}\n");
         text.Append("  use_external_ip: false\n");
+
+        if (options.MediaAddress is { } media)
+        {
+            text.Append(CultureInfo.InvariantCulture, $"  node_ip: {media}\n");
+        }
+
         text.Append("keys:\n");
         text.Append(CultureInfo.InvariantCulture, $"  {credential.Key}: {credential.Secret}\n");
         text.Append("room:\n");

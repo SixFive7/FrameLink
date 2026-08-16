@@ -36,9 +36,11 @@
 # mistyped command all leave it exactly where it was.
 #
 # ── THE MEDIA PORTS ARE PUBLISHED ONE-TO-ONE, AND ON WINDOWS THAT NEEDS A RESERVATION ────────
-# LiveKit runs with use_external_ip: false and advertises its own container address, so a call
-# completes only because the source port a frame observes is a port this host will deliver back.
-# Remap 50000-50059 and calls connect for nobody with no error anywhere.
+# LiveKit runs with use_external_ip: false and is told this host's LAN address as node_ip, which
+# the Fleet Manager derives from FRAMELINK_LIVEKIT_PUBLIC_URL below — so its ICE candidates name
+# the address frames dial rather than the container's bridge address. What that does NOT fix is
+# the port: each candidate carries the port LiveKit bound inside the container, so a remapped
+# 50000-50059 names ports that arrive nowhere and calls connect for nobody with no error anywhere.
 #
 # On this Windows host the range sits inside the ephemeral port range (netsh reports UDP dynamic
 # ports starting at 49152, 16384 wide), so any process can be holding a port in it when the
@@ -103,7 +105,10 @@ services:
 
       # The address frames dial for calls. Not derivable by the container: it knows the addresses
       # it is bound to and nothing about how a frame on the LAN reaches this host. It must be the
-      # workstation's own LAN address, because media is published on the host directly.
+      # workstation's own LAN address, because media is published on the host directly — and it is
+      # read twice for that reason, once as the signalling URL a frame is issued and once as the
+      # address the call server advertises in its ICE candidates. One value, so the two halves of
+      # §3.7's split exposure cannot be pointed at different places by accident.
       FRAMELINK_LIVEKIT_PUBLIC_URL: ${FRAMELINK_LIVEKIT_PUBLIC_URL:-ws://${FRAMELINK_LAN_IP:-10.20.30.200}:7880}
 
       # Unset means §3.5's alerts are evaluated and written to this container's log and nowhere

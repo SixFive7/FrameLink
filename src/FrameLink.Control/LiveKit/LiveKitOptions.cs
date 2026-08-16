@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net;
+using System.Net.Sockets;
 
 namespace FrameLink.Control.LiveKit;
 
@@ -296,4 +298,79 @@ public sealed record LiveKitOptions
         LiveKitMode.Bundled => PublicUrl,
         _ => string.Empty,
     };
+
+    /// <summary>
+    /// The literal address <see cref="PublicUrl"/> names, or null when it names none.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Only a literal. A host name would have to be resolved, and resolution is a network call on
+    /// a status read that can hang, can answer differently than a frame's resolver does, and can
+    /// produce a conclusion about a name this container merely sees differently — three ways to be
+    /// wrong about something the operator did not ask. A named or unparseable host is <i>no
+    /// answer</i> rather than a guessed one.
+    /// </para>
+    /// <para>
+    /// Loopback is excluded because it is nobody's dialling address: a frame that resolved calls
+    /// to <c>127.0.0.1</c> would be calling itself, so a public URL naming it says nothing about
+    /// where media should come from. A scoped IPv6 literal is excluded for a narrower reason —
+    /// the zone index is meaningful only inside the host that wrote it, and it is not a form the
+    /// call server's own address parser accepts.
+    /// </para>
+    /// </remarks>
+    public IPAddress? DialedAddress
+    {
+        get
+        {
+            if (PublicUrl.Length == 0 || !Uri.TryCreate(PublicUrl, UriKind.Absolute, out var url))
+            {
+                return null;
+            }
+
+            // DnsSafeHost rather than Host: an IPv6 literal arrives from a URL wrapped in the
+            // brackets the syntax requires, and an address parser will not take them.
+            return IPAddress.TryParse(url.DnsSafeHost, out var address)
+                && !IPAddress.IsLoopback(address)
+                && (address.AddressFamily is not AddressFamily.InterNetworkV6 || address.ScopeId == 0)
+                    ? address
+                    : null;
+        }
+    }
+
+    /// <summary>
+    /// The address the generated configuration tells the call server to advertise for media.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same value frames dial, because the media path has to arrive where the signalling
+    /// path did.</b> A container publishing its ports one-to-one onto a LAN host is on an address
+    /// no frame can route to; §3.7 splits the exposure in two and the half that cannot ride a
+    /// proxy has to name the host's address itself, or the ICE candidates carry a bridge address
+    /// and the call connects and carries nothing. So this is <see cref="DialedAddress"/> rather
+    /// than a setting of its own: <see cref="PublicUrlVariable"/> is already the operator's
+    /// statement of where frames should arrive, and a second variable saying it again is a second
+    /// variable that can disagree with the first — silently, and in exactly the way that produces
+    /// the failure this exists to prevent.
+    /// </para>
+    /// <para>
+    /// <b>Null is a working answer, not a gap.</b> A public URL naming a host rather than an
+    /// address — the reverse-proxy shape §3.7 describes — leaves this unset, the generated file
+    /// carries no <c>node_ip</c>, and the call server advertises what it is locally on, which is
+    /// exactly the behaviour that was there before. That case is §3.7's deferred one, and it stays
+    /// deferred rather than half-implemented from a name this container would have to resolve.
+    /// </para>
+    /// <para>
+    /// <b>The unspecified address is refused.</b> <c>0.0.0.0</c> parses, is not loopback, and is
+    /// a plausible thing to write in a public URL — and handing it to the call server as the
+    /// address to advertise would produce candidates pointing at nothing while looking configured.
+    /// It is left null, which puts it back in front of the media check as an address frames dial
+    /// that nothing will advertise.
+    /// </para>
+    /// </remarks>
+    public IPAddress? MediaAddress => Mode is LiveKitMode.Bundled
+        && DialedAddress is { } address
+        && !address.Equals(IPAddress.Any)
+        && !address.Equals(IPAddress.IPv6Any)
+            ? address
+            : null;
 }

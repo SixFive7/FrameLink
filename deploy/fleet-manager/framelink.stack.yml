@@ -84,11 +84,11 @@
 #   2. WEBRTC MEDIA cannot ride it at all. A reverse proxy terminates TCP; call media is UDP, and
 #      §3.7 calls that split unavoidable. So the UDP range and the TCP fallback are published on
 #      the host directly, one-to-one — the same shape guide 7's standalone stack used and guide 8
-#      validated end to end. One-to-one matters: LiveKit runs with `use_external_ip: false` and
-#      therefore advertises its own container address, which no frame on the LAN can route to, so
-#      connectivity is established from LiveKit outwards and depends on the source port a frame
-#      observes being a port the host will deliver back. Remap 50000-50059 to anything else and
-#      calls connect for nobody, with no error anywhere.
+#      validated end to end. One-to-one matters, and it is the PORT NUMBERS that make it matter:
+#      LiveKit runs with `use_external_ip: false` and is told this host's address as `node_ip`, so
+#      its ICE candidates name the address frames dial — but the port in each candidate is the one
+#      it bound inside the container. Remap 50000-50059 to anything else and every candidate names
+#      a port that arrives nowhere, so calls connect for nobody, with no error anywhere.
 #
 # ── WHAT ELSE MAY BE HOLDING THESE HOST PORTS, ON DEPLOYMENT DAY ─────────────────────────────
 # 7880, 7881 and 50000-50059 are published on the host directly, so anything else already bound

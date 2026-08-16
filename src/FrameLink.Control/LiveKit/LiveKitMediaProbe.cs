@@ -22,8 +22,8 @@ namespace FrameLink.Control.LiveKit;
 /// participants exchanging RTP through the SFU and then agreeing that they did; one process
 /// looking at its own sockets is not that and cannot be made into that. What is checkable from
 /// here is the server's own end of the path — whether the media ports exist, whether the range
-/// has anything left in it, and whether the address the fleet is told to dial is an address this
-/// process is actually on. Everything past the container's network namespace is invisible:
+/// has anything left in it, and whether the address the fleet is told to dial is one this server
+/// will put in an ICE candidate at all. Everything past the container's network namespace is invisible:
 /// published ports, host firewall rules, the household router, the frame's own stack. So this
 /// answers "is anything obviously wrong on this side", never "can a frame reach media", and its
 /// findings are worded as observations for that reason.
@@ -106,31 +106,41 @@ public static class LiveKitMediaProbe
         }
 
         // Two ways for this comparison to be impossible, and both have to mean "unchecked" rather
-        // than "not local". A host that would not enumerate its own interfaces returns nothing,
-        // and an empty set trivially does not contain the advertised address — so reading the
-        // absence as a mismatch would turn a failed read into a confident accusation about a
-        // deployment that may be perfectly correct.
+        // than "not offered". A host that would not enumerate its own interfaces returns nothing,
+        // and an empty set trivially does not contain the dialled address — so reading the absence
+        // as a mismatch would turn a failed read into a confident accusation about a deployment
+        // that may be perfectly correct.
         var local = host.LocalAddresses();
-        var advertised = local.Count > 0 ? AdvertisedAddress(options) : null;
-        var addressChecked = advertised is not null;
-        var addressIsLocal = advertised is null || local.Contains(advertised);
+        var dialed = local.Count > 0 ? options.DialedAddress : null;
+        var addressChecked = dialed is not null;
+
+        // Two ways for the address frames dial to end up in an ICE candidate, and either will do:
+        // this server holds it, or the generated configuration names it as the address to
+        // advertise. The second is what LiveKitConfigFile writes as node_ip, and it is what makes
+        // a container publishing its ports one-to-one onto a LAN host correct rather than merely
+        // reachable for signalling.
+        var addressIsOffered = dialed is null
+            || local.Contains(dialed)
+            || dialed.Equals(options.MediaAddress);
 
         // The one finding here that is an inference rather than a fact, and it is worth the
-        // inference because it is the failure this deployment is actually shaped to produce.
-        // §3.7 sets use_external_ip: false, which has LiveKit advertise the addresses it is
-        // locally bound to; §3.8 puts this container on its own /24 bridge with a pinned private
-        // IPv4. So signalling arrives on the published LAN address and works, and the ICE
-        // candidates carry a bridge address no frame can route to. Advertised IP is deferred
-        // within v2 and this does not implement it — it says out loud that the condition is
-        // present, which is all that was missing.
-        if (addressChecked && !addressIsLocal)
+        // inference because it is the failure this deployment is shaped to produce. §3.7 sets
+        // use_external_ip: false, which has LiveKit advertise the addresses it is locally bound
+        // to; §3.8 puts this container on its own /24 bridge with a pinned private IPv4. So
+        // signalling arrives on the published LAN address and works, while the ICE candidates
+        // carry a bridge address no frame can route to — unless something names the dialled
+        // address, which is what MediaAddress is. What is left here is the case where nothing
+        // does: a public URL whose address cannot be handed to the call server, which reads as
+        // configured and is not.
+        if (addressChecked && !addressIsOffered)
         {
             findings.Add(
-                $"Frames are told to dial {options.PublicUrl}, but {advertised} is not an address this "
-                + "server is on. Signalling still reaches it through whatever publishes that port, "
-                + "while media candidates are advertised as this container's own addresses — which a "
-                + "frame on another network cannot reach. Publish the media ports on the address "
-                + "frames dial, or run the call server where that address lives.");
+                $"Frames are told to dial {options.PublicUrl}, but {dialed} is neither an address this "
+                + "server is on nor one it is configured to advertise. Signalling still reaches it "
+                + "through whatever publishes that port, while media candidates carry this container's "
+                + "own addresses — which a frame on another network cannot reach. Set "
+                + $"{LiveKitOptions.PublicUrlVariable} to the address frames actually reach this host "
+                + "on, and publish the media ports there one-to-one.");
         }
 
         return new LiveKitMediaCheck
@@ -140,33 +150,10 @@ public static class LiveKitMediaProbe
             TcpMediaPortListening = tcpMediaListening,
             UdpRangeSize = rangeSize,
             UdpRangeFree = free,
-            AdvertisedAddressChecked = addressChecked,
-            AdvertisedAddressIsLocal = addressIsLocal,
+            DialedAddressChecked = addressChecked,
+            DialedAddressIsOffered = addressIsOffered,
             Findings = findings,
         };
-    }
-
-    /// <summary>
-    /// The literal IP frames are pointed at, or null when there is nothing to compare.
-    /// </summary>
-    /// <remarks>
-    /// Only a literal. A host name would have to be resolved, and resolution is a network call on
-    /// a status read that can hang, answer differently than the frame's resolver does, and produce
-    /// a finding about a name this container happens to see differently — three ways to be wrong
-    /// about something the operator did not ask. An unparseable or named host is reported as
-    /// unchecked instead, which is the honest form.
-    /// </remarks>
-    private static IPAddress? AdvertisedAddress(LiveKitOptions options)
-    {
-        if (options.PublicUrl.Length == 0
-            || !Uri.TryCreate(options.PublicUrl, UriKind.Absolute, out var url))
-        {
-            return null;
-        }
-
-        return IPAddress.TryParse(url.Host, out var address) && !IPAddress.IsLoopback(address)
-            ? address
-            : null;
     }
 
     private static string Port(int port) => port.ToString(CultureInfo.InvariantCulture);
@@ -201,11 +188,20 @@ public sealed record LiveKitMediaCheck
     /// </remarks>
     public int UdpRangeFree { get; init; }
 
-    /// <summary>Whether the address frames dial could be compared against this host's own.</summary>
-    public bool AdvertisedAddressChecked { get; init; }
+    /// <summary>Whether the address frames dial is a literal this check could compare at all.</summary>
+    public bool DialedAddressChecked { get; init; }
 
-    /// <summary>Whether it is an address this process is actually on. True when unchecked.</summary>
-    public bool AdvertisedAddressIsLocal { get; init; } = true;
+    /// <summary>
+    /// Whether the call server will put that address in its ICE candidates. True when unchecked.
+    /// </summary>
+    /// <remarks>
+    /// True by either route, because either one works: an address this process is on is advertised
+    /// because it is held, and an address the generated configuration names is advertised because
+    /// <c>node_ip</c> rewrites the host candidates to it. It says nothing about whether media then
+    /// arrives — the ports still have to be published one-to-one on that address, which is on the
+    /// far side of this container's network namespace and invisible from here.
+    /// </remarks>
+    public bool DialedAddressIsOffered { get; init; } = true;
 
     /// <summary>What an operator should look at, in plain sentences. Empty means nothing seen.</summary>
     public required IReadOnlyList<string> Findings { get; init; }
