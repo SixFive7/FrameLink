@@ -354,10 +354,48 @@ public sealed class ReconcileLoop
         return AttemptsWithin(entry.Attempts, attemptBudget);
     }
 
-    /// <summary>Runs passes until the frame converges, halts, or the agent stops.</summary>
+    /// <summary>
+    /// Whether a pass result ends the loop, rather than scheduling another pass.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two results end it, and both end it because the process itself is going away.</b>
+    /// <see cref="PassResult.Restarting"/> means the machine is going down to prove a change, so
+    /// there is nothing left to run and §2.4 forbids claiming anything on the other side of it from
+    /// this process. <see cref="PassResult.Cancelled"/> is the agent shutting down. Everything else
+    /// schedules another pass.
+    /// </para>
+    /// <para>
+    /// <b><see cref="PassResult.Escalated"/> is emphatically not one of them, and this predicate
+    /// exists because it used to be</b> (decision 75). It inherited the slot <c>Halted</c> held
+    /// before decision 66 removed that state, and for <c>Halted</c> returning was right: it was
+    /// device-level and terminal by definition. <c>Escalated</c> is §2.5 rung 3 — the rung whose
+    /// entire purpose is that an operator presses <b>retry</b> and the frame tries again — so a
+    /// loop that returns on it deletes the recovery path the rung was built for. Measured on the
+    /// frame: thirty-three minutes of log holding one startup pass, then the retry lines, then
+    /// silence against a five-minute <see cref="ReconcileOptions.PassInterval"/>; the ledger's
+    /// telemetry sequence frozen at the server's last report; the process sleeping, unrestarted,
+    /// its socket established. Nine other loops kept the agent alive and the Fleet Manager
+    /// therefore reported a device that was <i>online</i> and permanently inert, with a retry
+    /// button that visibly did nothing.
+    /// </para>
+    /// <para>
+    /// <b>Written as a named predicate rather than inline, because the failure was a list.</b> The
+    /// terminal set was three enum members in a pattern, and removing a state left a non-terminal
+    /// one sitting in the terminal position with nothing to notice. A predicate with this remark
+    /// attached is the thing that makes the next such edit visible.
+    /// </para>
+    /// </remarks>
+    public static bool EndsTheLoop(PassResult result) =>
+        result is PassResult.Restarting or PassResult.Cancelled;
+
+    /// <summary>Runs passes until the machine restarts or the agent stops.</summary>
     /// <remarks>
     /// The wait between passes is the shortest of the pending backoffs, so a frame that is
-    /// retrying in thirty seconds does not sit idle for the whole drift-detection interval.
+    /// retrying in thirty seconds does not sit idle for the whole drift-detection interval. A frame
+    /// that has given up has no backoff to shorten it, so it ticks at the full
+    /// <see cref="ReconcileOptions.PassInterval"/> — which is what picks up a retry, and what keeps
+    /// it reporting what it is while it waits for one (§2.6, decisions 68 and 75).
     /// </remarks>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -365,7 +403,7 @@ public sealed class ReconcileLoop
         {
             var outcome = await RunPassAsync(cancellationToken).ConfigureAwait(false);
 
-            if (outcome.Result is PassResult.Restarting or PassResult.Escalated or PassResult.Cancelled)
+            if (EndsTheLoop(outcome.Result))
             {
                 return;
             }
