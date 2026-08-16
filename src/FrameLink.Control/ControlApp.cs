@@ -86,6 +86,7 @@ public static class ControlApp
         builder.Services.AddSingleton<ImageBuildService>();
 
         builder.Services.AddSingleton<SettingsPublisher>();
+        builder.Services.AddSingleton<RetryPublisher>();
         builder.Services.AddSingleton<DeviceHandshake>();
         builder.Services.AddSingleton<TelemetryIngest>();
         builder.Services.AddSingleton<AgentSocketHandler>();

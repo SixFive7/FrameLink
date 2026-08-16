@@ -36,6 +36,11 @@ public static class OperatorEndpoints
         app.MapGet("/api/devices/{deviceId}/reconcile", GetReconcileAsync);
         app.MapGet("/api/devices/{deviceId}/events", GetDeviceEventsAsync);
 
+        // §2.5 rung 3's retry, in RetryEndpoints.cs. Mapped from here rather than beside the other
+        // MapPost calls so the whole feature — handler, contract, publisher and log — stays in
+        // files of its own, and so the session gate above covers it exactly as it covers these.
+        app.MapRetryEndpoints();
+
         app.MapGet("/api/packages", GetFleetPackagesAsync);
         app.MapGet("/api/devices/{deviceId}/packages", GetDevicePackagesAsync);
 
