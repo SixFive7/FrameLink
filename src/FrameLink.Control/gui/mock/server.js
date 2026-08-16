@@ -198,6 +198,179 @@ const overrides = flag('empty')
 			'M9N8-P7Q6-R5S4-T3V2': { 'display.backlightOff': '23:45' }
 		};
 
+// ── reconciliation ────────────────────────────────────────────────────────────────────────
+
+/**
+ * A stalled provision, reproduced from a real one.
+ *
+ * The first full provision of a real frame reported **37 in sync, 1 escalated, 12 blocked, 32
+ * reboots expected**, and every one of the twelve was downstream of the single escalation. That
+ * is the shape the reconciliation screen exists to draw, so it is the shape the mock serves.
+ *
+ * Two details here are load-bearing rather than decorative:
+ *
+ *  - `inSync + rebootsExpected` is 69, and that is the catalog size. The frame computes
+ *    `rebootsExpected` as `catalogSize - inSync` from the same `inSync` it sends
+ *    (`ReconcileLoop.PublishReportAsync`), so the identity holds in every report and is the only
+ *    stable denominator the wire offers.
+ *  - `resources` carries 50 entries, not 69. A mid-pass report carries only what the agent has
+ *    walked so far, which is exactly the partial-list case the console has to survive.
+ */
+const chain = (blocker, names) => names.map((name) => ({
+	name,
+	status: 'blocked',
+	blockedBy: blocker,
+	delta: `waiting for '${blocker}'`,
+	attempts: 0,
+	attemptBudget: 5,
+	escalations: 0
+}));
+
+const verified = [
+	'agent.version', 'agent.keypair', 'agent.adoption', 'device.hostname', 'device.user',
+	'boot.config.stock-baseline', 'boot.config.dtoverlay-vc4-kms-v3d-noaudio',
+	'boot.config.camera-auto-detect', 'boot.cmdline.wifi-regdom', 'boot.cmdline.fbcon-rotate',
+	'boot.autologin.getty-tty1', 'cfg80211.ieee80211_regdom', 'cpu.governor.performance',
+	'journal.storage-persistent', 'apt.auto-upgrades-enabled', 'apt.conf.d',
+	'apt.unattended-upgrades.allowed-origins', 'pkg.labwc', 'pkg.chromium', 'pkg.wireplumber',
+	'pkg.pipewire-alsa', 'pkg.wlr-randr', 'pkg.xdg-desktop-portal', 'pkg.xdg-desktop-portal-gtk',
+	'pkg.gstreamer1.0-tools', 'pkg.gstreamer1.0-plugins-base', 'pkg.gstreamer1.0-libcamera',
+	'pkg.gstreamer1.0-pipewire', 'pkg.dfu-util', 'pkg.unattended-upgrades',
+	'audio.mixer.pcm0-playback-volume', 'audio.mixer.pcm0-playback-switch',
+	'audio.mixer.pcm1-playback-volume', 'audio.alsa.stored-state',
+	'firmware.rpi-bootloader.version', 'session.bash-profile-exec-labwc', 'labwc.autostart.executable'
+].map((name) => ({ name, status: 'in-sync', attempts: 1, attemptBudget: 5, escalations: 0 }));
+
+const stalledResources = [
+	...verified,
+	{
+		name: 'display.dsi2-transform',
+		status: 'escalated',
+		delta: "expected 'transform=90, 1280x800', observed 'no DSI connector; wlr-randr lists no output'",
+		action: 'wlr-randr --output DSI-2 --transform 90',
+		attempts: 5,
+		attemptBudget: 5,
+		escalations: 2
+	},
+	...chain('display.dsi2-transform', [
+		'display.rotation',
+		'labwc.autostart.content',
+		'kiosk.binary.pinned-release',
+		'camera.pipewire-node.framelink-cam'
+	]),
+	...chain('display.rotation', ['app.config.immich-kiosk-url', 'kiosk.config.immich-url']),
+	...chain('kiosk.binary.pinned-release', [
+		'kiosk.config.offline-mode-enabled',
+		'kiosk.config.offline-asset-count',
+		'kiosk.offline-cache.dir'
+	]),
+	...chain('kiosk.config.offline-mode-enabled', ['kiosk.process.supervised']),
+	...chain('camera.pipewire-node.framelink-cam', ['call.identity']),
+	// The one that is not a dependency at all: the frame could not *ask*. `Unevaluable` on the
+	// agent, `blocked` on `the Fleet Manager` on the wire, and never a fault.
+	{
+		name: 'app.config.livekit-token',
+		status: 'blocked',
+		blockedBy: 'the Fleet Manager',
+		delta: "expected 'a minted call token', could not be determined: no answer from the Fleet Manager",
+		attempts: 0,
+		attemptBudget: 5,
+		escalations: 0
+	}
+];
+
+const reports = flag('empty')
+	? {}
+	: {
+			'M9N8-P7Q6-R5S4-T3V2': {
+				deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+				sequence: 412,
+				generatedUtc: iso(1),
+				loopState: 'escalated',
+				currentResource: 'display.dsi2-transform',
+				currentPhase: 'act',
+				inSync: 37,
+				drifted: 1,
+				blocked: 12,
+				rebootsExpected: 32,
+				resources: stalledResources
+			},
+			'A1B2-C3D4-E5F6-G7H8': {
+				deviceId: 'A1B2-C3D4-E5F6-G7H8',
+				sequence: 1904,
+				generatedUtc: iso(3),
+				loopState: 'converged',
+				// A converged report is a whole-catalog census: `resources.length` equals
+				// `inSync + rebootsExpected`, which is what tells the console it is complete.
+				inSync: stalledResources.length,
+				drifted: 0,
+				blocked: 0,
+				rebootsExpected: 0,
+				resources: stalledResources.map((resource) => ({
+					name: resource.name,
+					status: 'in-sync',
+					attempts: 1,
+					attemptBudget: 5,
+					escalations: 0
+				}))
+			}
+		};
+
+const deviceEvents = flag('empty')
+	? {}
+	: {
+			'M9N8-P7Q6-R5S4-T3V2': [
+				{
+					deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+					kind: 'escalation',
+					occurredUtc: iso(2),
+					resource: 'display.dsi2-transform',
+					summary:
+						'The panel transform could not be applied after five attempts. Retry resets the ' +
+						'budget; a remote shell is the other option.',
+					delta:
+						"expected 'transform=90, 1280x800', observed 'no DSI connector; wlr-randr lists no output'",
+					attempts: 5
+				},
+				{
+					deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+					kind: 'display',
+					occurredUtc: iso(14),
+					summary:
+						'This frame’s own screen cannot show anything — no framebuffer and no connected ' +
+						'DRM output — so the Fleet Manager is the only surface left.',
+					attempts: 0
+				},
+				{
+					deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+					kind: 'drift',
+					occurredUtc: iso(31),
+					resource: 'display.dsi2-transform',
+					summary:
+						'The panel is not rotated. Without it the slideshow renders sideways on a portrait ' +
+						'panel and every touch lands in the wrong place.',
+					delta: "expected 'transform=90, 1280x800', observed 'transform=normal'",
+					attempts: 1
+				},
+				{
+					deviceId: 'M9N8-P7Q6-R5S4-T3V2',
+					kind: 'boot',
+					occurredUtc: iso(46),
+					summary: 'Agent started, back across a reboot boundary it asked for.',
+					attempts: 0
+				}
+			],
+			'A1B2-C3D4-E5F6-G7H8': [
+				{
+					deviceId: 'A1B2-C3D4-E5F6-G7H8',
+					kind: 'converged',
+					occurredUtc: iso(3),
+					summary: 'Every resource reached in-sync. The product is running.',
+					attempts: 0
+				}
+			]
+		};
+
 // ── plumbing ──────────────────────────────────────────────────────────────────────────────
 
 const MIME = {
@@ -437,6 +610,26 @@ async function handleApi(req, res, url) {
 			revision++;
 			return noContent(res);
 		}
+	}
+
+	// `OperatorEndpoints.GetReconcileAsync`. 200 with an absent `report` for a frame that has
+	// never sent one — that is a state the screen renders, not an error, so it is not a 404.
+	const deviceReconcile = path.match(/^\/api\/devices\/([^/]+)\/reconcile$/);
+	if (deviceReconcile && method === 'GET') {
+		const id = decodeURIComponent(deviceReconcile[1]);
+		const device = find(id);
+		if (!device) return notFoundDevice(res, id);
+		return json(res, 200, { deviceId: id, online: device.online, report: reports[id] });
+	}
+
+	// `OperatorEndpoints.GetDeviceEventsAsync`. Newest first, `limit` defaulting to 50.
+	const deviceEventLog = path.match(/^\/api\/devices\/([^/]+)\/events$/);
+	if (deviceEventLog && method === 'GET') {
+		const id = decodeURIComponent(deviceEventLog[1]);
+		const device = find(id);
+		if (!device) return notFoundDevice(res, id);
+		const limit = Math.min(1000, Math.max(1, Number(url.searchParams.get('limit')) || 50));
+		return json(res, 200, { deviceId: id, events: (deviceEvents[id] ?? []).slice(0, limit) });
 	}
 
 	const deviceSettings = path.match(/^\/api\/devices\/([^/]+)\/settings$/);

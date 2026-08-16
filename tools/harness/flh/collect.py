@@ -22,7 +22,7 @@ That matters for v2, because two things changed:
 1. **The mule is now bare Raspberry Pi OS Lite Trixie.** grim is almost certainly not
    installed, and installing it is a system mutation this harness must not perform
    unasked (CLAUDE.md section 1.8).
-2. **The agent's console stage writes directly to /dev/tty1** before any graphical stack
+2. **The agent's console stage writes directly to /dev/tty8** before any graphical stack
    exists (section 2.7). grim is a Wayland client; it cannot see a console at all. Screenshotting
    the console stage - the thing M0 most needs to see - is inherently a framebuffer read.
 

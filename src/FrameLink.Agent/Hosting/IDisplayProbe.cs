@@ -18,10 +18,11 @@ public readonly record struct DisplayVisibility(bool Visible, string Reason, str
 /// sizes</c>, <c>/dev/fb0</c> does not exist and <c>/sys/class/backlight/</c> is empty.
 /// </para>
 /// <para>
-/// <b>The write is no evidence either way.</b> <c>tty1</c> is an active console —
+/// <b>The write is no evidence either way.</b> The stage's terminal is a live virtual console —
 /// <c>console=tty1</c> is on the kernel command line and <c>/sys/class/tty/console/active</c>
-/// reads <c>ttyAMA10 tty1</c> — so opening <c>/dev/tty1</c> and writing a whole designed frame to
-/// it usually returns without error and produces nothing. Usually, not always: the same frame,
+/// reads <c>ttyAMA10 tty1</c>, and the VT layer takes a write to any of its terminals whether or
+/// not a framebuffer is behind it — so opening <c>/dev/tty8</c> and writing a whole designed frame
+/// to it usually returns without error and produces nothing. Usually, not always: the same frame,
 /// same darkness, has also answered <c>EIO</c> and taken the process down with it (see
 /// <see cref="TerminalFailure"/>). That is exactly the shape of failure §2.4 exists to catch — a
 /// successful write is not evidence of an applied state, and a failed one says nothing about the

@@ -97,6 +97,128 @@ export interface DeviceSettingsResponse {
 }
 
 /**
+ * `ResourceStatusNames` — §2.3's status vocabulary, spelled the way it travels on the wire.
+ *
+ * Seven tokens, and the protocol calls them contract: the agent's own enum may be renamed at
+ * will, these may not. Hyphenated, not camelCased — they are `const string` values, not
+ * property names, so the JSON naming policy never touches them.
+ */
+export type ResourceStatus =
+	| 'in-sync'
+	| 'progressing'
+	| 'awaiting-reboot'
+	| 'degraded'
+	| 'blocked'
+	| 'escalated'
+	| 'halted';
+
+/** `LoopStateNames` — what the reconciliation loop as a whole is doing. */
+export type LoopState =
+	| 'converged'
+	| 'reconciling'
+	| 'awaiting-reboot'
+	| 'backing-off'
+	| 'escalated'
+	| 'halted';
+
+/** `DeviceEventKinds` — what kind of thing happened, on the `events` channel of §4.1. */
+export type DeviceEventKind = 'drift' | 'escalation' | 'boot' | 'halted' | 'converged' | 'display';
+
+/** `ResourceReport` — one resource's standing. Frozen protocol type. */
+export interface ResourceReport {
+	/** Catalog id, e.g. `cpu.governor.performance`. */
+	name: string;
+	status: ResourceStatus;
+	/** Expected-versus-observed. Present whenever the status is not in sync. */
+	delta?: string;
+	/** The exact change the agent last made. */
+	action?: string;
+	/**
+	 * The dependency that is not in sync, when the status is blocked.
+	 *
+	 * Usually another resource's `name`, which is what lets this screen hang a blocked resource
+	 * off the thing blocking it. The one value that is *not* a resource is `the Fleet Manager`
+	 * (`ReconcileLoop.SilentAuthority`) — an observation that could not be made because the
+	 * authority owning the value said nothing. See `SILENT_AUTHORITY` in `$lib/reconcile`.
+	 */
+	blockedBy?: string;
+	/** How many times this resource has been acted on since it was last in sync. */
+	attempts: number;
+	/** The budget those attempts are counted against (§2.7 item 5). */
+	attemptBudget: number;
+	/** How many times the operator has been notified about this resource (§2.5). */
+	escalations: number;
+	/** When the backoff expires, so a pause never looks like a hang (§2.7 item 6). */
+	nextAttemptUtc?: string;
+}
+
+/**
+ * `ReconcileReport` — the whole loop's state. Frozen protocol type.
+ *
+ * §3.5's sentence turned into a record: "current resource and phase, settings applied, settings
+ * still drifted, reboots expected before convergence, and the per-resource status list".
+ */
+export interface ReconcileReport {
+	deviceId: string;
+	/** Monotonic per-device counter, so a late-draining buffer can be ordered. */
+	sequence: number;
+	/** When the *agent* produced it, not when the server received it. */
+	generatedUtc: string;
+	loopState: LoopState;
+	/** The resource being worked on, or absent between passes. */
+	currentResource?: string;
+	/** Which step of §2.3's Observe → Compare → Act → Verify that resource is in. */
+	currentPhase?: string;
+	inSync: number;
+	drifted: number;
+	blocked: number;
+	/**
+	 * Reboots still expected before this frame converges.
+	 *
+	 * §2.4 reboots per resource with no exceptions, so this is the count of resources not yet
+	 * verified — and at 40–60 s a cycle it is the only honest answer to "how long will this take".
+	 */
+	rebootsExpected: number;
+	/** Every resource in the catalog, in dependency order. */
+	resources: ResourceReport[];
+}
+
+/** `DeviceEvent` — one thing that happened. Frozen protocol type. */
+export interface DeviceEvent {
+	deviceId: string;
+	kind: DeviceEventKind;
+	/** When it happened on the frame. */
+	occurredUtc: string;
+	/** The resource involved, when there was one. */
+	resource?: string;
+	/** One sentence an operator can read. */
+	summary: string;
+	delta?: string;
+	attempts: number;
+}
+
+/** `DeviceReconcileResponse` — `GET /api/devices/{id}/reconcile`. */
+export interface DeviceReconcileResponse {
+	deviceId: string;
+	/** Whether a socket is open right now. Presence *is* the socket (§3.5). */
+	online: boolean;
+	/**
+	 * The latest report, or absent when the frame has never sent one.
+	 *
+	 * Absent rather than an empty report, for the reason the contract gives: "a pending frame,
+	 * or one adopted a second ago" is a real state the screen renders, and a zeroed report would
+	 * claim an observation that was never made.
+	 */
+	report?: ReconcileReport;
+}
+
+/** `DeviceEventsResponse` — `GET /api/devices/{id}/events`, newest first. */
+export interface DeviceEventsResponse {
+	deviceId: string;
+	events: DeviceEvent[];
+}
+
+/**
  * How one package stands against the reviewed baseline.
  *
  * `ahead` is the *expected* value and is never styled as a fault: a frame behind NAT is left

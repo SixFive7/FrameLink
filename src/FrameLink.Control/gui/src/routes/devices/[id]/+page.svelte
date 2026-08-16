@@ -221,6 +221,14 @@
 				{:else if device.state === 'blocked'}
 					<Button variant="secondary" icon="refresh" {busy} onclick={runUnblock}>Unblock</Button>
 				{:else}
+					<Button
+						variant="secondary"
+						icon="sliders"
+						href="/devices/{encodeURIComponent(device.deviceId)}/reconcile"
+						title="What this frame is converging on, live"
+					>
+						Reconciliation
+					</Button>
 					<Button variant="danger" icon="ban" onclick={() => (confirmBlock = true)}>Block</Button>
 				{/if}
 				<Button

@@ -67,7 +67,7 @@ public sealed class ConsoleStage : IDisposable
         _log = log ?? NullLog.Instance;
 
         // Asked before the first paint, because the answer changes what a successful paint
-        // means. A write to /dev/tty1 on a frame with no framebuffer at all may return success
+        // means. A write to /dev/tty8 on a frame with no framebuffer at all may return success
         // and may fail with EIO, and neither outcome is evidence about the picture — so
         // PaintedFrames counts frames written, never frames seen.
         Visibility = (display ?? StaticDisplayProbe.Visible).Probe();

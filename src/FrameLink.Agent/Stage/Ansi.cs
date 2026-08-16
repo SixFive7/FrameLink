@@ -8,7 +8,7 @@ namespace FrameLink.Agent.Stage;
 /// </summary>
 /// <remarks>
 /// 256-colour sequences rather than truecolour: the Linux virtual console maps them down to its
-/// own palette, so a frame renders in colour on <c>/dev/tty1</c> with no terminfo, no library and
+/// own palette, so a frame renders in colour on <c>/dev/tty8</c> with no terminfo, no library and
 /// no assumptions about the emulator — which is what §2.7 means by working "from the first second
 /// of the first boot".
 /// </remarks>

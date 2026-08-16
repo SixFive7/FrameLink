@@ -14,8 +14,10 @@
  */
 
 import type {
+	DeviceEventsResponse,
 	DeviceListResponse,
 	DevicePackagesResponse,
+	DeviceReconcileResponse,
 	DeviceSettingsResponse,
 	DeviceView,
 	FleetPackagesResponse,
@@ -205,6 +207,31 @@ export const api = {
 		request<DevicePackagesResponse>(`/api/devices/${encodeURIComponent(deviceId)}/packages`, {
 			signal
 		}),
+
+	/**
+	 * `GET /api/devices/{id}/reconcile` — the frame's latest reconciliation report, whole.
+	 *
+	 * The server hands back the agent's own `ReconcileReport` unchanged rather than a paraphrase
+	 * of it, adding only `online`, which the server knows and the frame does not. 200 with an
+	 * absent `report` for a frame that has never sent one — that is a state, not an error.
+	 */
+	reconcile: (deviceId: string, options: { signal?: AbortSignal } = {}) =>
+		request<DeviceReconcileResponse>(
+			`/api/devices/${encodeURIComponent(deviceId)}/reconcile`,
+			options
+		),
+
+	/**
+	 * `GET /api/devices/{id}/events` — what happened on this frame, newest first.
+	 *
+	 * The companion to `reconcile`: a report is the current picture and only the latest one
+	 * matters, an event is history and §3.5 keeps a month of it.
+	 */
+	deviceEvents: (deviceId: string, limit: number, options: { signal?: AbortSignal } = {}) =>
+		request<DeviceEventsResponse>(
+			`/api/devices/${encodeURIComponent(deviceId)}/events?limit=${limit}`,
+			options
+		),
 
 	fleetSettings: (signal?: AbortSignal) => request<FleetSettingsResponse>('/api/settings', { signal }),
 
