@@ -56,6 +56,32 @@ public interface IUserSession
     /// <c>~/.config/labwc</c> is the same problem one level up.
     /// </remarks>
     Task GiveToUserAsync(string path, CancellationToken cancellationToken);
+
+    /// <summary>Whether this user's login session exists yet, and if not, what is missing.</summary>
+    /// <remarks>
+    /// The one probe behind <see cref="Resources.UserSessionGate"/>. It lives on this seam rather
+    /// than in a resource because the fact it reports — whether there is a session at all — is a
+    /// property of the session, not of any one thing living inside it, and eleven resources need
+    /// the answer.
+    /// </remarks>
+    Task<SessionReadiness> ReadinessAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Whether the login user's session is up, and what is missing when it is not.
+/// </summary>
+/// <param name="Ready">
+/// True once the session exists and its bus is answering. False is <b>not</b> a fault: it is the
+/// ordinary state of the first ten seconds of every boot.
+/// </param>
+/// <param name="Why">
+/// What was missing, in the register <see cref="Reconcile.ResourceObservation.Unevaluable"/> puts
+/// where an observed value would have gone. Empty when <paramref name="Ready"/> is true.
+/// </param>
+public readonly record struct SessionReadiness(bool Ready, string Why)
+{
+    /// <summary>The session is up.</summary>
+    public static SessionReadiness Up { get; } = new(true, string.Empty);
 }
 
 /// <summary>
@@ -91,7 +117,14 @@ public sealed class LoginUserSession : IUserSession
     /// <summary>The Wayland socket labwc creates, and the only one this build uses.</summary>
     public const string WaylandDisplay = "wayland-0";
 
+    /// <summary>Where <c>logind</c> creates each live session's runtime directory.</summary>
+    public const string RuntimeDirectoryRoot = "/run/user";
+
+    /// <summary>The user bus socket inside that directory.</summary>
+    public const string BusSocketName = "bus";
+
     private readonly IProcessRunner _processes;
+    private readonly ISystemFiles _files;
     private readonly Func<string> _user;
     private readonly Lock _gate = new();
     private (string User, string Uid)? _resolved;
@@ -104,12 +137,17 @@ public sealed class LoginUserSession : IUserSession
     /// the whole of a pending frame's experience (§3.3) — the name falls back to <b>the account
     /// the image was flashed with, read off the frame itself</b>.
     /// </param>
-    public LoginUserSession(IProcessRunner processes, Func<string>? user = null)
+    /// <param name="files">
+    /// How <see cref="ReadinessAsync"/> looks at <c>/run/user</c>. Defaulted, because every caller
+    /// that predates the readiness gate wants the host filesystem and nothing else.
+    /// </param>
+    public LoginUserSession(IProcessRunner processes, Func<string>? user = null, ISystemFiles? files = null)
     {
         ArgumentNullException.ThrowIfNull(processes);
 
         _processes = processes;
         _user = user ?? (() => string.Empty);
+        _files = files ?? HostSystemFiles.Instance;
     }
 
     /// <inheritdoc/>
@@ -158,6 +196,57 @@ public sealed class LoginUserSession : IUserSession
         vector.AddRange(arguments);
 
         return await _processes.RunAsync("runuser", vector, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// <b>Two facts, one probe, and the second one is the symptom that was actually measured.</b>
+    /// <c>/run/user/&lt;uid&gt;</c> is created by <c>pam_systemd</c> when <c>logind</c> opens the
+    /// session, so its absence means no session exists. The bus socket inside it is created a
+    /// moment later by the user manager, and until it is there every <c>systemctl --user</c> and
+    /// <c>busctl --user</c> call fails with <i>Failed to connect to user scope bus … No such file
+    /// or directory</i> — which is the exact wording three of the four measured resources reported
+    /// as drift. A gate that passed on the directory alone would leave those three still lying.
+    /// </para>
+    /// <para>
+    /// <b>No process is spawned.</b> Two <c>stat</c>-shaped questions against a tmpfs, on a seam
+    /// the tests already fake, rather than the <c>loginctl</c> call the alternative would need —
+    /// this runs before every observation of eleven resources, on a five-minute sweep, forever.
+    /// </para>
+    /// <para>
+    /// <b>A uid that will not resolve reports ready.</b> There is no session to wait for on a frame
+    /// with no such account, and the resources behind this gate then report what they genuinely
+    /// find, which is the visible failure. Failing towards silence here would hide a misconfigured
+    /// <c>device.user</c> behind "not settled yet" for ever — the same direction
+    /// <c>boot.autologin.getty-tty1</c>'s settle window is careful to fail away from.
+    /// </para>
+    /// </remarks>
+    public async Task<SessionReadiness> ReadinessAsync(CancellationToken cancellationToken)
+    {
+        var uid = await UidAsync(UserName, cancellationToken).ConfigureAwait(false);
+
+        if (uid is null)
+        {
+            return SessionReadiness.Up;
+        }
+
+        var runtime = $"{RuntimeDirectoryRoot}/{uid}";
+
+        if (!_files.DirectoryExists(runtime))
+        {
+            return new SessionReadiness(
+                false,
+                $"the login session has not started yet ({runtime} does not exist)");
+        }
+
+        var bus = $"{runtime}/{BusSocketName}";
+
+        return _files.FileExists(bus)
+            ? SessionReadiness.Up
+            : new SessionReadiness(
+                false,
+                $"the login session is starting but its message bus is not up yet ({bus} does not exist)");
     }
 
     /// <inheritdoc/>

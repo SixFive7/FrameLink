@@ -661,6 +661,18 @@ public sealed class BashProfileLabwcResource : IResource
             wrong.Add(actual is null ? $"{path} absent" : $"{path} {JournalStorageResource.ShortHash(actual)}");
         }
 
+        // The durable half is checked on every observation whatever the session is doing, exactly as
+        // boot.autologin.getty-tty1's window forgives one clause and one only: a .bash_profile with
+        // the wrong bytes will never start a compositor, and that is true ten seconds into a boot as
+        // much as ten minutes in. Only the runtime half is gated, and only when the file is right —
+        // so a real fault still escalates and a frame mid-boot no longer does.
+        if (wrong.Count == 0
+            && await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+                is { } waiting)
+        {
+            return waiting;
+        }
+
         var running = await _processes.RunAsync("pgrep", ["-x", "labwc"], cancellationToken).ConfigureAwait(false);
         if (!running.Succeeded)
         {
@@ -1009,6 +1021,17 @@ public sealed class DisplayTransformResource : IResource
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
         var rotation = _autostart.Rotation;
+
+        // wlr-randr needs the compositor, and the compositor needs the session. Without one it
+        // reports no transform at all, which this resource would otherwise read as the panel being
+        // the wrong way round.
+        if (await UserSessionGate
+                .NotSettledAsync(_session, $"{LabwcAutostartResource.OutputName} transform {rotation}", cancellationToken)
+                .ConfigureAwait(false) is { } waiting)
+        {
+            return waiting;
+        }
+
         var result = await _session.RunAsync("wlr-randr", [], cancellationToken).ConfigureAwait(false);
         var observed = TransformIn(result.StandardOutput);
 

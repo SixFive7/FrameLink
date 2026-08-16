@@ -202,6 +202,16 @@ public sealed class PortalDesktopDropInResource : IResource
             wrong.Add(actual is null ? $"{path} absent" : $"{path} {JournalStorageResource.ShortHash(actual)}");
         }
 
+        // The drop-in on disk is checked whatever the session is doing; only systemd's opinion of it
+        // needs a user manager to exist. Gated after the file compare and only when the file is
+        // right, so wrong bytes are still drift on the first pass of a boot.
+        if (wrong.Count == 0
+            && await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+                is { } waiting)
+        {
+            return waiting;
+        }
+
         var shown = await _session
             .RunAsync("systemctl", ["--user", "show", UnitName, "-p", "Environment"], cancellationToken)
             .ConfigureAwait(false);
@@ -316,6 +326,14 @@ public sealed class PortalCameraPermissionResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
+        var expected = $"the permission store answering {Granted} for {Id}";
+
+        if (await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
+        }
+
         var result = await _session
             .RunAsync("busctl", ["--user", "call", BusName, ObjectPath, BusName, "Lookup", "ss", Table, Id], cancellationToken)
             .ConfigureAwait(false);
@@ -324,7 +342,7 @@ public sealed class PortalCameraPermissionResource : IResource
 
         return new ResourceObservation(
             result.Succeeded && answer.Contains(Granted, StringComparison.Ordinal),
-            $"the permission store answering {Granted} for {Id}",
+            expected,
             answer.Length == 0 ? "the permission store said nothing at all" : answer);
     }
 
@@ -668,6 +686,12 @@ public sealed class CameraUnitEnabledResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
+        if (await UserSessionGate.NotSettledAsync(_session, "enabled", cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
+        }
+
         var result = await _session
             .RunAsync("systemctl", ["--user", "is-enabled", CameraUnitResource.UnitName], cancellationToken)
             .ConfigureAwait(false);
@@ -765,8 +789,18 @@ public sealed class CameraNodeResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
-        var status = await _session.RunAsync("wpctl", ["status"], cancellationToken).ConfigureAwait(false);
         var expected = $"exactly one camera, {CameraUnitResource.NodeDescription}";
+
+        // Ahead of the wpctl call, and the branch below is exactly what makes the ordering matter:
+        // "wpctl failed" is drift because it learned something real, but before the session exists
+        // there is nothing for wpctl to talk to, so it has learned nothing at all.
+        if (await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
+        }
+
+        var status = await _session.RunAsync("wpctl", ["status"], cancellationToken).ConfigureAwait(false);
 
         if (!status.Succeeded)
         {
@@ -861,6 +895,14 @@ public sealed class PortalCameraInterfaceResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
+        var expected = $"{Interface} published at {ObjectPath}";
+
+        if (await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
+        }
+
         var result = await _session
             .RunAsync("busctl", ["--user", "introspect", BusName, ObjectPath], cancellationToken)
             .ConfigureAwait(false);
@@ -878,7 +920,7 @@ public sealed class PortalCameraInterfaceResource : IResource
 
         return new ResourceObservation(
             published,
-            $"{Interface} published at {ObjectPath}",
+            expected,
             published
                 ? $"{Interface} is published"
                 : result.Succeeded

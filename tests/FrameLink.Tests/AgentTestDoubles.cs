@@ -587,6 +587,21 @@ internal sealed class FakeUserSession : IUserSession
         Owned.Add(path);
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// What <see cref="UserSessionGate"/> sees. Ready by default, so every test written before the
+    /// gate existed still describes a frame with a live session and keeps asserting the real
+    /// parsing; a test about the boot race sets it false and says so.
+    /// </summary>
+    public SessionReadiness Readiness { get; set; } = SessionReadiness.Up;
+
+    public int ReadinessProbes { get; private set; }
+
+    public Task<SessionReadiness> ReadinessAsync(CancellationToken cancellationToken)
+    {
+        ReadinessProbes++;
+        return Task.FromResult(Readiness);
+    }
 }
 
 /// <summary>A memory reading a test sets outright.</summary>

@@ -249,6 +249,12 @@ public sealed class ChromiumKioskEnabledResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
+        if (await UserSessionGate.NotSettledAsync(_session, "enabled", cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
+        }
+
         var result = await _session
             .RunAsync("systemctl", ["--user", "is-enabled", ChromiumKioskUnitResource.UnitName], cancellationToken)
             .ConfigureAwait(false);
@@ -365,6 +371,15 @@ public sealed class ChromiumKioskRunningResource : IResource
                 false,
                 "a running browser matching the unit",
                 $"{_unit.Path} declares no ExecStart to compare against");
+        }
+
+        // After the ExecStart compare, which reads a file and needs no session, and before the
+        // process check, which is the browser the session starts.
+        if (await UserSessionGate
+                .NotSettledAsync(_session, $"a running browser carrying all {declared.Count} declared arguments", cancellationToken)
+                .ConfigureAwait(false) is { } waiting)
+        {
+            return waiting;
         }
 
         var listed = await _processes.RunAsync("pgrep", ["-a", "chromium"], cancellationToken).ConfigureAwait(false);
