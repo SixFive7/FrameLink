@@ -2,6 +2,7 @@ using System.Net.Http.Json;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
 using System.Text.Json;
+using System.Threading.Channels;
 using FrameLink.Control;
 using FrameLink.Control.Authentication;
 using FrameLink.Control.Storage;
@@ -547,12 +548,23 @@ public sealed class ControlServer : IAsyncDisposable
 public sealed class TestAgent : IAsyncDisposable
 {
     private readonly ClientWebSocket _socket;
+    private readonly Channel<WireEnvelope> _inbound =
+        Channel.CreateUnbounded<WireEnvelope>(new UnboundedChannelOptions { SingleWriter = true });
+
+    private readonly CancellationTokenSource _reading;
+    private readonly Task _pump;
+    private int _answeredPings;
 
     private TestAgent(ClientWebSocket socket, string deviceId, HandshakeResult result)
     {
         _socket = socket;
         DeviceId = deviceId;
         Result = result;
+
+        // The read side starts here and never stops until the socket does. See PumpAsync for why
+        // it cannot be one receive per caller.
+        _reading = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        _pump = PumpAsync(_reading.Token);
     }
 
     /// <summary>The fingerprint this agent proved.</summary>
@@ -563,6 +575,17 @@ public sealed class TestAgent : IAsyncDisposable
 
     /// <summary>Whether the server left the socket open after answering.</summary>
     public bool IsOpen => _socket.State is WebSocketState.Open;
+
+    /// <summary>How many pings this agent has answered since it connected.</summary>
+    /// <remarks>
+    /// The unit a liveness test should measure survival in. Elapsed milliseconds are a proxy for
+    /// it that stops being accurate exactly when the machine is loaded, which is exactly when a
+    /// liveness assertion is most likely to be wrong for reasons that are not the code's fault.
+    /// </remarks>
+    public int AnsweredPings => Volatile.Read(ref _answeredPings);
+
+    /// <summary>True once the socket has closed and every frame it delivered has been read.</summary>
+    private bool InboundExhausted => _inbound.Reader.Completion.IsCompleted;
 
     /// <summary>Connects, sends a hello, answers the challenge and reads the verdict.</summary>
     public static async Task<TestAgent> ConnectAsync(
@@ -625,7 +648,15 @@ public sealed class TestAgent : IAsyncDisposable
         return new TestAgent(socket, deviceId, result);
     }
 
-    /// <summary>Reads the next envelope, or null if the socket closed within the timeout.</summary>
+    /// <summary>
+    /// Reads the next envelope, or null if none arrived within the timeout and none ever will.
+    /// </summary>
+    /// <remarks>
+    /// The timeout is taken against the queue the pump fills, never against the socket. Timing
+    /// out a read here is therefore an observation about traffic and nothing else — it leaves
+    /// the connection exactly as it found it, which is the assumption every caller of this
+    /// method was already making.
+    /// </remarks>
     public async Task<WireEnvelope?> ReceiveAsync(TimeSpan timeout)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(
@@ -634,36 +665,32 @@ public sealed class TestAgent : IAsyncDisposable
 
         try
         {
-            return await ReceiveAsync(_socket, deadline.Token);
+            return await _inbound.Reader.ReadAsync(deadline.Token);
         }
         catch (OperationCanceledException)
         {
             return null;
         }
-        catch (WebSocketException)
+        catch (ChannelClosedException)
         {
+            // The socket closed and everything it delivered has been read.
             return null;
         }
     }
 
     /// <summary>Waits for the socket to stop being open, or gives up.</summary>
+    /// <remarks>
+    /// A close only becomes visible once a receive observes it, and the pump is the only thing
+    /// receiving — so the close is awaited where it actually happens rather than polled for.
+    /// </remarks>
     public async Task<bool> WaitForCloseAsync(TimeSpan timeout)
     {
-        var deadline = DateTimeOffset.UtcNow + timeout;
-        while (DateTimeOffset.UtcNow < deadline)
+        try
         {
-            if (_socket.State is not WebSocketState.Open)
-            {
-                return true;
-            }
-
-            // A close only becomes visible once a receive observes it, which is precisely how
-            // a real agent finds out it was answered and hung up on.
-            if (await ReceiveAsync(TimeSpan.FromMilliseconds(150)) is null
-                && _socket.State is not WebSocketState.Open)
-            {
-                return true;
-            }
+            await _pump.WaitAsync(timeout, TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException)
+        {
         }
 
         return _socket.State is not WebSocketState.Open;
@@ -729,19 +756,62 @@ public sealed class TestAgent : IAsyncDisposable
     /// duration and asserting afterwards leaves the socket silent for however long the
     /// assertion takes, and a silent socket is precisely what the server is built to hang up
     /// on — so the assertion races the mechanism it is trying to prove benign.
+    /// A socket that goes away underneath it ends the loop quietly, so that the test's own
+    /// assertions report the failure rather than an exception thrown out of a background task.
     /// </remarks>
     public async Task AnswerPingsUntilAsync(CancellationToken cancellationToken)
     {
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            var envelope = await ReceiveAsync(TimeSpan.FromMilliseconds(100));
-            if (envelope is not null
-                && string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
+            while (!cancellationToken.IsCancellationRequested && !InboundExhausted)
             {
-                var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
-                await PongAsync(ping?.Sequence ?? 0);
+                var envelope = await ReceiveAsync(TimeSpan.FromMilliseconds(100));
+                if (envelope is not null
+                    && string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
+                {
+                    var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
+                    await PongAsync(ping?.Sequence ?? 0);
+                    Interlocked.Increment(ref _answeredPings);
+                }
             }
         }
+        catch (WebSocketException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    /// <summary>Waits until this agent has answered <paramref name="count"/> pings.</summary>
+    /// <remarks>
+    /// What a liveness test should wait for instead of sleeping. A fixed sleep asserts that the
+    /// machine was fast enough to fit the cycles into the window, because a loaded one completes
+    /// fewer of them and fails an assertion about the connection on the strength of it. Waiting
+    /// for the cycles themselves makes a slow machine slow rather than red, and every extra
+    /// millisecond it takes is extra silence the connection demonstrably survived.
+    /// </remarks>
+    public async Task<bool> WaitForAnsweredPingsAsync(int count, TimeSpan timeout)
+    {
+        var deadline = DateTimeOffset.UtcNow + timeout;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (AnsweredPings >= count)
+            {
+                return true;
+            }
+
+            // A torn-down socket delivers no further pings, so a genuine failure ends the wait
+            // where it happened rather than at the timeout.
+            if (InboundExhausted)
+            {
+                return false;
+            }
+
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
+
+        return AnsweredPings >= count;
     }
 
     /// <summary>
@@ -754,23 +824,33 @@ public sealed class TestAgent : IAsyncDisposable
         var others = new List<WireEnvelope>();
         var deadline = DateTimeOffset.UtcNow + duration;
 
-        while (DateTimeOffset.UtcNow < deadline)
+        try
         {
-            var envelope = await ReceiveAsync(TimeSpan.FromMilliseconds(100));
-            if (envelope is null)
+            while (DateTimeOffset.UtcNow < deadline && !InboundExhausted)
             {
-                continue;
-            }
+                var envelope = await ReceiveAsync(TimeSpan.FromMilliseconds(100));
+                if (envelope is null)
+                {
+                    continue;
+                }
 
-            if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
-            {
-                var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
-                await PongAsync(ping?.Sequence ?? 0);
+                if (string.Equals(envelope.Kind, ControlWire.KindPing, StringComparison.Ordinal))
+                {
+                    var ping = envelope.PayloadAs(ProtocolJson.Default.AgentPing);
+                    await PongAsync(ping?.Sequence ?? 0);
+                    Interlocked.Increment(ref _answeredPings);
+                }
+                else
+                {
+                    others.Add(envelope);
+                }
             }
-            else
-            {
-                others.Add(envelope);
-            }
+        }
+        catch (WebSocketException)
+        {
+        }
+        catch (OperationCanceledException)
+        {
         }
 
         return others;
@@ -783,7 +863,13 @@ public sealed class TestAgent : IAsyncDisposable
         {
             if (_socket.State is WebSocketState.Open)
             {
-                await _socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None);
+                // Output half only. CloseAsync waits for the peer's answering close, and waiting
+                // means receiving — which is the pump's job and cannot be done twice at once on
+                // one socket.
+                await _socket.CloseOutputAsync(
+                    WebSocketCloseStatus.NormalClosure,
+                    "done",
+                    CancellationToken.None);
             }
         }
         catch (WebSocketException)
@@ -793,7 +879,87 @@ public sealed class TestAgent : IAsyncDisposable
         {
         }
 
+        // The pump ends by itself as soon as the peer tears the connection down, which it does
+        // on seeing the close frame already flushed above. Cancelling is only the fallback for a
+        // peer that leaves the socket hanging, and it aborts nothing that is still needed.
+        try
+        {
+            await _pump.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            await _reading.CancelAsync();
+            await _pump;
+        }
+        catch (OperationCanceledException)
+        {
+            await _pump;
+        }
+
+        _reading.Dispose();
         _socket.Dispose();
+    }
+
+    /// <summary>
+    /// Drains the socket into <see cref="_inbound"/> for as long as the connection lives.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The read side has to be one uninterrupted loop, and this is the reason: cancelling a
+    /// <see cref="ClientWebSocket"/> receive does not abandon the read, it aborts the
+    /// connection. A "wait up to N milliseconds for a frame" built directly on the socket
+    /// therefore destroys the thing the caller is about to assert against — and only on the
+    /// runs where the frame happened to be late, which is what made it a flake rather than a
+    /// bug. Draining here and timing out against the channel keeps a timeout meaning "nothing
+    /// arrived", which is what every caller already assumed it meant.
+    /// </para>
+    /// <para>
+    /// Frames that do not decode are dropped rather than treated as a close, matching what the
+    /// server does with unreadable traffic on its side (§4.2).
+    /// </para>
+    /// </remarks>
+    private async Task PumpAsync(CancellationToken cancellationToken)
+    {
+        var buffer = new byte[16 * 1024];
+
+        try
+        {
+            while (true)
+            {
+                using var assembled = new MemoryStream();
+                WebSocketReceiveResult received;
+
+                do
+                {
+                    received = await _socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken);
+                    if (received.MessageType is WebSocketMessageType.Close)
+                    {
+                        return;
+                    }
+
+                    assembled.Write(buffer, 0, received.Count);
+                }
+                while (!received.EndOfMessage);
+
+                if (WireMessage.Decode(assembled.ToArray()) is { } envelope)
+                {
+                    await _inbound.Writer.WriteAsync(envelope, cancellationToken);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (WebSocketException)
+        {
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        finally
+        {
+            _inbound.Writer.TryComplete();
+        }
     }
 
     private static async Task SendAsync<TPayload>(

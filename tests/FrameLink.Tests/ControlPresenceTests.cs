@@ -83,9 +83,13 @@ public sealed class ControlPresenceTests
         using var answering = new CancellationTokenSource();
         var pump = agent.AnswerPingsUntilAsync(answering.Token);
 
-        // Four deadlines and about twenty-five pings. A healthy frame must not be disconnected
-        // by the very mechanism that exists to notice unhealthy ones.
-        await Task.Delay(TimeSpan.FromSeconds(2), Token);
+        // Four deadlines and twenty-five pings. A healthy frame must not be disconnected by the
+        // very mechanism that exists to notice unhealthy ones — and survival is counted in
+        // answered probes rather than in elapsed milliseconds, because those two are the same
+        // number only on an unloaded machine. Sleeping for two seconds instead would hand a busy
+        // one fewer cycles and read the shortfall as the connection having failed; waiting for
+        // the cycles makes it take longer and assert the same thing, over more silence.
+        var answered = await agent.WaitForAnsweredPingsAsync(25, TimeSpan.FromSeconds(30));
 
         // Both readings are taken while the frame is still answering, which is the whole point:
         // stopping the pump first would hand the assertion a 500 ms budget to complete an HTTP
@@ -97,8 +101,38 @@ public sealed class ControlPresenceTests
         await answering.CancelAsync();
         await pump;
 
+        Assert.True(answered, $"the frame answered only {agent.AnsweredPings} of twenty-five pings");
         Assert.True(stillOpen);
         Assert.True(online);
+    }
+
+    [Fact]
+    public async Task A_quiet_moment_on_the_socket_is_not_a_disconnection()
+    {
+        // The reproduction the fix above was written from, kept so it cannot come back. Waiting a
+        // while for a frame that does not arrive has to be an observation about traffic and
+        // nothing else. Implemented as a cancelled socket read it is instead an abort — cancelling
+        // a ClientWebSocket receive tears the connection down rather than abandoning the read — so
+        // every timed receive in this suite quietly held the power to kill the connection the test
+        // around it was about to assert against. It only fired when a frame was late, which is why
+        // it presented as a flake rather than as a failure.
+        await using var server = await ControlServer.StartAsync(
+            Password,
+            options => options with { PingInterval = TimeSpan.FromMinutes(10) });
+
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        await using var agent = await server.ConnectAgentAsync(key);
+        Assert.Equal(HandshakeStatus.Ok, agent.Result.Status);
+
+        // Drain the settings push, so the wait that follows genuinely finds an empty socket
+        // rather than a queued frame.
+        Assert.NotNull(await agent.ReceiveAsync(TimeSpan.FromSeconds(3)));
+
+        Assert.Null(await agent.ReceiveAsync(TimeSpan.FromMilliseconds(50)));
+        Assert.True(agent.IsOpen);
+        Assert.True(await server.WaitForDeviceAsync(deviceId, d => d.Online, TimeSpan.FromSeconds(3)));
     }
 
     [Fact]
