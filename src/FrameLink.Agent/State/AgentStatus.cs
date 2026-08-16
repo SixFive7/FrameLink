@@ -151,9 +151,12 @@ public sealed record AgentStatus
     /// </summary>
     /// <remarks>
     /// §2.7 bans blank screens, and on a stock image the screen is blank for reasons the agent
-    /// cannot fix until the panel overlay resource lands — 76th of 79 in the catalog's ordering,
-    /// because writing <c>config.txt</c> is brick-capable. Carrying the answer here is what lets
-    /// the one surface that <i>is</i> reachable say so.
+    /// cannot fix until the panel overlay resource lands. Decision 46 buys that back as far as it
+    /// can be bought: the catalog's ordering puts <c>boot.config.dtoverlay-waveshare-panel</c>
+    /// <b>3rd of 80</b>, ahead of adoption, so the dark window is three cycles rather than the
+    /// seventy-five §5.5's brick-capable-last default would have cost. Three is the floor and not
+    /// zero — nothing can be shown before the overlay lands — so the window still exists, and
+    /// carrying the answer here is what lets the one surface that <i>is</i> reachable say so.
     /// </remarks>
     public DisplayVisibility? ConsoleVisibility { get; init; }
 

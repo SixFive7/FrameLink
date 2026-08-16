@@ -166,22 +166,26 @@ public sealed record DeviceCatalogContext
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
 /// is the order a bare frame converges in, and it follows the catalog's own proposed ordering
-/// wherever the two can agree. Two places it deliberately does not.
+/// wherever the two can agree. One place it deliberately does not.
 /// </para>
 /// <para>
-/// The first is the display. §5.5 would schedule a <c>/boot/firmware</c> write last, and the
-/// catalog's ordering table puts the panel overlay 76th of 79, but a frame that provisions with a
-/// dark panel has no honesty mechanism at all — measured on the mule 2026-08-15, a stock image has
-/// no framebuffer and every console write succeeds invisibly. §2.7 wins for these two resources,
-/// and §5.5's other three mitigations pay for it (<see cref="BootPartitionGuard"/>). The two
-/// display resources depend on nothing else, which is the point: lighting the panel needs no
-/// package, no session and no adoption, and a pending frame has to be able to show its own
-/// fingerprint (§3.3).
+/// It is <c>journal.storage-persistent</c>, which the catalog schedules 28th and which runs here
+/// as early as it can instead. A volatile journal is what made the August 2026 failure chain
+/// invisible for days, and everything below it is worth having a record of.
 /// </para>
 /// <para>
-/// The second is <c>journal.storage-persistent</c>, which the catalog schedules 28th and which
-/// runs here as early as it can instead. A volatile journal is what made the August 2026 failure
-/// chain invisible for days, and everything below it is worth having a record of.
+/// <b>The display used to be the second, and is not one any more.</b> §5.5 would schedule a
+/// <c>/boot/firmware</c> write last, and this code put the two display resources at positions 2–3
+/// against that — because a frame that provisions with a dark panel has no honesty mechanism at
+/// all, measured on the mule 2026-08-15, where a stock image has no framebuffer and every console
+/// write succeeds invisibly. The catalog has since adopted the same carve-out as Exception 1 of
+/// its ordering table (decision 46), which schedules
+/// <c>boot.config.dtoverlay-waveshare-panel</c> <b>3rd of 80</b> and
+/// <c>boot.cmdline.fbcon-rotate</c> 2nd, ahead of <c>agent.keypair</c> and <c>agent.adoption</c>.
+/// So the two now agree and the deviation is against §5.5 alone, whose other three mitigations pay
+/// for it (<see cref="BootPartitionGuard"/>). The two display resources depend on nothing else,
+/// which is the point: lighting the panel needs no package, no session and no adoption, and a
+/// pending frame has to be able to show its own fingerprint (§3.3).
 /// </para>
 /// <para>
 /// <b>The three agent roots declare no edges, and that is not an oversight.</b> The catalog gives

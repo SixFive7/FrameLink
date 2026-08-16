@@ -8,21 +8,27 @@ namespace FrameLink.Agent.Resources;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Scheduled early by explicit decision, against §5.5's default.</b> The catalog's proposed
-/// ordering puts this 76th of 79 because writing <c>config.txt</c> is brick-capable and §5.5
-/// schedules brick-capable resources last. Measured on the mule 2026-08-15, that ordering has a
+/// <b>Scheduled early by explicit decision, against §5.5's default.</b> §5.5 schedules
+/// brick-capable resources last and writing <c>config.txt</c> is brick-capable, so the literal
+/// rule would have put this in the final phase — 77th to 80th of 80, where every other
+/// <c>/boot/firmware</c> writer still sits. Measured on the mule 2026-08-15, that ordering has a
 /// cost the catalog had already flagged and this makes concrete: on a stock image there is no
 /// framebuffer at all — <c>config.txt</c> carries only <c>dtoverlay=vc4-kms-v3d</c>, both HDMI
 /// connectors read <c>disconnected</c>, there is no DSI connector, <c>/dev/fb0</c> does not
 /// exist and <c>/sys/class/backlight/</c> is empty — while <c>tty1</c> is nonetheless an active
 /// console, so every frame the agent writes succeeds and produces no pixels. Under the default
-/// ordering the panel would stay dark through nearly the whole of a one-to-two-hour provision,
-/// and §2.7's narration, which is the product's primary honesty mechanism, would narrate to
-/// nobody.
+/// ordering the panel would stay dark for roughly seventy-five of a bare provision's cycles —
+/// about half an hour of the ~30 minutes of reboot overhead the catalog re-derived from the
+/// measured 22.3 s round trip — and §2.7's narration, which is the product's primary honesty
+/// mechanism, would narrate to nobody.
 /// </para>
 /// <para>
-/// The user weighed that against the brick risk and chose §2.7. What makes the early slot
-/// affordable is §5.5's other three mitigations, which are implemented here rather than
+/// The user weighed that against the brick risk and chose §2.7, and the catalog has since adopted
+/// the same carve-out as Exception 1 of its ordering table (decision 46): this resource is
+/// scheduled <b>3rd of 80</b> there, with <c>boot.cmdline.fbcon-rotate</c> 2nd, so the dark window
+/// is three cycles and that is the floor rather than a shortfall — nothing can be shown before
+/// this lands. What makes the early slot affordable is §5.5's other three mitigations, which are
+/// implemented here rather than
 /// assumed: the content is a known-good literal, the edit is validated as
 /// minimal before it is written (<see cref="BootConfigText.ValidateConfig"/>), the previous
 /// <c>config.txt</c> is copied to the FAT32 boot partition where a card reader can find it, and
