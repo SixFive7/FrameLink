@@ -4,8 +4,8 @@ namespace FrameLink.Agent.Reconcile;
 
 /// <summary>The status vocabulary of §2.3.</summary>
 /// <remarks>
-/// All seven are reachable as of M2. The paths are worth naming because several of them only
-/// exist in combination: <see cref="AwaitingReboot"/> requires the journal, <see cref="Blocked"/>
+/// All six are reachable as of M2. The paths are worth naming because several of them only exist
+/// in combination: <see cref="AwaitingReboot"/> requires the journal, <see cref="Blocked"/>
 /// requires the DAG, and <see cref="Escalated"/> is distinguished from <see cref="Degraded"/>
 /// only by whether the notification actually reached the Fleet Manager rather than the frame's
 /// offline buffer.
@@ -28,10 +28,41 @@ public enum ResourceStatusKind
     Blocked,
 
     /// <summary>The operator has been notified and offered retry or a shell (§2.5).</summary>
+    /// <remarks>
+    /// <b>The terminal status. There is no rung below it</b> (§2.5 rung 6, decision 66). Either a
+    /// human retries after fixing the cause — from the Fleet Manager or from the frame's own screen
+    /// — or the resource stays here. The <c>Halted</c> that used to sit below this is gone from the
+    /// design outright: it was the one state nothing recovered from on its own, the action that
+    /// cleared it was the same retry that clears this one, and it never had a single scope — §2.5
+    /// called it device-level while this enum defined it per resource.
+    /// </remarks>
     Escalated,
+}
 
-    /// <summary>Escalated more than once; the agent has stopped touching it (§2.5).</summary>
-    Halted,
+/// <summary>Questions about a <see cref="ResourceStatusKind"/> that more than one layer asks.</summary>
+public static class ResourceStatuses
+{
+    /// <summary>
+    /// Whether the loop has stopped touching this resource — §2.5 rung 2's "stop".
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Written as an exclusion rather than as a list of the statuses that mean "gave up", and that
+    /// is deliberate: it fails in the safe direction. A status nobody has thought about yet is read
+    /// as stopped, which puts a still screen and a contact sentence in front of a person, rather
+    /// than as progress, which animates a bar for work that may not be happening.
+    /// </para>
+    /// <para>
+    /// The four excluded statuses are the four the loop can be in while it is still trying:
+    /// verified, working, written and awaiting its verifying reboot, and waiting on a dependency.
+    /// Everything beyond those is produced <i>only</i> at budget exhaustion.
+    /// </para>
+    /// </remarks>
+    public static bool HasGivenUp(this ResourceStatusKind kind) =>
+        kind is not (ResourceStatusKind.InSync
+            or ResourceStatusKind.Progressing
+            or ResourceStatusKind.AwaitingReboot
+            or ResourceStatusKind.Blocked);
 }
 
 /// <summary>
@@ -169,8 +200,7 @@ public sealed record ResourceStatus
         ResourceStatusKind.AwaitingReboot => ResourceStatusNames.AwaitingReboot,
         ResourceStatusKind.Degraded => ResourceStatusNames.Degraded,
         ResourceStatusKind.Blocked => ResourceStatusNames.Blocked,
-        ResourceStatusKind.Escalated => ResourceStatusNames.Escalated,
-        _ => ResourceStatusNames.Halted,
+        _ => ResourceStatusNames.Escalated,
     };
 
     /// <summary>Turns this into the shape the Fleet Manager stores (§3.5).</summary>

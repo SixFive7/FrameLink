@@ -72,7 +72,7 @@ export interface DeviceView {
  * nothing, so a healthy fleet rendered entirely as "Online — degraded". `unknown` is the
  * answer for anything outside the vocabulary, and `unknown` is explicitly not a problem.
  */
-export type AgentHealth = 'unknown' | 'in-sync' | 'working' | 'degraded' | 'halted';
+export type AgentHealth = 'unknown' | 'in-sync' | 'working' | 'degraded';
 
 /** `DeviceListResponse` — `GET /api/devices`. */
 export interface DeviceListResponse {
@@ -109,8 +109,7 @@ export type ResourceStatus =
 	| 'awaiting-reboot'
 	| 'degraded'
 	| 'blocked'
-	| 'escalated'
-	| 'halted';
+	| 'escalated';
 
 /** `LoopStateNames` — what the reconciliation loop as a whole is doing. */
 export type LoopState =
@@ -118,11 +117,10 @@ export type LoopState =
 	| 'reconciling'
 	| 'awaiting-reboot'
 	| 'backing-off'
-	| 'escalated'
-	| 'halted';
+	| 'escalated';
 
 /** `DeviceEventKinds` — what kind of thing happened, on the `events` channel of §4.1. */
-export type DeviceEventKind = 'drift' | 'escalation' | 'boot' | 'halted' | 'converged' | 'display';
+export type DeviceEventKind = 'drift' | 'escalation' | 'boot' | 'converged' | 'display';
 
 /** `ResourceReport` — one resource's standing. Frozen protocol type. */
 export interface ResourceReport {

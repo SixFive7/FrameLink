@@ -15,8 +15,8 @@ namespace FrameLink.Control.Endpoints;
 /// </para>
 /// <para>
 /// <b>Two routes, one verb.</b> <c>POST /api/devices/{id}/retry</c> is the frame-level action an
-/// operator reaches for when a device row says it has stopped reconciling — rung 4 halts the
-/// device, and a halted device can have several resources that gave up, so asking about each one
+/// operator reaches for when a device row says it has stopped reconciling — rung 4 stops the whole
+/// frame, and a stopped frame can have several resources that gave up, so asking about each one
 /// would be a list the operator has to reconstruct from a screen that already knows it.
 /// <c>POST /api/devices/{id}/retry/{resource}</c> is the same verb aimed at one escalation, which
 /// is what the reconcile screen renders a button beside. The agent decides nothing differently

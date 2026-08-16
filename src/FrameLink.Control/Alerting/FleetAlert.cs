@@ -45,7 +45,13 @@ public static class AlertKinds
     public const string CallServerDown = "call-server-down";
 
     /// <summary>A frame has stopped reconciling and is waiting for a person (§2.5 rung 4).</summary>
-    public const string DeviceHalted = "device-halted";
+    /// <remarks>
+    /// Spelled <c>device-stopped</c> rather than <c>device-halted</c> since decision 66 removed
+    /// <c>Halted</c>. An open row carrying the old key simply leaves the computed set on the next
+    /// pass and is delivered as resolved, which is what level-triggered alerting does with any
+    /// condition that stops being true.
+    /// </remarks>
+    public const string DeviceStopped = "device-stopped";
 }
 
 /// <summary>

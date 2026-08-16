@@ -193,7 +193,7 @@ export const api = {
 	 * `POST /api/devices/{id}/retry[/{resource}]` — §2.5 rung 3's retry.
 	 *
 	 * With a resource, one escalation's attempt budget; without, every resource that gave up,
-	 * which is what a frame halted under rung 4 needs because several can have given up at once.
+	 * which is what a frame stopped under rung 4 needs because several can have given up at once.
 	 *
 	 * 409 `offline` is a real outcome and not an error to swallow: nothing replays a retry on
 	 * reconnect — the budget lives on the frame, not here — so an operator whose click went

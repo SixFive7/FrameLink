@@ -189,9 +189,9 @@ public sealed class FleetWatch(
                 found[expiring.Key] = expiring;
             }
 
-            if (await HaltedAsync(device, cancellationToken).ConfigureAwait(false) is { } halted)
+            if (await StoppedAsync(device, cancellationToken).ConfigureAwait(false) is { } stopped)
             {
-                found[halted.Key] = halted;
+                found[stopped.Key] = stopped;
             }
         }
 
@@ -356,30 +356,37 @@ public sealed class FleetWatch(
     /// Rule 4 — a frame has stopped reconciling and is waiting for a person.
     /// </summary>
     /// <remarks>
-    /// Decision 49 makes <c>Halted</c> device-level: one resource exhausting its escalation budget
-    /// stops the loop touching everything on that frame, across process restarts, until somebody
-    /// intervenes. That is by construction a state nothing gets out of on its own — so it is the
-    /// one loop state that must reach a person rather than wait to be noticed on a console. The
-    /// other five are transient and the console already renders them live (§3.5).
+    /// <para>
+    /// <b>Re-keyed onto the terminal escalation by decision 66</b>, which removes <c>Halted</c>
+    /// from the design. It used to fire on <c>LoopStateNames.Halted</c>, and leaving it there would
+    /// have silently deleted the alert rather than changed it — a rule that can never fire is
+    /// exactly the shape of the 2026-07-23 post-mortem this whole component exists for.
+    /// </para>
+    /// <para>
+    /// The condition it watches is unchanged in substance. Decision 68 makes an escalation stop
+    /// the whole frame — nothing further is observed, acted on or rebooted for until a human
+    /// retries — so this is still by construction a state nothing gets out of on its own, and still
+    /// the one loop state that must reach a person rather than wait to be noticed on a console. The
+    /// others are transient and the console already renders them live (§3.5).
+    /// </para>
     /// </remarks>
-    private async Task<FleetAlert?> HaltedAsync(DeviceRecord device, CancellationToken cancellationToken)
+    private async Task<FleetAlert?> StoppedAsync(DeviceRecord device, CancellationToken cancellationToken)
     {
         var report = await telemetry.GetReportAsync(device.DeviceId, cancellationToken).ConfigureAwait(false);
 
-        if (report is null || !string.Equals(report.LoopState, LoopStateNames.Halted, StringComparison.Ordinal))
+        if (report is null || !string.Equals(report.LoopState, LoopStateNames.Escalated, StringComparison.Ordinal))
         {
             return null;
         }
 
         var resource = report.Resources
-            .FirstOrDefault(candidate => candidate.Status is ResourceStatusNames.Halted
-                or ResourceStatusNames.Escalated
+            .FirstOrDefault(candidate => candidate.Status is ResourceStatusNames.Escalated
                 or ResourceStatusNames.Degraded);
 
         return new FleetAlert
         {
-            Key = AlertKinds.DeviceHalted + ":" + device.DeviceId,
-            Kind = AlertKinds.DeviceHalted,
+            Key = AlertKinds.DeviceStopped + ":" + device.DeviceId,
+            Kind = AlertKinds.DeviceStopped,
             Severity = AlertSeverity.Critical,
             DeviceId = device.DeviceId,
             DeviceName = device.DisplayName,

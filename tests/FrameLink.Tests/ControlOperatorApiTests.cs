@@ -219,7 +219,6 @@ public sealed class ControlOperatorApiTests
     [InlineData("Blocked(kiosk.stack)", AgentHealth.Working)]
     [InlineData("Blocked(the Fleet Manager)", AgentHealth.Working)]
     [InlineData("Escalated(firmware)", AgentHealth.Degraded)]
-    [InlineData("Halted(firmware)", AgentHealth.Halted)]
     [InlineData("degraded", AgentHealth.Degraded)]
     [InlineData(null, AgentHealth.Unknown)]
     [InlineData("", AgentHealth.Unknown)]

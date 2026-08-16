@@ -569,7 +569,7 @@ public sealed record AlertView
     public required string Key { get; init; }
 
     /// <summary>One of <c>device-offline</c>, <c>call-token-expiring</c>, <c>call-server-down</c>,
-    /// <c>device-halted</c>.</summary>
+    /// <c>device-stopped</c>.</summary>
     public required string Kind { get; init; }
 
     /// <summary><c>warning</c> or <c>critical</c>.</summary>

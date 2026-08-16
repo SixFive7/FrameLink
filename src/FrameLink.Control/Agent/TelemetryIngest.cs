@@ -78,7 +78,6 @@ public sealed class TelemetryIngest(
                 .ConfigureAwait(false);
 
             if (string.Equals(deviceEvent.Kind, DeviceEventKinds.Escalation, StringComparison.Ordinal)
-                || string.Equals(deviceEvent.Kind, DeviceEventKinds.Halted, StringComparison.Ordinal)
                 || string.Equals(deviceEvent.Kind, DeviceEventKinds.Display, StringComparison.Ordinal))
             {
                 // §2.5 rung 3 is the Fleet Manager telling the operator. Home Assistant and SMTP

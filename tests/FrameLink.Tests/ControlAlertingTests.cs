@@ -457,14 +457,20 @@ public sealed class ControlAlertingTests
     }
 
     /// <summary>
-    /// Rule 4: a halted frame reaches a person, because decision 49 makes that the one state
+    /// Rule 4: a stopped frame reaches a person, because decision 68 makes that the one state
     /// nothing recovers from on its own.
     /// </summary>
+    /// <remarks>
+    /// Re-keyed from <c>LoopStateNames.Halted</c> onto the terminal escalation by decision 66.
+    /// Worth a test of its own rather than a rename: leaving the rule on a loop state nothing
+    /// produces any more would have deleted the alert instead of changing it, silently, which is
+    /// the exact shape of the failure this whole component exists for.
+    /// </remarks>
     [Fact]
-    public async Task AHaltedFrameIsAlertedOn()
+    public async Task AStoppedFrameIsAlertedOn()
     {
         using var fixture = new AlertFixture();
-        var deviceId = await fixture.AdoptAsync("device-halted", "Hallway");
+        var deviceId = await fixture.AdoptAsync("device-stopped", "Hallway");
 
         await fixture.Telemetry.RecordReportAsync(
             new ReconcileReport
@@ -472,7 +478,7 @@ public sealed class ControlAlertingTests
                 DeviceId = deviceId,
                 Sequence = 1,
                 GeneratedUtc = fixture.Clock.GetUtcNow(),
-                LoopState = LoopStateNames.Halted,
+                LoopState = LoopStateNames.Escalated,
                 InSync = 40,
                 Drifted = 1,
                 Blocked = 3,
@@ -482,7 +488,7 @@ public sealed class ControlAlertingTests
                     new ResourceReport
                     {
                         Name = "display.dsi2-overlay",
-                        Status = ResourceStatusNames.Halted,
+                        Status = ResourceStatusNames.Escalated,
                         Delta = "expected dtoverlay=vc4-kms-dsi-waveshare-panel, observed nothing",
                         Attempts = 3,
                     },
@@ -491,7 +497,7 @@ public sealed class ControlAlertingTests
             Token);
 
         var found = await fixture.Watch.EvaluateAsync(fixture.Clock.GetUtcNow(), Token);
-        var alert = found[AlertKinds.DeviceHalted + ":" + deviceId];
+        var alert = found[AlertKinds.DeviceStopped + ":" + deviceId];
 
         Assert.Equal(AlertSeverity.Critical, alert.Severity);
         Assert.Contains("display.dsi2-overlay", alert.Detail, StringComparison.Ordinal);
@@ -499,10 +505,10 @@ public sealed class ControlAlertingTests
     }
 
     /// <summary>
-    /// A converged frame produces no halt alert, so rule 4 is not simply "any report".
+    /// A converged frame produces no stop alert, so rule 4 is not simply "any report".
     /// </summary>
     [Fact]
-    public async Task AConvergedFrameRaisesNoHaltAlert()
+    public async Task AConvergedFrameRaisesNoStopAlert()
     {
         using var fixture = new AlertFixture();
         var deviceId = await fixture.AdoptAsync("device-green");
@@ -523,7 +529,7 @@ public sealed class ControlAlertingTests
             Token);
 
         Assert.DoesNotContain(
-            AlertKinds.DeviceHalted + ":" + deviceId,
+            AlertKinds.DeviceStopped + ":" + deviceId,
             (await fixture.Watch.EvaluateAsync(fixture.Clock.GetUtcNow(), Token)).Keys);
     }
 

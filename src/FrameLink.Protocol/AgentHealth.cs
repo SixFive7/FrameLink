@@ -39,11 +39,10 @@ public static class AgentResourceStatus
     /// </remarks>
     public const string Blocked = "Blocked";
 
-    /// <summary>The operator has been notified (§2.5 rung 3).</summary>
+    /// <summary>
+    /// The operator has been notified (§2.5 rung 3). <b>The last one; nothing sits below it.</b>
+    /// </summary>
     public const string Escalated = "Escalated";
-
-    /// <summary>Given up on, deliberately (§2.5 rung 4).</summary>
-    public const string Halted = "Halted";
 }
 
 /// <summary>
@@ -117,8 +116,7 @@ public static class AgentHealth
     /// <summary>Something is wrong and named: degraded or escalated.</summary>
     public const string Degraded = "degraded";
 
-    /// <summary>Given up on. The operator has been told more than once (§2.5).</summary>
-    public const string Halted = "halted";
+
 
     /// <summary>Composes a self-report: a vocabulary head, then free-text detail.</summary>
     /// <param name="status">One of the <see cref="AgentResourceStatus"/> terms.</param>
@@ -159,7 +157,6 @@ public static class AgentHealth
                 || Is(head, AgentResourceStatus.Blocked) ? Working
             : Is(head, AgentResourceStatus.Degraded)
                 || Is(head, AgentResourceStatus.Escalated) ? Degraded
-            : Is(head, AgentResourceStatus.Halted) ? Halted
             : Unknown;
 
         static bool Is(ReadOnlySpan<char> head, string term) =>

@@ -54,7 +54,7 @@ public sealed record ReconcileNarration
     /// <summary>Which attempt this is (§2.7 item 5).</summary>
     public int Attempt { get; init; }
 
-    /// <summary>The budget the attempt counts against, so the screen can say "of 5".</summary>
+    /// <summary>The budget the attempt counts against, so the screen can say "of 3".</summary>
     public int AttemptBudget { get; init; }
 
     /// <summary>How long the current backoff runs (§2.7 item 6).</summary>
@@ -72,13 +72,9 @@ public sealed record ReconcileNarration
     /// <summary>Whether the Fleet Manager has actually received the escalation (§2.5).</summary>
     public bool AdminNotified { get; init; }
 
-    /// <summary>Whether this device has stopped reconciling (§2.5 rung 4).</summary>
-    public bool Halted { get; init; }
-
     /// <summary>Whether anything here is worth putting on the screen.</summary>
     public bool IsActive =>
         Countdown is not null
-        || Halted
         || Escalations > 0
         || Attempt > 0
         || Resource is { Length: > 0 };
@@ -95,11 +91,6 @@ public sealed record ReconcileNarration
     /// frame's offline buffer. §2.3 makes that the only thing distinguishing <c>Escalated</c> from
     /// <c>Degraded</c>, and it changes what the person in front of the frame should do: wait, or
     /// go and tell somebody themselves.
-    /// </para>
-    /// <para>
-    /// <b>The <c>Halted</c> branch is gone with the state</b> (decision 66). <see cref="Halted"/>
-    /// itself remains a field because the loop still writes it; nothing renders it, and when the
-    /// loop stops producing it this property is already correct.
     /// </para>
     /// </remarks>
     public string? EscalationLine =>

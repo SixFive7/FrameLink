@@ -16,9 +16,15 @@
  * find yourself wanting to *reject* a key because it is not in this list, stop — that is the
  * exact hard-coding §3.4 rules out.
  *
- * The names below are drawn from the areas §3.4 enumerates: connection values (identity,
- * room, LiveKit, Immich), audio, display, slideshow, locale and time zone, countdown
- * duration and call room.
+ * **What is not optional is that the keys here are the keys something reads.** Nine of the
+ * nineteen entries this file used to carry were read by nothing at all: `immich.url` against the
+ * agent's `immich.serverUrl`, `audio.volume` against `audio.playbackVolume`,
+ * `slideshow.intervalSeconds` against `slideshow.interval`, `locale.timezone` against
+ * `locale.timeZone`, and five — `call.autoAnswer`, three `display.*` keys and `update.enabled` —
+ * naming features nothing implements. An operator typing the key the interface suggested set a
+ * value no agent would ever read, and nothing anywhere said so. `ControlSettingsCatalogTests`
+ * now asserts every key here appears as a literal in the agent's or the server's own source, so
+ * this class of drift fails the suite instead of failing silently on a frame.
  */
 
 export type SettingKind = 'text' | 'secret' | 'number' | 'url' | 'duration' | 'boolean' | 'time';
@@ -47,7 +53,7 @@ export const SETTING_GROUPS = [
 ] as const;
 
 export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
-	'immich.url': {
+	'immich.serverUrl': {
 		label: 'Immich server URL',
 		hint: 'Where the photo library lives. Every frame reads its slideshow from here.',
 		kind: 'url',
@@ -67,12 +73,33 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Photos',
 		example: 'Family'
 	},
-	'slideshow.intervalSeconds': {
+	'slideshow.interval': {
 		label: 'Photo interval',
 		hint: 'Seconds each photo stays on screen before the next one.',
 		kind: 'duration',
 		group: 'Photos',
 		example: '30'
+	},
+	'slideshow.url': {
+		label: 'Slideshow address',
+		hint:
+			'The full slideshow address the frame opens, query string and all. Leave it unset ' +
+			'unless you know you need something other than the album above.',
+		kind: 'url',
+		group: 'Photos'
+	},
+	'slideshow.offlineMode': {
+		label: 'Keep photos for offline',
+		hint: 'Whether the frame caches photos so it keeps showing them with the library down.',
+		kind: 'text',
+		group: 'Photos'
+	},
+	'slideshow.offlineAssetCount': {
+		label: 'How many to keep',
+		hint: 'How many photos the frame caches for the offline case above.',
+		kind: 'number',
+		group: 'Photos',
+		example: '100'
 	},
 	'call.room': {
 		label: 'Call room',
@@ -83,41 +110,21 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Calls',
 		example: 'huisman'
 	},
-	'call.autoAnswer': {
-		label: 'Answer automatically',
-		hint: 'The viewer never presses anything to be joined. Leave this on.',
-		kind: 'boolean',
-		group: 'Calls'
-	},
-	'display.backlightOn': {
-		label: 'Screen on at',
-		hint: 'Local time the panel wakes up.',
-		kind: 'time',
-		group: 'Display',
-		example: '07:30'
-	},
-	'display.backlightOff': {
-		label: 'Screen off at',
-		hint: 'Local time the panel goes dark. Calls still wake it.',
-		kind: 'time',
-		group: 'Display',
-		example: '22:30'
-	},
-	'display.brightness': {
-		label: 'Brightness',
-		hint: 'Panel backlight, 0 to 100.',
+	'display.rotation': {
+		label: 'Screen rotation',
+		hint: 'How far round the picture is turned, in degrees.',
 		kind: 'number',
 		group: 'Display',
-		example: '80'
+		example: '180'
 	},
-	'audio.volume': {
+	'audio.playbackVolume': {
 		label: 'Speaker volume',
 		hint: 'Playback level for calls, 0 to 100.',
 		kind: 'number',
 		group: 'Audio',
 		example: '75'
 	},
-	'audio.micGain': {
+	'audio.captureVolume': {
 		label: 'Microphone gain',
 		hint: 'Capture level for the mic array, 0 to 100.',
 		kind: 'number',
@@ -159,11 +166,40 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Behaviour',
 		example: '06 12 34 56 78'
 	},
-	'update.enabled': {
-		label: 'Automatic updates',
-		hint: 'Whether the agent converges on the version this server serves. On by default.',
-		kind: 'boolean',
+	'updates.osSecurityAuto': {
+		label: 'Debian security updates',
+		hint:
+			'Whether the frame installs Debian security updates on its own. On unless you turn it ' +
+			'off, and turning it off is a decision to make deliberately.',
+		kind: 'text',
 		group: 'Behaviour'
+	},
+	'updates.osUpgradePolicy': {
+		label: 'Debian update scope',
+		hint: 'Which Debian updates the frame takes. Security-only unless you widen it.',
+		kind: 'text',
+		group: 'Behaviour'
+	},
+	'logging.journalMaxUse': {
+		label: 'Journal size cap',
+		hint: 'How much disk the frame lets its own log take before it rolls the oldest away.',
+		kind: 'text',
+		group: 'Behaviour',
+		example: '64M'
+	},
+	'power.cpuGovernor': {
+		label: 'CPU governor',
+		hint: 'How aggressively the frame clocks its processor.',
+		kind: 'text',
+		group: 'Behaviour',
+		example: 'performance'
+	},
+	'device.hostname': {
+		label: 'Hostname',
+		hint: 'The name this frame answers to on the household network.',
+		kind: 'text',
+		group: 'Behaviour',
+		example: 'framelink-hallway'
 	},
 	'packages.reportInterval': {
 		label: 'Package check interval',
@@ -174,7 +210,7 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Behaviour',
 		example: '06:00:00'
 	},
-	'locale.timezone': {
+	'locale.timeZone': {
 		label: 'Time zone',
 		hint: 'IANA zone name. Drives the backlight schedule and every clock on the frame.',
 		kind: 'text',
@@ -187,6 +223,20 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		kind: 'text',
 		group: 'Locale',
 		example: 'nl-NL'
+	},
+	'locale.keyboard': {
+		label: 'Keyboard layout',
+		hint: 'Which layout a keyboard plugged into the frame uses.',
+		kind: 'text',
+		group: 'Locale',
+		example: 'us'
+	},
+	'locale.wifiCountry': {
+		label: 'Wi-Fi country',
+		hint: 'Two-letter country code. The radio needs it to pick legal channels and power.',
+		kind: 'text',
+		group: 'Locale',
+		example: 'NL'
 	}
 };
 

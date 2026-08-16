@@ -245,7 +245,7 @@ public sealed class AgentDisplayPanelTests
     public void The_dependency_between_the_two_display_resources_runs_one_way_only()
     {
         // Stated as a property of the resources rather than of one scenario: the overlay depends
-        // on nothing at all, so there is no state of the rotation — drifted, degraded, halted —
+        // on nothing at all, so there is no state of the rotation — drifted, degraded, escalated —
         // that can put the panel into Blocked.
         using var files = new TemporaryFiles();
         var guard = Guard(files, new MutableBootIdentity(), new RecordingLog());

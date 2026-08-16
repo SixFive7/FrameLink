@@ -33,7 +33,7 @@ namespace FrameLink.Agent.Resources;
 /// <para>
 /// <b>Why <c>POWER_OFF_ON_HALT</c> is worth asserting rather than assuming.</b> §5.1's smart-plug
 /// power-cycle harness reads a silent frame on a live relay, and with this setting a <c>halt</c>
-/// genuinely cuts power — so silence has three explanations and not two: booting, hung, or halted
+/// genuinely cuts power — so silence has three explanations and not two: booting, hung, or stopped
 /// and drawing nothing. A frame whose value moved would make the harness quietly wrong about which
 /// of the three it was looking at.
 /// </para>

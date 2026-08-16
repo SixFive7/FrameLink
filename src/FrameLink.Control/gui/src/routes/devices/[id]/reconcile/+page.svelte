@@ -126,7 +126,7 @@
 	 * reading a delta with nothing to press.
 	 *
 	 * Per resource, because that is what this card is about. The frame-wide form exists on the
-	 * API for a device halted under rung 4 with several resources given up at once; here the
+	 * API for a device stopped under rung 4 with several resources given up at once; here the
 	 * operator is looking at one fault with its blast radius drawn underneath it, so the button
 	 * asks about that one and the dependents follow on their own — a blocked resource has spent
 	 * no attempt and has no budget to reset.

@@ -113,7 +113,7 @@ internal sealed class ReconcileHarness : IDisposable
         {
             outcome = await PassAsync();
 
-            if (outcome.Result is PassResult.Converged or PassResult.Halted or PassResult.Restarting)
+            if (outcome.Result is PassResult.Converged or PassResult.Restarting)
             {
                 return outcome;
             }

@@ -35,7 +35,7 @@ public enum ServerAnswer
     /// </summary>
     /// <remarks>
     /// A real answer, and it fails the adoption resource exactly as it always has: the frame acts
-    /// on it, cannot verify it, and walks §2.5's ladder to <c>Halted</c> if it keeps not being
+    /// on it, cannot verify it, and walks §2.5's ladder to <c>Escalated</c> if it keeps not being
     /// adopted. Nothing about this path changes.
     /// </remarks>
     Rejected = 1,

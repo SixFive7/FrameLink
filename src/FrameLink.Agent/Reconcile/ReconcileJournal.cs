@@ -73,8 +73,6 @@ public sealed record ResourceLedgerEntry
     /// </remarks>
     public bool EscalationNotified { get; init; }
 
-    /// <summary>Set once this resource has stopped the whole device (§2.5 rung 4).</summary>
-    public bool Halted { get; init; }
 
     /// <summary>When the backoff expires and the next attempt is allowed.</summary>
     public DateTimeOffset? NextAttemptUtc { get; init; }

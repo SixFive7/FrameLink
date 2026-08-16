@@ -8,10 +8,16 @@ namespace FrameLink.Tests;
 /// give up</b>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Every rung is reached here by a resource that genuinely never converges, not by forcing a
 /// status: retry with a growing delay, budget exhausted → <c>Degraded</c> with the exact delta
-/// and attempt count, notification → <c>Escalated</c>, operator retry then a second exhaustion →
-/// <c>Halted</c> for the device.
+/// and attempt count, notification → <c>Escalated</c>, and the whole pass stopping around it.
+/// </para>
+/// <para>
+/// <c>Escalated</c> is the last rung (decision 66). A second exhaustion after a retry produces
+/// another escalation and not a different, deader state, which is the property several of these
+/// tests are really about: there has to be exactly one way back, and it has to keep working.
+/// </para>
 /// </remarks>
 public sealed class AgentEscalationTests
 {
@@ -19,7 +25,6 @@ public sealed class AgentEscalationTests
     {
         Countdown = TimeSpan.Zero,
         AttemptBudget = 3,
-        EscalationLimit = 2,
         InitialBackoff = TimeSpan.FromSeconds(30),
         BackoffCap = TimeSpan.FromMinutes(30),
     };
@@ -169,11 +174,12 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
-    public async Task A_second_exhaustion_after_the_operator_retries_halts_the_device()
+    public async Task A_second_exhaustion_after_a_retry_escalates_again_rather_than_reaching_a_deader_state()
     {
-        // §2.5 rung 4. Halted is only reachable through rung 3's retry, and that is deliberate:
-        // without an operator asking for another go, "stop touching it" would never be undone and
-        // a second exhaustion could not happen.
+        // Decision 66. There used to be a rung below this — Halted — reachable only through a
+        // retry, and it bought nothing: the action that cleared it was the same retry that clears
+        // an escalation, so the second state added no recovery path and one more way for a frame
+        // to be stuck. A frame that gives up twice is a frame that has given up, twice.
         var resource = Broken();
         using var harness = new ReconcileHarness(Options, resource) { Telemetry = { Connected = true } };
 
@@ -183,29 +189,55 @@ public sealed class AgentEscalationTests
         harness.Loop.ResetBudget("broken");
         var outcome = await harness.ConvergeAsync();
 
-        Assert.Equal(PassResult.Halted, outcome.Result);
-        Assert.Equal(ResourceStatusKind.Halted, ReconcileHarness.StatusOf(outcome, "broken").Kind);
-        Assert.True(harness.Loop.IsHalted);
-        Assert.NotEmpty(harness.Telemetry.OfKind(DeviceEventKinds.Halted));
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(ResourceStatusKind.Escalated, ReconcileHarness.StatusOf(outcome, "broken").Kind);
+        Assert.True(harness.Loop.HasStopped);
+
+        // Twice on the record, so the history is not lost with the state.
+        Assert.Equal(2, ReconcileJournal.EntryFor(harness.Journal.Read(), "broken").Escalations);
+
+        // And still recoverable, which is the whole argument for removing the rung below.
+        harness.Loop.ResetBudget("broken");
+        Assert.False(harness.Loop.HasStopped);
     }
 
     [Fact]
-    public async Task A_device_wide_retry_clears_every_resource_that_gave_up()
+    public void A_device_wide_retry_clears_every_resource_that_gave_up_and_nothing_else()
     {
-        // Rung 4 halts the *device*, and a halted device can have more than one resource that gave
-        // up — the halt report deliberately lists all of them, "because clearing one halt while
-        // another remains would otherwise look like it had done nothing". This is the verb that
-        // matches that noun, and it is what the Fleet Manager's retry sends when the operator is
-        // looking at a frame rather than at a setting.
-        var first = Broken("first");
-        var second = Broken("second");
-        var healthy = new ScriptedResource("healthy", "want", "want");
-        using var harness = new ReconcileHarness(Options, first, healthy, second)
-        {
-            Telemetry = { Connected = true },
-        };
+        // The device-wide form of the retry, and what it is for after decision 68: two resources
+        // can no longer give up in the same pass, because the first one to give up stops the pass.
+        // A frame can still carry more than one — a ledger written by an earlier build, or by a
+        // catalog whose ordering has since changed — and the whole point of this verb is that an
+        // operator looking at a stopped frame asks it to try again without having to name each
+        // setting that contributed. Clearing one while another remained would look like it had
+        // done nothing at all.
+        //
+        // The ledger is written rather than driven, deliberately: driving it is exactly what
+        // decision 68 now prevents, and a test that drove it would be asserting the old behaviour
+        // through the new one.
+        using var harness = new ReconcileHarness(
+            Options,
+            Broken("first"),
+            new ScriptedResource("healthy", "want", "want"),
+            Broken("second"));
 
-        await harness.ConvergeAsync();
+        harness.Journal.Update(state => ReconcileJournal.WithEntry(
+            ReconcileJournal.WithEntry(
+                ReconcileJournal.WithEntry(
+                    state,
+                    ReconcileJournal.EntryFor(state, "first") with
+                    {
+                        Attempts = Options.AttemptBudget,
+                        Escalations = 1,
+                        Delta = "expected 'want', observed 'have-not'",
+                    }),
+                ReconcileJournal.EntryFor(state, "healthy") with { Attempts = 1 }),
+            ReconcileJournal.EntryFor(state, "second") with
+            {
+                Attempts = Options.AttemptBudget,
+                Escalations = 1,
+                Delta = "expected 'want', observed 'have-not'",
+            }));
 
         var reset = harness.Loop.ResetExhaustedBudgets();
 
@@ -214,6 +246,10 @@ public sealed class AgentEscalationTests
         // A resource that never gave up is not in the set and its ledger is untouched, so a
         // device-wide retry cannot quietly forgive a backoff somebody is still waiting out.
         Assert.DoesNotContain("healthy", reset);
+        Assert.Equal(1, ReconcileJournal.EntryFor(harness.Journal.Read(), "healthy").Attempts);
+
+        // And the frame is no longer stopped, which is the whole observable effect of pressing it.
+        Assert.False(harness.Loop.HasStopped);
     }
 
     [Fact]
@@ -246,45 +282,87 @@ public sealed class AgentEscalationTests
             new ResourceLedgerEntry { Resource = "r", Attempts = 5, Escalations = 1 },
             5));
 
-        // Halted is in the set whatever the counters say, because a halt is what a retry is most
-        // often pressed against and the only way back from rung 4.
-        Assert.True(ReconcileLoop.HasGivenUp(new ResourceLedgerEntry { Resource = "r", Halted = true }, 5));
     }
 
     [Fact]
-    public async Task A_halted_device_stops_reconciling_everything_not_just_the_broken_resource()
+    public async Task An_escalation_stops_the_whole_pass_and_not_just_the_resource_that_raised_it()
     {
-        // "Halted for that device", not "halted for that resource". Continuing to reboot a
-        // persistently broken frame is damage, and rebooting it for a different setting is the
-        // same damage under another name.
+        // Decision 68, and the measurement behind it: the attempt budget is per resource, so one
+        // shared cause is multiplied by however many resources share it - on the frame, one 350 ms
+        // race across five resources cost 41 reboots. Stopping at the first escalation makes that
+        // multiplication structurally impossible rather than merely bounded.
         var broken = Broken();
-        var healthy = new ScriptedResource("healthy", "want", "have-not");
-        using var harness = new ReconcileHarness(Options, broken, healthy) { Telemetry = { Connected = true } };
+        var other = new ScriptedResource("other", "want", "have-not");
+        using var harness = new ReconcileHarness(Options, broken, other) { Telemetry = { Connected = true } };
 
-        await harness.ConvergeAsync();
-        harness.Loop.ResetBudget("broken");
+        var outcome = await harness.ConvergeAsync();
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+
+        // Whatever the other resource had managed before the stop, it gets nothing after it: not
+        // an observation, not an Act, not a reboot. That is the whole of "the frame holds the
+        // failure and waits" — and it is asserted as an absence of work rather than as a state,
+        // because whether this particular resource had already converged before the stop is not
+        // the point and would make the test depend on the order two unrelated things happened in.
+        var acts = other.Acts;
+        var observations = other.Observations;
+        var crossings = harness.Boundary.Crossings.Count;
+
+        harness.Clock.UtcNow += TimeSpan.FromHours(1);
+        var after = await harness.PassAsync();
+
+        Assert.Equal(PassResult.Escalated, after.Result);
+        Assert.Equal(acts, other.Acts);
+        Assert.Equal(observations, other.Observations);
+        Assert.Equal(crossings, harness.Boundary.Crossings.Count);
+        // Reported as not attempted rather than carrying a verdict from an earlier pass, because
+        // this pass did not look at it and a status list that says otherwise is a claim nobody made.
+        Assert.Equal(ResourceStatusKind.Blocked, ReconcileHarness.StatusOf(after, "other").Kind);
+        Assert.Equal("broken", ReconcileHarness.StatusOf(after, "other").BlockedBy);
+    }
+
+    [Fact]
+    public async Task A_stopped_pass_still_reports_every_resource_in_the_catalog()
+    {
+        // The trap the previous shape had, measured: Blocked is not persisted, it is recomputed
+        // from what a walk reached - so a pass that stops early reported 37 to 56 rows of 79 and
+        // everything downstream vanished from the operator's view at exactly the moment they need
+        // to see what is queued up behind the failure. The completion is from the static graph, so
+        // it needs no observation and breaks none of decision 68's "stop acting".
+        var broken = Broken();
+        var second = new ScriptedResource("second", "want", "have-not");
+        var third = new ScriptedResource("third", "want", "have-not");
+        using var harness = new ReconcileHarness(Options, broken, second, third) { Telemetry = { Connected = true } };
+
         var outcome = await harness.ConvergeAsync();
 
-        Assert.Equal(PassResult.Halted, outcome.Result);
-        Assert.DoesNotContain(outcome.Statuses, status => string.Equals(status.Name, "healthy", StringComparison.Ordinal));
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(3, outcome.Statuses.Count);
+
+        foreach (var name in new[] { "second", "third" })
+        {
+            var status = ReconcileHarness.StatusOf(outcome, name);
+
+            // Named as waiting for the thing that actually stopped them, which is true in both
+            // readings: a dependent is blocked by the DAG, and everything else is blocked because
+            // nothing at all will be attempted until a human retries.
+            Assert.Equal(ResourceStatusKind.Blocked, status.Kind);
+            Assert.Equal("broken", status.BlockedBy);
+        }
     }
 
     [Fact]
-    public async Task A_device_that_is_already_halted_touches_nothing_ordered_ahead_of_the_halted_resource()
+    public async Task A_frame_that_has_already_given_up_touches_nothing_ordered_ahead_of_it()
     {
-        // The other half of "Halted for that device", and the half a per-resource check misses:
-        // a halt is inherited from an earlier process, and the walk reaches the halted entry only
-        // after everything ordered before it. Anything drifting there would be observed, acted on
-        // and rebooted for on every boot — §2.4's unbounded reboot loop, wearing the same hardware
-        // under a different resource's name, on a frame an administrator has already been told
-        // about twice.
+        // The half a per-resource check misses: the stop is inherited from an earlier process, and
+        // the walk reaches the escalated entry only after everything ordered before it. Anything
+        // drifting there would be observed, acted on and rebooted for on every boot — §2.4's
+        // unbounded reboot loop, wearing the same hardware under a different resource's name, on a
+        // frame whose operator has already been told.
         var first = new ScriptedResource("first", "want", "want");
         var broken = Broken();
         using var harness = new ReconcileHarness(Options, first, broken) { Telemetry = { Connected = true } };
 
-        await harness.ConvergeAsync();
-        harness.Loop.ResetBudget("broken");
-        Assert.Equal(PassResult.Halted, (await harness.ConvergeAsync()).Result);
+        Assert.Equal(PassResult.Escalated, (await harness.ConvergeAsync()).Result);
 
         // Now something ordered ahead of the halted resource drifts: a mixer value reset, a
         // hostname cloud-init put back.
@@ -296,7 +374,7 @@ public sealed class AgentEscalationTests
         harness.Clock.UtcNow += TimeSpan.FromHours(1);
         var outcome = await harness.PassAsync();
 
-        Assert.Equal(PassResult.Halted, outcome.Result);
+        Assert.Equal(PassResult.Escalated, outcome.Result);
         Assert.Equal(observations, first.Observations);
         Assert.Equal(acts, first.Acts);
         Assert.Equal(crossings, harness.Boundary.Crossings.Count);
@@ -305,9 +383,9 @@ public sealed class AgentEscalationTests
         // nothing to do — the loop declined work it could have done.
         Assert.False((await first.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
 
-        // And the pass still says which resource stopped the device, because a halt that reported
-        // nothing would be indistinguishable from a frame that had simply stopped.
-        Assert.Equal(ResourceStatusKind.Halted, ReconcileHarness.StatusOf(outcome, "broken").Kind);
+        // And the pass still says which resource stopped the frame, because a stop that reported
+        // nothing would be indistinguishable from an agent that had simply died.
+        Assert.Equal(ResourceStatusKind.Escalated, ReconcileHarness.StatusOf(outcome, "broken").Kind);
     }
 
     [Fact]
@@ -333,7 +411,7 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
-    public async Task An_operator_retry_clears_the_halt_but_not_the_history()
+    public async Task An_operator_retry_clears_the_stop_but_not_the_history()
     {
         var resource = Broken();
         using var harness = new ReconcileHarness(Options, resource) { Telemetry = { Connected = true } };
@@ -341,16 +419,16 @@ public sealed class AgentEscalationTests
         await harness.ConvergeAsync();
         harness.Loop.ResetBudget("broken");
         await harness.ConvergeAsync();
-        Assert.True(harness.Loop.IsHalted);
+        Assert.True(harness.Loop.HasStopped);
 
         harness.Loop.ResetBudget("broken");
         var entry = ReconcileJournal.EntryFor(harness.Journal.Read(), "broken");
 
-        Assert.False(entry.Halted);
+        Assert.False(harness.Loop.HasStopped);
         Assert.Equal(0, entry.Attempts);
 
-        // Kept, so a frame already given up on once halts again the moment the fresh budget runs
-        // out rather than starting the ladder from the bottom.
+        // Kept, so a frame already given up on once does not start the ladder from the bottom -
+        // the second escalation still says "this has happened before".
         Assert.Equal(2, entry.Escalations);
     }
 

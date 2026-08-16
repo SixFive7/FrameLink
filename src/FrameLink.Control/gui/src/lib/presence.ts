@@ -12,7 +12,7 @@
  *     `DeviceHandshake` answers `version-mismatch` and closes, so such a device is offline by
  *     construction and saying only "offline" would hide the cause.
  *  2. **online-degraded** — a socket is open and the server classified the agent's self-report
- *     as `degraded` or `halted`.
+ *     as `degraded`.
  *  3. **online** — a socket is open and nothing says otherwise.
  *  4. **never-enrolled** — adopted, but not seen since it was adopted. See below.
  *  5. **offline** — no socket. `lastSeenUtc` is the "offline since" §3.5 asks for.
@@ -44,7 +44,7 @@ export function presenceOf(device: DeviceView): Presence {
 	if (!device.protocolCompatible || device.protocolVersion === undefined) return 'incompatible';
 
 	if (device.online) {
-		return device.health === 'degraded' || device.health === 'halted'
+		return device.health === 'degraded'
 			? 'online-degraded'
 			: 'online';
 	}

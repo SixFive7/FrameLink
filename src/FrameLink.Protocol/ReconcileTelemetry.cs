@@ -4,10 +4,19 @@ namespace FrameLink.Protocol;
 /// §2.3's status vocabulary, spelled the way it travels on the wire.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Deliberately a set of strings rather than the agent's own enum. The enum's member names are
-/// a C# detail the agent is free to rename; these seven tokens are contract, and the Fleet
+/// a C# detail the agent is free to rename; these six tokens are contract, and the Fleet
 /// Manager stores and renders them. Keeping the mapping explicit in one place on the agent side
 /// is what stops a refactor from silently reshaping a stored history.
+/// </para>
+/// <para>
+/// <b><c>halted</c> was removed rather than retired</b> (decision 66). Keeping it as a legacy
+/// token would defend against version skew that cannot occur: nothing has shipped, there is one
+/// frame on a bench running a binary built the same night, and §4.2's freeze covers the handshake
+/// envelope and the update endpoint rather than this vocabulary. A dead token in a contract is a
+/// concept a future reader has to ask about for ever.
+/// </para>
 /// </remarks>
 public static class ResourceStatusNames
 {
@@ -26,11 +35,10 @@ public static class ResourceStatusNames
     /// <summary>A dependency is not in sync, so this was not attempted (§2.2).</summary>
     public const string Blocked = "blocked";
 
-    /// <summary>The operator has been notified and offered retry or a shell (§2.5).</summary>
+    /// <summary>
+    /// The operator has been notified and offered retry or a shell (§2.5). <b>Terminal.</b>
+    /// </summary>
     public const string Escalated = "escalated";
-
-    /// <summary>Escalated more than once; the agent has stopped touching this device (§2.5).</summary>
-    public const string Halted = "halted";
 }
 
 /// <summary>What the reconciliation loop as a whole is doing.</summary>
@@ -53,11 +61,11 @@ public static class LoopStateNames
     /// <summary>Waiting out a per-resource backoff before the next attempt.</summary>
     public const string BackingOff = "backing-off";
 
-    /// <summary>At least one resource is degraded and the operator has been told.</summary>
+    /// <summary>
+    /// At least one resource gave up, so this frame has stopped reconciling and is waiting for a
+    /// person (§2.5 rungs 4 and 6).
+    /// </summary>
     public const string Escalated = "escalated";
-
-    /// <summary>This device has stopped reconciling (§2.5 rung 4).</summary>
-    public const string Halted = "halted";
 }
 
 /// <summary>Event kinds carried on the <c>events</c> channel of §4.1.</summary>
@@ -72,8 +80,6 @@ public static class DeviceEventKinds
     /// <summary>The agent started, naming whether it came back across a reboot boundary.</summary>
     public const string Boot = "boot";
 
-    /// <summary>The device stopped reconciling after repeated escalation on one resource.</summary>
-    public const string Halted = "halted";
 
     /// <summary>Every resource reached <see cref="ResourceStatusNames.InSync"/>.</summary>
     public const string Converged = "converged";

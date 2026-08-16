@@ -80,18 +80,20 @@ public static class ControlWire
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The third exercise of the growth rule this class documents, and the first one whose
-    /// justification is <i>which devices it reaches</i> rather than what it carries. Two more keys
-    /// in <see cref="SettingsPush"/> would have carried the same two strings with no new kind at
-    /// all — and would have been delivered to nobody who needed them most, because §3.3 gives a
-    /// pending device no settings, and a frame that never got adopted is exactly the frame whose
-    /// person has no other way to find out who to ask.
+    /// The third exercise of the growth rule this class documents. Two more keys in
+    /// <see cref="SettingsPush"/> would have carried the same two strings with no new kind at all,
+    /// and the reason not to is what the settings map <i>is</i>: the dictionary §2.2 hands to
+    /// resources as values to converge on. A person's telephone number is not one, and keeping it
+    /// typed and separate is what stops <c>FleetValues</c> serving a human contact detail to a
+    /// reconciler.
     /// </para>
     /// <para>
-    /// Sending it to a pending device does not weaken §3.3. Configuration is withheld because a
-    /// device the operator has not vouched for must not be told what to become; this changes no
-    /// desired value, converges nothing, commands nothing, and is only ever rendered as a sentence
-    /// on a screen somebody is already standing in front of.
+    /// <b>Only ever sent to an adopted device</b>, so §3.3's "a pending device receives nothing"
+    /// stands unchanged. The first shape of this sent it on the pending path too, reasoning that a
+    /// frame nobody has adopted is exactly the frame whose person has nobody to ask — and it was
+    /// wrong: §3.3's registration endpoint is open to the internet and answers anything that
+    /// connects with <c>pending</c>, so that shape would have published the operator's name and
+    /// telephone number to every anonymous caller who found the URL.
     /// </para>
     /// </remarks>
     public const string KindOperatorContact = "operator-contact";
@@ -172,18 +174,18 @@ public sealed record AgentPong
 }
 
 /// <summary>
-/// The operator pressing <b>retry</b> on an escalated or halted resource — §2.5 rung 3.
+/// The operator pressing <b>retry</b> on a resource that has given up — §2.5 rung 3.
 /// <b>Frozen once shipped.</b>
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Per resource, with "everything that gave up" as a form of the same command.</b> §2.5's retry
 /// is offered against a status, and a status belongs to a resource — so the resource is what the
-/// operator points at. But rung 4 halts the <i>device</i>, and a halted device can have several
-/// resources that gave up: the agent's halt report deliberately lists every one of
-/// them, "because clearing one halt while another remains would otherwise look like it had done
-/// nothing". A null or empty <see cref="Resource"/> is that second case, and it is the same verb
-/// rather than a second one.
+/// operator points at. But rung 4 stops the whole <i>frame</i>, and a stopped frame can have
+/// several resources that gave up: the agent's report deliberately lists every one of them,
+/// because clearing one while another remains would otherwise look like it had done nothing. A
+/// null or empty <see cref="Resource"/> is that second case, and it is the same verb rather than a
+/// second one.
 /// </para>
 /// <para>
 /// <b>It resets the budget; it does not force one attempt.</b> That is what §2.5 rung 3 says the

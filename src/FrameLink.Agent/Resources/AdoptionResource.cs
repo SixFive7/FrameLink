@@ -28,8 +28,8 @@ namespace FrameLink.Agent.Resources;
 /// nothing reboots. Measured on the mule with the Fleet Manager deliberately stopped, the
 /// previous two-state reading produced <i>"did not survive the reboot — expected 'adopted',
 /// observed 'waiting for adoption'"</i> on a frame that was adopted throughout, burned three of
-/// five attempts on a server outage, and would have reached device-wide <c>Halted</c> given a
-/// long enough one. Rebooting cannot make an unreachable server reachable.
+/// five attempts on a server outage, and would have stopped the whole frame given a long enough
+/// one. Rebooting cannot make an unreachable server reachable.
 /// </para>
 /// </remarks>
 public sealed class AdoptionResource : IResource

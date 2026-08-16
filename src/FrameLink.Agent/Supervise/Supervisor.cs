@@ -516,7 +516,7 @@ public sealed class Supervisor
     /// </summary>
     /// <remarks>
     /// <b>Rate, not budget, and deliberately not §2.5's ladder.</b> That ladder ends in
-    /// <c>Halted</c> — stop touching it — which is the right terminal state for a resource that
+    /// <c>Escalated</c> — stop touching it — which is the right terminal state for a resource that
     /// cannot be applied and the wrong one for a frame that needs restarting to stay alive: giving
     /// up there means a dark frame. Each action here is individually legitimate; the abnormality
     /// is the frequency. So the fault <b>never inhibits supervision</b> — the restarts continue,

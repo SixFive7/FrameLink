@@ -39,26 +39,11 @@ public static class ReconcileVoice
     /// Whether a resource has stopped being touched — §2.5 rung 2's "stop", however it is spelled.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Written as an exclusion rather than a list of the statuses that mean "gave up", and that is
-    /// deliberate on two counts. It is forward-compatible with decision 66 removing
-    /// <c>Halted</c> — this predicate needs no edit when the member goes — and it fails in the safe
-    /// direction: a status nobody has thought about yet is read as stopped, which puts a static
-    /// screen and a contact sentence in front of a person, rather than as progress, which animates
-    /// a bar for work that may not be happening.
-    /// </para>
-    /// <para>
-    /// The four excluded statuses are the four the loop can be in while it is still trying:
-    /// verified, working, written and awaiting its verifying reboot, and waiting on a dependency.
-    /// Everything the reconciler produces beyond those is produced <i>only</i> at budget
-    /// exhaustion.
-    /// </para>
+    /// One definition, shared with the loop: <see cref="ResourceStatuses.HasGivenUp"/> lives beside
+    /// the enum it asks about, so the screen and the reconciler cannot come to disagree about which
+    /// statuses mean a frame has stopped.
     /// </remarks>
-    public static bool HasGivenUp(ResourceStatusKind kind) =>
-        kind is not (ResourceStatusKind.InSync
-            or ResourceStatusKind.Progressing
-            or ResourceStatusKind.AwaitingReboot
-            or ResourceStatusKind.Blocked);
+    public static bool HasGivenUp(ResourceStatusKind kind) => kind.HasGivenUp();
 
     /// <summary>The resource that has given up, or null while the frame is still trying.</summary>
     /// <remarks>
@@ -120,7 +105,6 @@ public static class ReconcileVoice
         ArgumentNullException.ThrowIfNull(status);
 
         return Stopped(status) is not null
-            || status.Reconcile.Halted
             || (status.Reconcile.Escalations > 0
                 && (status.Reconcile.AttemptBudget <= 0
                     || status.Reconcile.Attempt >= status.Reconcile.AttemptBudget));

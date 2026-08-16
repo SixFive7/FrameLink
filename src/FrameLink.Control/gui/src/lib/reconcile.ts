@@ -82,16 +82,10 @@ const STATUS: Record<ResourceStatus, Presentation> = {
 	escalated: {
 		label: 'Escalated',
 		tone: 'danger',
-		icon: 'alert',
-		meaning: 'The budget ran out and you have been told. Nothing moves here until you act.'
-	},
-	halted: {
-		label: 'Halted',
-		tone: 'danger',
 		icon: 'ban',
 		meaning:
-			'Escalated more than once. The agent has stopped reconciling this frame — continuing ' +
-			'to reboot a persistently broken one is damage, not diligence.'
+			'The budget ran out and you have been told. The whole frame has stopped — nothing else ' +
+			'is attempted either — until you fix the cause and retry.'
 	}
 };
 
@@ -125,14 +119,10 @@ const LOOP: Record<LoopState, Presentation> = {
 	escalated: {
 		label: 'Escalated',
 		tone: 'danger',
-		icon: 'alert',
-		meaning: 'At least one resource gave up and you have been told about it.'
-	},
-	halted: {
-		label: 'Halted',
-		tone: 'danger',
 		icon: 'ban',
-		meaning: 'This frame has stopped reconciling entirely (§2.5 rung 4).'
+		meaning:
+			'At least one resource gave up, so this frame has stopped reconciling entirely and is ' +
+			'waiting for a person (§2.5 rungs 4 and 6).'
 	}
 };
 
@@ -154,12 +144,6 @@ const EVENT: Record<DeviceEventKind, Presentation> = {
 		tone: 'info',
 		icon: 'refresh',
 		meaning: 'The agent started, naming whether it came back across a reboot boundary.'
-	},
-	halted: {
-		label: 'Halted',
-		tone: 'danger',
-		icon: 'ban',
-		meaning: 'The frame stopped reconciling after repeated escalation on one resource.'
 	},
 	converged: {
 		label: 'Converged',
@@ -242,14 +226,15 @@ export function describePhase(phase: string | undefined): string | undefined {
 }
 
 /** The statuses that mean the loop has stopped trying, worst first. */
-const FAULTED: readonly ResourceStatus[] = ['halted', 'escalated', 'degraded'];
+const FAULTED: readonly ResourceStatus[] = ['escalated', 'degraded'];
 
 /**
  * The resources that are the story, worst first.
  *
- * §2.5's ladder is an ordering, so this is one too: `halted` outranks `escalated` outranks
- * `degraded`. Everything else on a stalled frame is downstream of these, which is why the
- * screen leads with them instead of putting them in row 41 of a list of 78.
+ * §2.5's ladder is an ordering, so this is one too: `escalated` outranks `degraded`, the two
+ * differing only in whether the notification actually reached this server. Everything else on a
+ * stopped frame is downstream of these, which is why the screen leads with them instead of putting
+ * them in row 41 of a list of 79.
  */
 export function faults(resources: readonly ResourceReport[]): ResourceReport[] {
 	return resources

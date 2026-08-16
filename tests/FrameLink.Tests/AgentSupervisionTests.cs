@@ -463,7 +463,7 @@ public sealed class AgentSupervisionInterlockTests
             new ResourceStatus { Name = "c", Kind = ResourceStatusKind.Blocked },
             new ResourceStatus { Name = "d", Kind = ResourceStatusKind.InSync },
             new ResourceStatus { Name = "e", Kind = ResourceStatusKind.Degraded },
-            new ResourceStatus { Name = "f", Kind = ResourceStatusKind.Halted },
+
         ]);
 
         Assert.True(interlock.ReconcilerHolds("a"));
@@ -471,7 +471,7 @@ public sealed class AgentSupervisionInterlockTests
         Assert.True(interlock.ReconcilerHolds("c"));
         Assert.False(interlock.ReconcilerHolds("d"));
 
-        // Degraded and Halted mean the reconciler has stopped touching it, so there is nothing to
+        // Degraded and Escalated mean the reconciler has stopped touching it, so there is nothing to
         // race — and a frame whose kiosk unit has been given up on still needs restarting to stay
         // alive. Holding them would mean a dark frame, which is what §2.10 refuses.
         Assert.False(interlock.ReconcilerHolds("e"));

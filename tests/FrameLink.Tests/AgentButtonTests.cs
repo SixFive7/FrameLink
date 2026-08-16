@@ -223,7 +223,7 @@ public sealed class AgentButtonTests
         // The button hardware is not sourced, so this is every frame in existence right now. A
         // frame with no button wired is not drifted: the claim is on the line, the pull-up holds it
         // high, and no edge ever arrives. Reporting drift would walk §2.5's ladder — retry,
-        // escalate, escalate again, Halted — over something no software on the frame can change.
+        // escalate, and stop the whole frame — over something no software on it can change.
         Assert.True(observation.InSync);
         Assert.Contains("has not seen a press yet", observation.Observed, StringComparison.Ordinal);
         Assert.Contains("pull-up", observation.Observed, StringComparison.Ordinal);

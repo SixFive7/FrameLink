@@ -15,7 +15,7 @@ namespace FrameLink.Tests;
 /// did not survive the reboot — expected 'adopted', observed 'waiting for adoption'"</i> of a frame
 /// that was adopted the entire time, spent attempts 1, 2 and 3 of a 5-attempt budget on a server
 /// outage, and rebooted four times in twelve minutes trying to make an unreachable server
-/// reachable. Left long enough it would have escalated twice and reached <c>Halted</c>, which
+/// reachable. Left long enough it would have escalated and stopped the frame outright, which
 /// decision 49 makes device-wide — so an operator whose Fleet Manager was down for an afternoon
 /// would have come back to frames that had stopped themselves, diagnosed as a persistent local
 /// fault.
@@ -42,20 +42,18 @@ public sealed class AgentServerSilenceTests
         using var harness = new ReconcileHarness(Fast, new AdoptionResource(files.Store, () => ServerAnswer.Silence));
 
         // Far longer than the budget would have survived: at three attempts and a growing backoff
-        // the old behaviour reached Degraded within minutes and Halted on the second exhaustion.
+        // the old behaviour reached Degraded within minutes and stopped the frame there.
         var outcome = await OutageAsync(harness, TimeSpan.FromHours(6));
 
         Assert.Equal(PassResult.Pending, outcome.Result);
         Assert.Empty(harness.Boundary.Crossings);
-        Assert.False(harness.Loop.IsHalted);
+        Assert.False(harness.Loop.HasStopped);
         Assert.Empty(harness.Telemetry.OfKind(DeviceEventKinds.Escalation));
-        Assert.Empty(harness.Telemetry.OfKind(DeviceEventKinds.Halted));
         Assert.Empty(harness.Telemetry.OfKind(DeviceEventKinds.Drift));
 
         var ledger = ReconcileJournal.EntryFor(harness.Journal.Read(), AdoptionResource.ResourceName);
         Assert.Equal(0, ledger.Attempts);
         Assert.Equal(0, ledger.Escalations);
-        Assert.False(ledger.Halted);
     }
 
     [Fact]
@@ -149,21 +147,26 @@ public sealed class AgentServerSilenceTests
     }
 
     [Fact]
-    public async Task An_authoritative_rejection_still_reaches_Halted_on_the_second_exhaustion()
+    public async Task An_authoritative_rejection_still_stops_the_frame_and_stays_recoverable()
     {
         using var files = new TemporaryFiles();
         using var harness = new ReconcileHarness(Fast, new AdoptionResource(files.Store, () => ServerAnswer.Rejected));
         harness.Telemetry.Connected = true;
 
         await harness.ConvergeAsync();
+        Assert.True(harness.Loop.HasStopped);
 
-        // §2.5 rung 3: the operator pressed retry, which resets the budget and keeps the
-        // escalation count. The second exhaustion is the one that halts the device.
+        // §2.5 rung 3: the operator pressed retry, which resets the budget and keeps the escalation
+        // count. A rejection that is still a rejection escalates again — and, decision 66, into the
+        // same state, so the same retry is still the way back however many times it happens.
         harness.Loop.ResetBudget(AdoptionResource.ResourceName);
         var outcome = await harness.ConvergeAsync();
 
-        Assert.Equal(PassResult.Halted, outcome.Result);
-        Assert.True(harness.Loop.IsHalted);
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.True(harness.Loop.HasStopped);
+
+        harness.Loop.ResetBudget(AdoptionResource.ResourceName);
+        Assert.False(harness.Loop.HasStopped);
     }
 
     [Fact]
@@ -219,7 +222,7 @@ public sealed class AgentServerSilenceTests
         await OutageAsync(harness, TimeSpan.FromMinutes(30));
 
         Assert.Equal(DeviceState.NoContact, harness.Hub.Current.Condition.State);
-        Assert.False(harness.Hub.Current.Reconcile.Halted);
+        Assert.Equal(0, harness.Hub.Current.Reconcile.Escalations);
         Assert.Equal(0, harness.Hub.Current.Reconcile.Attempt);
     }
 
@@ -288,7 +291,7 @@ public sealed class AgentServerSilenceTests
 
         Assert.Equal(acts, resource.Acts);
         Assert.Single(harness.Boundary.Crossings);
-        Assert.False(harness.Loop.IsHalted);
+        Assert.False(harness.Loop.HasStopped);
     }
 
     [Fact]

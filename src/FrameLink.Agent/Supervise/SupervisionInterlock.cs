@@ -50,9 +50,9 @@ public sealed class SupervisionInterlock
 {
     /// <summary>The statuses §2.10 clause 1 names as the reconciler holding a resource.</summary>
     /// <remarks>
-    /// <c>Degraded</c>, <c>Escalated</c> and <c>Halted</c> are deliberately <i>not</i> here, and
-    /// that is §2.10's list rather than an omission: those three mean the reconciler has stopped
-    /// touching the resource, so there is nothing left to race. A frame whose kiosk unit has been
+    /// <c>Degraded</c> and <c>Escalated</c> are deliberately <i>not</i> here, and that is §2.10's
+    /// list rather than an omission: both mean the reconciler has stopped touching the resource, so
+    /// there is nothing left to race. A frame whose kiosk unit has been
     /// given up on still needs its browser restarted to stay alive — giving up there would mean a
     /// dark frame, which §2.10 gives as the whole reason supervision does not reuse §2.5's ladder.
     /// </remarks>

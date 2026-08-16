@@ -303,8 +303,8 @@ public static class GpioInfo
 /// <b>A frame with no button is InSync, and that is the point of the split.</b> Nothing about a
 /// missing button changes what <c>gpioinfo</c> reports: the agent holds the line, the internal
 /// pull-up keeps it high, and no edge ever arrives. Reporting drift for it would send every frame
-/// that has not had its button fitted yet up §2.5's ladder — retry, escalate, escalate again,
-/// <c>Halted</c> — over a state no software on the frame can change. The press count is carried in
+/// that has not had its button fitted yet up §2.5's ladder — retry, escalate, and stop the whole
+/// frame — over a state no software on it can change. The press count is carried in
 /// the observed text instead, so "this frame has never seen a press" is visible to an operator
 /// without being a fault.
 /// </para>
