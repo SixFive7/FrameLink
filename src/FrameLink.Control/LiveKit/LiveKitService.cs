@@ -99,13 +99,15 @@ public sealed class LiveKitDeployment(LiveKitOptions options, ILiveKitStore stor
 /// <param name="Step">What the bundled path is doing, or the last thing it did.</param>
 /// <param name="Problems">Everything an operator has to fix, in plain sentences.</param>
 /// <param name="Process">The supervised child, when there is one.</param>
+/// <param name="Media">What this host can see of the media path (§3.7).</param>
 public sealed record LiveKitRuntimeState(
     LiveKitMode Mode,
     string Version,
     bool Ready,
     string Step,
     IReadOnlyList<string> Problems,
-    LiveKitProcessState? Process);
+    LiveKitProcessState? Process,
+    LiveKitMediaCheck Media);
 
 /// <summary>
 /// Installs, configures and supervises the bundled <c>livekit-server</c> (§3.7).
@@ -128,6 +130,17 @@ public sealed record LiveKitRuntimeState(
 /// treatment §3.2 gives a missing password — rather than a crash, a silent no-op, or a
 /// half-installed directory.
 /// </para>
+/// <para>
+/// <b>The media check it reports is not the health probe <see cref="LiveKitProcess"/> refuses,
+/// and the difference is what it is allowed to do.</b> That class is emphatic that it has "no
+/// memory ceiling, no clock, no silence timeout and no health probe", because every one of those
+/// exists to manufacture a restart trigger and a parent that is told when its child exits needs
+/// none. Nothing is manufactured here: <see cref="LiveKitMediaProbe"/> restarts nothing, retries
+/// nothing and changes no state — it reads two operating-system tables and turns what it sees
+/// into sentences on the status route. It also asks a different question. <i>Is the child
+/// alive</i> is the supervisor's, and is answered; <i>can call media leave this machine at all</i>
+/// was nobody's, which is the gap it fills.
+/// </para>
 /// </remarks>
 public sealed class LiveKitService(
     LiveKitOptions options,
@@ -144,6 +157,13 @@ public sealed class LiveKitService(
 
     /// <summary>The release this service installs.</summary>
     public LiveKitReleasePin Pin { get; } = LiveKitReleasePin.Current;
+
+    /// <summary>Where the media check reads this host's sockets from.</summary>
+    /// <remarks>
+    /// An <c>init</c> property rather than a constructor parameter so the container composition
+    /// stays as it is and a test can state a host's condition without one.
+    /// </remarks>
+    public ILiveKitHostSockets HostSockets { get; init; } = SystemHostSockets.Instance;
 
     /// <summary>The supervised child, once there is one.</summary>
     public LiveKitProcess? Process
@@ -190,13 +210,24 @@ public sealed class LiveKitService(
                 _ => problems.Count == 0 && installed && process is { IsRunning: true },
             };
 
+            // Read after Ready is decided, and appended after it, deliberately. Ready answers "is
+            // this deployment configured and running", which is a thing this server knows for
+            // certain; the media check answers "does anything about the media path look wrong from
+            // here", which includes one inference and can never see past this container. Letting
+            // it flip a flag that reads as certainty would trade a silence for an overclaim, and
+            // §3.7's discipline for the call server is reporting rather than repair — an operator
+            // reads these sentences and decides, exactly as with an exited child.
+            var media = LiveKitMediaProbe.Inspect(options, process is { IsRunning: true }, HostSockets);
+            problems.AddRange(media.Findings);
+
             return new LiveKitRuntimeState(
                 options.Mode,
                 Pin.Version,
                 ready,
                 step,
                 problems,
-                process?.State);
+                process?.State,
+                media);
         }
     }
 
