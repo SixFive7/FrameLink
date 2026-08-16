@@ -410,6 +410,35 @@ public sealed class AgentHost
                 Volatile.Write(ref _settings, push.Values);
                 memory.RememberSettings(push);
             },
+
+            // §2.5 rung 3, and the only inbound message that changes what the reconciler is
+            // allowed to do rather than what it converges on. It runs on the receive loop and
+            // touches nothing but the journal, which is already the lock the loop's own writes go
+            // through — so a retry arriving mid-pass moves the ledger under a walk that reads it
+            // per resource, and the worst case is one extra pass before it takes effect.
+            OnRetry = request =>
+            {
+                if (!string.Equals(request.DeviceId, identity.DeviceId, StringComparison.Ordinal))
+                {
+                    // Impossible over a socket the server addresses by connection, which is why it
+                    // is worth asserting: the cost of being wrong is an unrelated frame rebooting
+                    // five more times for a setting nobody asked it to retry.
+                    _log.Warn($"Ignoring a retry addressed to {request.DeviceId}; this frame is {identity.DeviceId}.");
+                    return;
+                }
+
+                if (!string.IsNullOrWhiteSpace(request.Resource))
+                {
+                    loop.ResetBudget(request.Resource);
+                    return;
+                }
+
+                var reset = loop.ResetExhaustedBudgets();
+                if (reset.Count > 0)
+                {
+                    _log.Info($"The Fleet Manager asked this frame to try again: {string.Join(", ", reset)}.");
+                }
+            },
             HardwareSerial = serial,
 
             // Free text with a vocabulary head, per AgentHealth. The head is what the Fleet

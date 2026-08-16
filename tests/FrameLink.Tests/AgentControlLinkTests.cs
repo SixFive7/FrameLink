@@ -221,11 +221,60 @@ public sealed class AgentControlLinkTests
 
     private static Backoff Fast() => new(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), jitter: 0);
 
+    [Fact]
+    public async Task A_retry_pushed_down_a_live_socket_reaches_the_reconciler()
+    {
+        // §2.5 rung 3's whole delivery path in one assertion. It matters that this is a *message*
+        // rather than anything the frame can do to itself: the attempt ledger is durable across
+        // the reboot §2.4 takes and the update §2.8 brings, so nothing an operator can reach from
+        // the frame's own side clears it.
+        var server = new RecordingServer(AgentServerScript.Ok());
+        var received = new List<RetryRequest>();
+
+        server.PushAfterHandshake.Enqueue(WireMessage.Encode(
+            ControlWire.KindRetry,
+            new RetryRequest
+            {
+                DeviceId = "AAAA-AAAA-AAAA-AAAA",
+                Resource = "boot.autologin.getty-tty1",
+                RequestedUtc = DateTimeOffset.UnixEpoch,
+            },
+            ProtocolJson.Default.RetryRequest,
+            ProtocolConstants.ChannelControl));
+
+        await RunAsync(server, attempts: 1, onRetry: received.Add);
+
+        var retry = Assert.Single(received);
+        Assert.Equal("boot.autologin.getty-tty1", retry.Resource);
+    }
+
+    [Fact]
+    public async Task A_retry_the_payload_of_which_cannot_be_read_does_not_take_the_socket_with_it()
+    {
+        // The same forward-compatibility the package inventory bought going the other way: a newer
+        // server that reshapes this payload must cost an ignored message, not a reconnect storm on
+        // every frame in the fleet.
+        var server = new RecordingServer(AgentServerScript.Ok());
+        var received = new List<RetryRequest>();
+
+        server.PushAfterHandshake.Enqueue(WireMessage.EncodeRaw(
+            ControlWire.KindRetry,
+            System.Text.Json.JsonDocument.Parse("\"not an object\"").RootElement.Clone(),
+            ProtocolConstants.ChannelControl));
+
+        var (hub, _) = await RunAsync(server, attempts: 1, onRetry: received.Add);
+
+        Assert.Empty(received);
+        Assert.Single(server.Connections);
+        Assert.NotNull(hub);
+    }
+
     private static async Task<(AgentStatusHub Hub, string DeviceId)> RunAsync(
         RecordingServer server,
         int attempts,
         string? serial = null,
-        Func<HandshakeResult, CancellationToken, Task>? onVerdict = null)
+        Func<HandshakeResult, CancellationToken, Task>? onVerdict = null,
+        Action<RetryRequest>? onRetry = null)
     {
         var hub = new AgentStatusHub(AgentStatusFactory.Starting());
         using var key = DeviceKey.From(DeviceIdentity.CreateKeyPair());
@@ -235,6 +284,7 @@ public sealed class AgentControlLinkTests
         var link = new ControlLink(server, hub, key, clock, NullLog.Instance, () => [Public], Fast(), onVerdict)
         {
             HardwareSerial = serial,
+            OnRetry = onRetry,
         };
 
         clock.OnDelay = _ =>
@@ -289,6 +339,15 @@ internal sealed class RecordingServer : IControlTransportFactory
     }
 
     public bool Refuse { get; set; }
+
+    /// <summary>Frames to push down the live socket once the handshake is done.</summary>
+    /// <remarks>
+    /// The operator acting on a frame that is already connected — pressing retry, changing a
+    /// setting. Scripted here rather than through <see cref="_verdicts"/> because those are
+    /// handshake results and these are ordinary control traffic; conflating them would make a
+    /// test of the dispatch a test of the handshake.
+    /// </remarks>
+    public Queue<byte[]> PushAfterHandshake { get; } = new();
 
     public List<RecordedConnection> Connections { get; } = [];
 
@@ -364,6 +423,11 @@ internal sealed class RecordedConnection : IControlTransport
         if (_outbound.Count > 0)
         {
             return ValueTask.FromResult<ReadOnlyMemory<byte>?>(_outbound.Dequeue());
+        }
+
+        if (_greeted && _server.PushAfterHandshake.Count > 0)
+        {
+            return ValueTask.FromResult<ReadOnlyMemory<byte>?>(_server.PushAfterHandshake.Dequeue());
         }
 
         // Once the handshake is done, push any remaining scripted verdicts down the live socket —

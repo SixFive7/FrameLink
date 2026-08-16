@@ -203,6 +203,68 @@ public sealed class ReconcileLoop
         _services.Log.Info($"{resource}: the attempt budget was reset by the Fleet Manager.");
     }
 
+    /// <summary>
+    /// Resets every resource that has given up — the device-wide form of §2.5 rung 3's
+    /// <b>retry</b>.
+    /// </summary>
+    /// <returns>The resources whose budgets were reset, in ledger order.</returns>
+    /// <remarks>
+    /// <para>
+    /// Rung 4 halts the <i>device</i>, and a halted device can have more than one resource that
+    /// gave up — <see cref="HaltedDevice"/> deliberately reports all of them, because "clearing one
+    /// halt while another remains would otherwise look like it had done nothing". This is the verb
+    /// that matches that noun: an operator looking at a frame that has stopped reconciling asks it
+    /// to try again, without having to name each setting that contributed.
+    /// </para>
+    /// <para>
+    /// Its membership test is <see cref="HasGivenUp"/>, the same predicate the walk skips on, so
+    /// the two cannot drift into a state where something is skipped forever and never appears in
+    /// the set a retry would clear.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<string> ResetExhaustedBudgets()
+    {
+        List<string>? names = null;
+
+        foreach (var entry in _services.Journal.Read().Ledger)
+        {
+            if (HasGivenUp(entry, _services.Options.AttemptBudget))
+            {
+                (names ??= []).Add(entry.Resource);
+            }
+        }
+
+        if (names is null)
+        {
+            _services.Log.Info("The Fleet Manager asked this frame to try again; nothing had given up.");
+            return [];
+        }
+
+        foreach (var name in names)
+        {
+            ResetBudget(name);
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// Whether the loop has stopped touching this resource — §2.5 rung 2's "stop", and rung 4.
+    /// </summary>
+    /// <remarks>
+    /// One predicate with two readers: the walk, which must not observe or act on a resource in
+    /// this state, and <see cref="ResetExhaustedBudgets"/>, which must be able to name every
+    /// resource in it. Written twice they could disagree, and the disagreement has one direction
+    /// — something the walk refuses to touch that a retry cannot reach — which is a frame nothing
+    /// can recover.
+    /// </remarks>
+    public static bool HasGivenUp(ResourceLedgerEntry entry, int attemptBudget)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        return entry.Halted || (entry.Escalations > 0 && entry.Attempts >= attemptBudget);
+    }
+
     /// <summary>Runs passes until the frame converges, halts, or the agent stops.</summary>
     /// <remarks>
     /// The wait between passes is the shortest of the pending backoffs, so a frame that is
@@ -462,7 +524,7 @@ public sealed class ReconcileLoop
                 continue;
             }
 
-            if (entry.Escalations > 0 && entry.Attempts >= _services.Options.AttemptBudget)
+            if (HasGivenUp(entry, _services.Options.AttemptBudget))
             {
                 // §2.5 rung 2: stop touching it. The resource is not observed and not acted on
                 // until an operator resets the budget, which is what "stop" has to mean if the

@@ -120,6 +120,47 @@ public sealed class ProtocolContractTests
     }
 
     [Fact]
+    public void A_retry_survives_the_round_trip_and_grows_the_vocabulary_without_touching_the_envelope()
+    {
+        // §4.2's growth path, exercised a second time: a new Kind and a new payload shape, with
+        // the envelope and the four handshake payloads untouched. What makes this one worth
+        // asserting is that it is the first server-to-agent message that changes what the
+        // reconciler is *allowed* to do rather than what it converges on.
+        var encoded = WireMessage.Encode(
+            ControlWire.KindRetry,
+            new RetryRequest
+            {
+                DeviceId = "AAAA-AAAA-AAAA-AAAA",
+                Resource = "boot.autologin.getty-tty1",
+                RequestedUtc = new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
+            },
+            ProtocolJson.Default.RetryRequest,
+            ProtocolConstants.ChannelControl);
+
+        var envelope = WireMessage.Decode(encoded);
+        Assert.NotNull(envelope);
+        Assert.Equal(ControlWire.KindRetry, envelope.Kind);
+        Assert.Equal(ProtocolConstants.ChannelControl, envelope.Channel);
+
+        var retry = envelope.PayloadAs(ProtocolJson.Default.RetryRequest);
+        Assert.Equal("AAAA-AAAA-AAAA-AAAA", retry!.DeviceId);
+        Assert.Equal("boot.autologin.getty-tty1", retry.Resource);
+
+        // A device-wide retry omits the resource entirely rather than sending an empty string, so
+        // "everything that gave up" and "a resource literally named nothing" cannot be confused on
+        // the wire. That is DefaultIgnoreCondition.WhenWritingNull doing contract work.
+        Assert.Equal(
+            """{"deviceId":"AAAA-AAAA-AAAA-AAAA","requestedUtc":"2026-08-16T12:00:00+00:00"}""",
+            System.Text.Json.JsonSerializer.Serialize(
+                new RetryRequest
+                {
+                    DeviceId = "AAAA-AAAA-AAAA-AAAA",
+                    RequestedUtc = new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
+                },
+                ProtocolJson.Default.RetryRequest));
+    }
+
+    [Fact]
     public void A_ping_is_answered_even_when_its_sequence_cannot_be_read()
     {
         // The server's deadline is refreshed by any inbound traffic, so silence over one

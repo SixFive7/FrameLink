@@ -101,6 +101,9 @@ public sealed class ControlLink
     /// <summary>Invoked when the Fleet Manager pushes effective settings (§3.4).</summary>
     public Action<SettingsPush>? OnSettings { get; init; }
 
+    /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
+    public Action<RetryRequest>? OnRetry { get; init; }
+
     /// <summary>How long connect plus handshake may take.</summary>
     public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(20);
 
@@ -222,6 +225,7 @@ public sealed class ControlLink
                     OnVerdict = _onVerdict,
                     Uplink = Uplink,
                     OnSettings = OnSettings,
+                    OnRetry = OnRetry,
                 },
                 cancellationToken).ConfigureAwait(false);
         }

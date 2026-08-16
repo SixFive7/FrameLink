@@ -69,6 +69,9 @@ public sealed record AttemptContext
 
     /// <summary>Invoked when the Fleet Manager pushes effective settings (§3.4).</summary>
     public Action<SettingsPush>? OnSettings { get; init; }
+
+    /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
+    public Action<RetryRequest>? OnRetry { get; init; }
 }
 
 /// <summary>
@@ -365,6 +368,21 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                     if (envelope.PayloadAs(ProtocolJson.Default.SettingsPush) is { } push)
                     {
                         context.OnSettings?.Invoke(push);
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(envelope.Kind, ControlWire.KindRetry, StringComparison.Ordinal))
+                {
+                    // §2.5 rung 3. The one thing on this socket that changes what the reconciler
+                    // is *allowed* to do rather than what it converges on — and the only way an
+                    // escalated frame gets its attempt budget back, because the ledger that holds
+                    // it is durable across both the restart and the update an operator would
+                    // otherwise reach for.
+                    if (envelope.PayloadAs(ProtocolJson.Default.RetryRequest) is { } retry)
+                    {
+                        context.OnRetry?.Invoke(retry);
                     }
 
                     continue;

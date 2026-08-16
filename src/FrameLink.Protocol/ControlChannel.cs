@@ -48,6 +48,34 @@ public static class ControlWire
     public const string KindSettings = "settings";
 
     /// <summary>
+    /// Server to agent. The operator's <b>retry</b> of §2.5 rung 3.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It has to be a message, and that is a finding rather than a design choice.</b> §2.5 rung
+    /// 3 offers the operator two actions — retry, or open a remote shell — and the first of them
+    /// had no implementation at all: <c>ReconcileLoop.ResetBudget</c> existed and was reachable
+    /// only from tests, the Fleet Manager had no route, and the reconcile screen rendered
+    /// escalations read-only. An escalated frame was stuck with no way back short of a re-flash.
+    /// </para>
+    /// <para>
+    /// A restart is not the way back either. The attempt ledger is deliberately durable — it lives
+    /// in <c>/var/lib/fl-agent/reconcile-journal.json</c>, which §2.1 keeps across an update and
+    /// §2.4 needs across the reboot every resource takes, because "an attempt counter that reset on
+    /// every boot could never exhaust a budget". So the budget survives exactly what an operator
+    /// would reach for, and only something arriving from outside the frame can clear it.
+    /// </para>
+    /// <para>
+    /// The second exercise of the growth rule this class documents: a new <c>Kind</c> and a new
+    /// payload shape, with the frozen envelope and the four handshake payloads untouched (§4.2). An
+    /// older agent ignores the kind — the agent's inbound dispatch skips what it does
+    /// not know — so an operator pressing retry against a frame running an older build gets
+    /// nothing rather than a broken socket.
+    /// </para>
+    /// </remarks>
+    public const string KindRetry = "retry";
+
+    /// <summary>
     /// Agent to server, on <see cref="ProtocolConstants.ChannelTelemetry"/>. The whole loop
     /// state and the per-resource status list (§3.5).
     /// </summary>
@@ -120,6 +148,56 @@ public sealed record AgentPong
 {
     /// <summary>The sequence number from the ping being answered.</summary>
     public required long Sequence { get; init; }
+}
+
+/// <summary>
+/// The operator pressing <b>retry</b> on an escalated or halted resource — §2.5 rung 3.
+/// <b>Frozen once shipped.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Per resource, with "everything that gave up" as a form of the same command.</b> §2.5's retry
+/// is offered against a status, and a status belongs to a resource — so the resource is what the
+/// operator points at. But rung 4 halts the <i>device</i>, and a halted device can have several
+/// resources that gave up: the agent's halt report deliberately lists every one of
+/// them, "because clearing one halt while another remains would otherwise look like it had done
+/// nothing". A null or empty <see cref="Resource"/> is that second case, and it is the same verb
+/// rather than a second one.
+/// </para>
+/// <para>
+/// <b>It resets the budget; it does not force one attempt.</b> That is what §2.5 rung 3 says the
+/// operator's retry does, and the difference matters: a transient that needs two attempts to clear
+/// — an archive that is down, a device that is slow to appear — would defeat a single forced
+/// attempt and leave the operator pressing a button in a loop with no ladder underneath it. The
+/// escalation <i>count</i> is not reset, so a frame that has been given up on once halts again the
+/// moment the fresh budget runs out rather than starting the ladder from the bottom. Both halves
+/// of that are already the reconciler's documented behaviour; this only gives it a caller.
+/// </para>
+/// <para>
+/// <b>Nothing is said about the resources Blocked behind it, on purpose.</b> Blocked is not a
+/// persisted state — it is recomputed from this pass's statuses on every walk — and a blocked
+/// resource has spent no attempt, so it has no budget to reset. Clearing the escalation is
+/// therefore the whole of the fix: the dependents are simply attempted again the next time the
+/// walk reaches them, which is the same pass.
+/// </para>
+/// </remarks>
+public sealed record RetryRequest
+{
+    /// <summary>Device the operator was looking at, so a misrouted frame ignores it.</summary>
+    /// <remarks>
+    /// Checked by the agent rather than trusted. The server addresses one open socket, so a
+    /// mismatch should be impossible — which is exactly why it is worth asserting: the cost of
+    /// being wrong is an unrelated frame silently rebooting five more times.
+    /// </remarks>
+    public required string DeviceId { get; init; }
+
+    /// <summary>
+    /// The resource whose budget to reset, or null for every resource that has given up.
+    /// </summary>
+    public string? Resource { get; init; }
+
+    /// <summary>When the operator asked, for the agent's log.</summary>
+    public required DateTimeOffset RequestedUtc { get; init; }
 }
 
 /// <summary>

@@ -190,6 +190,68 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
+    public async Task A_device_wide_retry_clears_every_resource_that_gave_up()
+    {
+        // Rung 4 halts the *device*, and a halted device can have more than one resource that gave
+        // up — the halt report deliberately lists all of them, "because clearing one halt while
+        // another remains would otherwise look like it had done nothing". This is the verb that
+        // matches that noun, and it is what the Fleet Manager's retry sends when the operator is
+        // looking at a frame rather than at a setting.
+        var first = Broken("first");
+        var second = Broken("second");
+        var healthy = new ScriptedResource("healthy", "want", "want");
+        using var harness = new ReconcileHarness(Options, first, healthy, second)
+        {
+            Telemetry = { Connected = true },
+        };
+
+        await harness.ConvergeAsync();
+
+        var reset = harness.Loop.ResetExhaustedBudgets();
+
+        Assert.Equal(["first", "second"], reset);
+
+        // A resource that never gave up is not in the set and its ledger is untouched, so a
+        // device-wide retry cannot quietly forgive a backoff somebody is still waiting out.
+        Assert.DoesNotContain("healthy", reset);
+    }
+
+    [Fact]
+    public async Task A_retry_on_a_frame_where_nothing_gave_up_changes_nothing()
+    {
+        var healthy = new ScriptedResource("healthy", "want", "want");
+        using var harness = new ReconcileHarness(Options, healthy) { Telemetry = { Connected = true } };
+
+        await harness.ConvergeAsync();
+
+        Assert.Empty(harness.Loop.ResetExhaustedBudgets());
+        Assert.Equal(PassResult.Converged, (await harness.PassAsync()).Result);
+    }
+
+    [Fact]
+    public void The_set_a_retry_clears_is_the_set_the_walk_refuses_to_touch()
+    {
+        // One predicate, two readers. Written twice they could disagree, and the disagreement has
+        // one direction — something the walk skips forever that a retry cannot reach — which is a
+        // frame nothing can recover short of a re-flash.
+        Assert.False(ReconcileLoop.HasGivenUp(new ResourceLedgerEntry { Resource = "r" }, 5));
+
+        // Attempts alone are a backoff, not a surrender: the ladder has not reached rung 2 yet.
+        Assert.False(ReconcileLoop.HasGivenUp(new ResourceLedgerEntry { Resource = "r", Attempts = 5 }, 5));
+
+        // An escalation with a budget that has since been reset is a frame already trying again.
+        Assert.False(ReconcileLoop.HasGivenUp(new ResourceLedgerEntry { Resource = "r", Escalations = 1 }, 5));
+
+        Assert.True(ReconcileLoop.HasGivenUp(
+            new ResourceLedgerEntry { Resource = "r", Attempts = 5, Escalations = 1 },
+            5));
+
+        // Halted is in the set whatever the counters say, because a halt is what a retry is most
+        // often pressed against and the only way back from rung 4.
+        Assert.True(ReconcileLoop.HasGivenUp(new ResourceLedgerEntry { Resource = "r", Halted = true }, 5));
+    }
+
+    [Fact]
     public async Task A_halted_device_stops_reconciling_everything_not_just_the_broken_resource()
     {
         // "Halted for that device", not "halted for that resource". Continuing to reboot a
@@ -311,6 +373,6 @@ public sealed class AgentEscalationTests
         Assert.Null(entry.NextAttemptUtc);
     }
 
-    private static ScriptedResource Broken() =>
-        new("broken", "want", "have-not") { ActHasNoEffect = true };
+    private static ScriptedResource Broken(string name = "broken") =>
+        new(name, "want", "have-not") { ActHasNoEffect = true };
 }
