@@ -379,12 +379,52 @@ public sealed class ChromiumKioskEnabledResource : IResource
 /// browser itself, so there is nothing to disambiguate.
 /// </para>
 /// <para>
-/// <b>What is deliberately unchanged:</b> <c>MainPID</c> is <c>0</c> while the unit sits in its
-/// three <c>ExecStartPre</c> commands waiting for the Wayland socket and for the agent's own origin
-/// to answer, so a browser that is legitimately on its way up reads as "no browser process is
-/// running" for that window — exactly as the <c>pgrep</c> reading did. Supervision's interlock
-/// covers a restart and <see cref="UserSessionGate"/> covers the start of a boot; anything left is
-/// the same behaviour as before this fix and is not being widened here on no measurement.
+/// <b>A unit that has not finished starting is not yet answerable, and that is the second half of
+/// the identification.</b> <c>MainPID</c> alone is a value with no phase attached, and the two
+/// windows where that bites were both measured on the mule on 2026-08-16. Around ten seconds after
+/// a reboot the login session exists — so <see cref="UserSessionGate"/> lets the resource
+/// through — while <c>chromium-kiosk.service</c> is still inside its three <c>ExecStartPre</c>
+/// commands, which is a <c>~4.5 s</c> wait for the Wayland socket followed by a poll of the
+/// agent's own origin; Chromium reached <c>Started</c> at 15.2 s. The resource read
+/// <c>MainPID=0</c>, reported <i>"no browser process is running"</i>, and its Act took a browser
+/// that was seconds from drawing and restarted it, three attempts in a row, to an escalation. So
+/// the reading now takes <c>ActiveState</c> and <c>SubState</c> in the <i>same</i> answer as
+/// <c>MainPID</c> — one <c>systemctl show</c>, because asking twice reintroduces the race against
+/// the very window being closed — and a unit that is starting is
+/// <see cref="ResourceObservation.Unevaluable"/>: no attempt spent, nothing acted on, nothing
+/// rebooted, re-read shortly after.
+/// </para>
+/// <para>
+/// <b>This does not gate the resource on the browser running, and it must not.</b> A resource whose
+/// job is to assert that the browser is up cannot excuse itself when the browser is down. The gate
+/// is on the unit having <i>finished starting</i>, which is a different question with a different
+/// answer: <c>dead</c>, <c>failed</c> and the auto-restart sub-states are all fully answerable and
+/// all report drift, exactly as before. What is excused is <c>condition</c>, <c>start-pre</c>,
+/// <c>start</c> and <c>start-post</c> — the four sub-states in which systemd has not yet finished
+/// making the process this resource is about.
+/// </para>
+/// <para>
+/// <b>Gating on <c>SubState</c> rather than <c>ActiveState</c> is deliberate</b>, and systemd's own
+/// source is why. <c>ActiveState=active</c> covers <c>running</c> and <c>exited</c> alike, and
+/// <c>SERVICE_EXITED</c> is not in systemd's <c>SERVICE_STATE_WITH_MAIN_PROCESS</c> set — so a
+/// <c>RemainAfterExit=</c> unit reports <c>active</c> with <c>MainPID=0</c>, and a gate written on
+/// <c>ActiveState</c> would read that as a live browser with no process. <c>Type=idle</c> is worse
+/// still: <c>state_translation_table_idle</c> maps <c>start-pre</c> itself to <c>UNIT_ACTIVE</c>.
+/// This unit is <c>Type=simple</c> and hits neither today, and both are one edit away.
+/// </para>
+/// <para>
+/// <b>The argv actually read is written into the observation, and that is not decoration.</b> On
+/// its first live pass after the <c>MainPID</c> fix this resource reported <i>all thirteen</i>
+/// declared arguments missing while naming a non-zero pid whose command line it had read
+/// successfully — and the record does not say what that command line was, so the cause is
+/// undetermined to this day. The leading hypothesis at the time was that <c>MainPID</c> named the
+/// <c>ExecStartPre</c> process, and systemd's source <b>refutes</b> it: <c>service_set_state</c>
+/// calls <c>service_unwatch_main_pid</c> on entry to any state outside
+/// <c>SERVICE_STATE_WITH_MAIN_PROCESS</c>, which excludes <c>SERVICE_START_PRE</c>, and
+/// <c>service_enter_start_pre</c> spawns into <c>control_pid</c> — so <c>MainPID</c> is <c>0</c>
+/// there and <c>ControlPID</c> holds the <c>/bin/bash -c 'while …'</c>. One line of diagnostics
+/// would have settled it in a single pass; the resource now carries that line whenever the compare
+/// fails.
 /// </para>
 /// </remarks>
 public sealed class ChromiumKioskRunningResource : IResource
@@ -394,6 +434,44 @@ public sealed class ChromiumKioskRunningResource : IResource
 
     /// <summary>The unit property carrying the pid of the process systemd started.</summary>
     public const string MainPidProperty = "MainPID";
+
+    /// <summary>The unit property carrying the coarse lifecycle state.</summary>
+    public const string ActiveStateProperty = "ActiveState";
+
+    /// <summary>The unit property carrying the fine-grained lifecycle state.</summary>
+    public const string SubStateProperty = "SubState";
+
+    /// <summary>
+    /// The service sub-states in which systemd has not yet finished making the main process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Transcribed from systemd's <c>service_state_table[]</c> in <c>src/basic/unit-def.c</c> and
+    /// from the <c>SERVICE_STATE_WITH_MAIN_PROCESS</c> predicate in <c>src/core/service.c</c>.
+    /// <c>condition</c> and <c>start-pre</c> have no main process at all; <c>start</c> has one only
+    /// for some <c>Type=</c> values, and none for <c>Type=forking</c>; <c>start-post</c> has one
+    /// but the unit's own start-up is not complete.
+    /// </para>
+    /// <para>
+    /// <b>What is deliberately absent is as important as what is here.</b> <c>auto-restart</c> and
+    /// <c>auto-restart-queued</c> are <c>ActiveState=activating</c> and are <i>not</i> excused: a
+    /// browser systemd is waiting to restart is a browser that is not running, which is precisely
+    /// the fault this resource exists to report. Nor are the <c>stop*</c>, <c>final-*</c>,
+    /// <c>dead</c>, <c>failed</c> or <c>cleaning</c> sub-states, all of which are answerable.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlySet<string> StartingSubStates { get; } =
+        new HashSet<string>(StringComparer.Ordinal) { "condition", "start-pre", "start", "start-post" };
+
+    /// <summary>How much of a command line reaches an observation.</summary>
+    /// <remarks>
+    /// A delta travels to the journal, the frame's own screen and the Fleet Manager's device
+    /// history, and a Chromium command line on this build runs to twenty-four arguments. Enough to
+    /// identify the process beyond doubt is the requirement — <c>argv[0]</c> answers "is this even a
+    /// browser" on its own — and the rest is truncated with the count kept, so the reading stays a
+    /// sentence rather than a paragraph.
+    /// </remarks>
+    public const int DiagnosticArgumentLimit = 4;
 
     private readonly ISystemFiles _files;
     private readonly IUserSession _session;
@@ -450,10 +528,24 @@ public sealed class ChromiumKioskRunningResource : IResource
             return waiting;
         }
 
+        // One call, three properties. Asking for the phase in a second `systemctl show` would put a
+        // gap between the two readings exactly as wide as the window this is closing, so the
+        // snapshot has to be atomic — and systemd renders one `Property=value` line per property,
+        // in the order asked, which is what PropertyIn reads.
         var shown = await _session
             .RunAsync(
                 "systemctl",
-                ["--user", "show", ChromiumKioskUnitResource.UnitName, "-p", MainPidProperty],
+                [
+                    "--user",
+                    "show",
+                    ChromiumKioskUnitResource.UnitName,
+                    "-p",
+                    MainPidProperty,
+                    "-p",
+                    ActiveStateProperty,
+                    "-p",
+                    SubStateProperty,
+                ],
                 cancellationToken)
             .ConfigureAwait(false);
 
@@ -468,9 +560,24 @@ public sealed class ChromiumKioskRunningResource : IResource
                 $"the user manager did not say which process runs {ChromiumKioskUnitResource.UnitName}{Refusal(shown)}");
         }
 
+        var subState = PropertyIn(shown.StandardOutput, SubStateProperty);
+        var activeState = PropertyIn(shown.StandardOutput, ActiveStateProperty);
+
+        if (subState is { } phase && StartingSubStates.Contains(phase))
+        {
+            // Not drift, and not a dead browser: the unit exists, systemd is working on it, and it
+            // has not yet made the process this resource is about. Answering anything else here is
+            // what restarted a browser 4.8 s from `Started`, three times, to an escalation.
+            return ResourceObservation.Unevaluable(
+                expected,
+                $"{ChromiumKioskUnitResource.UnitName} has not finished starting "
+                + $"({activeState ?? "in a state systemd did not report"}, {phase}), so which process "
+                + "is the browser is not yet settled");
+        }
+
         if (pid == 0)
         {
-            return new ResourceObservation(false, expected, "no browser process is running");
+            return new ResourceObservation(false, expected, Absent(activeState, subState));
         }
 
         if (CommandLineOf(_files, pid) is not { Count: > 0 } running)
@@ -485,12 +592,20 @@ public sealed class ChromiumKioskRunningResource : IResource
 
         var missing = MissingFrom(running, declared);
 
+        // The failing branch names the process it actually read, not only what it did not find.
+        // A verdict of "running without <every declared argument>" is ambiguous between a browser
+        // launched wrong and a reading of something that was never the browser, and the record of
+        // 2026-08-16 could not tell those apart because nothing wrote down what was read.
         return new ResourceObservation(
             missing.Count == 0,
             expected,
             missing.Count == 0
-                ? $"running with all {declared.Count} declared arguments"
-                : $"running without {string.Join(", ", missing)}");
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"running as pid {pid} with all {declared.Count} declared arguments")
+                : string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"pid {pid} ({Summarise(running)}) running without {string.Join(", ", missing)}"));
     }
 
     /// <inheritdoc/>
@@ -605,6 +720,73 @@ public sealed class ChromiumKioskRunningResource : IResource
 
         return missing;
     }
+
+    /// <summary>
+    /// One <c>Property=value</c> line out of a <c>systemctl show</c> answer, or null.
+    /// </summary>
+    /// <remarks>
+    /// Kept beside <see cref="MainPidIn"/> rather than shared with
+    /// <see cref="ConsoleAutologinResource.ActiveStateIn"/>'s private reader, because the two
+    /// resources ask different managers different questions and a shared parser would be one type
+    /// coupling them for the sake of nine lines.
+    /// </remarks>
+    public static string? PropertyIn(string shown, string name)
+    {
+        ArgumentNullException.ThrowIfNull(shown);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        var prefix = name + "=";
+
+        foreach (var line in shown.Split('\n'))
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return line[prefix.Length..].Trim() is { Length: > 0 } value ? value : null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A bounded rendering of an argument vector, for the observation that reports a mismatch.
+    /// </summary>
+    /// <remarks>
+    /// <c>argv[0]</c> always survives, because it is the argument that answers whether the process
+    /// is a browser at all — <c>/usr/lib/chromium/chromium</c> and <c>/bin/bash</c> are different
+    /// diagnoses with different fixes, and telling them apart is the whole reason this exists.
+    /// </remarks>
+    public static string Summarise(IReadOnlyList<string> commandLine)
+    {
+        ArgumentNullException.ThrowIfNull(commandLine);
+
+        if (commandLine.Count == 0)
+        {
+            return "no arguments at all";
+        }
+
+        var head = string.Join(' ', commandLine.Take(DiagnosticArgumentLimit));
+
+        return commandLine.Count <= DiagnosticArgumentLimit
+            ? head
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"{head} … and {commandLine.Count - DiagnosticArgumentLimit} more arguments");
+    }
+
+    /// <summary>
+    /// "No browser process is running", with the phase systemd gave for it.
+    /// </summary>
+    /// <remarks>
+    /// The bare sentence is quoted verbatim by <c>SupervisionInterlock</c> and by the tests that
+    /// pin what a restart's transient looks like, so it stays the head of the string and the phase
+    /// is added after it rather than folded into it.
+    /// </remarks>
+    private static string Absent(string? activeState, string? subState) =>
+        activeState is null && subState is null
+            ? "no browser process is running"
+            : $"no browser process is running ({activeState ?? "state unreported"}, "
+                + $"{subState ?? "sub-state unreported"})";
 
     /// <summary>What a refusing <c>systemctl</c> said, parenthesised, or nothing.</summary>
     private static string Refusal(ProcessResult result) =>

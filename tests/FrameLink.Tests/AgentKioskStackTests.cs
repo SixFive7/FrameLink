@@ -38,8 +38,20 @@ public sealed class AgentKioskStackTests
     /// <summary>What <c>loginctl list-sessions --no-legend</c> prints on a frame that logged in.</summary>
     private const string LoggedInOnTty1 = "      1 1000 framelink seat0 tty1  active no   -";
 
-    /// <summary>The one question the running-browser resource asks the user manager, verbatim.</summary>
-    private const string ShowMainPid = "systemctl --user show chromium-kiosk.service -p MainPID";
+    /// <summary>
+    /// The one question the running-browser resource asks the user manager, verbatim.
+    /// </summary>
+    /// <remarks>
+    /// Three properties in one call, and the test pins that it is one call: asking for the phase
+    /// separately from the pid would put a gap between them exactly as wide as the ~4.5 s
+    /// <c>ExecStartPre</c> window the phase is read to close.
+    /// </remarks>
+    private const string ShowMainPid =
+        "systemctl --user show chromium-kiosk.service -p MainPID -p ActiveState -p SubState";
+
+    /// <summary>What the user manager prints for a unit that is up and drawing.</summary>
+    private static string Running(int pid) =>
+        $"MainPID={pid}\nActiveState=active\nSubState=running";
 
     /// <summary>
     /// The kiosk browser's command line as <c>/proc/1253/cmdline</c> carried it on the mule,
@@ -700,7 +712,7 @@ public sealed class AgentKioskStackTests
         // forever, while the browser was up and drawing; the restart it triggered took a working
         // browser down five times a boot. Both halves of the identification are gone: the process is
         // the one systemd names, and the comparison never mentions a binary.
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1253", string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(1253), string.Empty);
         SeedCommandLine(files, 1253, MeasuredBrowserCommandLine.Split(' '));
 
         var observation = await running.ObserveAsync(None);
@@ -752,7 +764,7 @@ public sealed class AgentKioskStackTests
             .. declared,
         ];
 
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=701", string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(701), string.Empty);
         SeedCommandLine(files, 701, injected);
 
         Assert.True((await running.ObserveAsync(None)).InSync);
@@ -768,7 +780,7 @@ public sealed class AgentKioskStackTests
 
         await unit.ActAsync(None);
 
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=701", string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(701), string.Empty);
         SeedCommandLine(
             files,
             701,
@@ -801,12 +813,121 @@ public sealed class AgentKioskStackTests
         // unit has no main process, and that is the verdict — which is also the exact wording
         // SupervisionInterlock and Supervisor quote as the transient a restart produces.
         SeedCommandLine(files, 4242, MeasuredBrowserCommandLine.Split(' '));
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=0", string.Empty);
+        session.Answers[ShowMainPid] =
+            new ProcessResult(0, "MainPID=0\nActiveState=inactive\nSubState=dead", string.Empty);
 
         var observation = await running.ObserveAsync(None);
 
         Assert.False(observation.InSync);
-        Assert.Equal("no browser process is running", observation.Observed);
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+
+        // The sentence SupervisionInterlock and Supervisor quote stays the head of the string; the
+        // phase systemd gave for it is added after, so a reader can tell a stopped unit from a
+        // failed one without a second command.
+        Assert.StartsWith("no browser process is running", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("inactive, dead", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_unit_that_has_not_finished_starting_is_not_yet_answerable()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // Measured on the mule 2026-08-16. Ten seconds after a reboot the login session exists, so
+        // UserSessionGate lets this resource through, while chromium-kiosk.service is still inside
+        // its ~4.5 s of ExecStartPre waiting for the Wayland socket; Chromium reached `Started` at
+        // 15.2 s. MainPID is 0 for that whole window — systemd's service_set_state calls
+        // service_unwatch_main_pid on entry to any state outside SERVICE_STATE_WITH_MAIN_PROCESS,
+        // which excludes SERVICE_START_PRE — so the resource read "no browser process is running",
+        // acted, and restarted a browser that was seconds from drawing. Three attempts in a row, to
+        // an escalation.
+        foreach (var phase in ChromiumKioskRunningResource.StartingSubStates)
+        {
+            session.Answers[ShowMainPid] =
+                new ProcessResult(0, $"MainPID=0\nActiveState=activating\nSubState={phase}", string.Empty);
+
+            var observation = await running.ObserveAsync(None);
+
+            // Unevaluable, not drift: no attempt is spent, nothing is acted on, nothing reboots.
+            Assert.Equal(ObservationOutcome.Unevaluable, observation.Outcome);
+            Assert.Contains("has not finished starting", observation.Observed, StringComparison.Ordinal);
+            Assert.Contains(phase, observation.Observed, StringComparison.Ordinal);
+            Assert.Contains("could not be determined", observation.Delta, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task A_browser_systemd_is_waiting_to_restart_is_still_a_missing_browser()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // The gate above must not widen into "the browser is not running, so never mind". These
+        // four are all states in which systemd has finished trying, or has not started, and every
+        // one of them is a fully answerable reading of a frame with no browser on it. auto-restart
+        // is ActiveState=activating and is deliberately not excused: a browser systemd is waiting
+        // to bring back is exactly the fault this resource exists to report.
+        foreach (var (active, sub) in new[]
+        {
+            ("failed", "failed"),
+            ("inactive", "dead"),
+            ("activating", "auto-restart"),
+            ("deactivating", "stop-sigterm"),
+        })
+        {
+            session.Answers[ShowMainPid] =
+                new ProcessResult(0, $"MainPID=0\nActiveState={active}\nSubState={sub}", string.Empty);
+
+            var observation = await running.ObserveAsync(None);
+
+            Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+            Assert.StartsWith("no browser process is running", observation.Observed, StringComparison.Ordinal);
+            Assert.Contains(sub, observation.Observed, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task A_mismatch_names_the_process_it_actually_read()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // The undetermined defect of 2026-08-16, in the form that would have settled it. The
+        // resource reported all thirteen declared arguments missing against a non-zero pid whose
+        // command line it had read successfully, and wrote down nothing about what that command
+        // line was — so "a browser launched wrong" and "a reading of something that was never the
+        // browser" were indistinguishable in the record, and still are. argv[0] separates them.
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(1253), string.Empty);
+        SeedCommandLine(files, 1253, "/bin/bash", "-c", "while [ ! -S \"/run/user/1000/wayland-0\" ]; do sleep 0.1; done");
+
+        var observation = await running.ObserveAsync(None);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("pid 1253", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("/bin/bash", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("running without", observation.Observed, StringComparison.Ordinal);
+
+        // Bounded, because a delta reaches the frame's own screen. A whole Chromium command line is
+        // twenty-four arguments and would push everything else off it.
+        SeedCommandLine(files, 1253, MeasuredBrowserCommandLine.Split(' ')[..^1]);
+
+        var truncated = (await running.ObserveAsync(None)).Observed;
+
+        Assert.Contains("and 20 more arguments", truncated, StringComparison.Ordinal);
+        Assert.DoesNotContain("--disable-pings", truncated, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -854,12 +975,12 @@ public sealed class AgentKioskStackTests
             "--ozone-platform=wayland");
         SeedCommandLine(files, 1253, MeasuredBrowserCommandLine.Split(' '));
 
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1253", string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(1253), string.Empty);
         Assert.True((await running.ObserveAsync(None)).InSync);
 
         // And if systemd ever named one, it would be drift rather than a healthy frame: a renderer
         // carries none of the kiosk flags.
-        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1352", string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(1352), string.Empty);
         var observation = await running.ObserveAsync(None);
 
         Assert.False(observation.InSync);
