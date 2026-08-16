@@ -17,6 +17,7 @@ Module map
 :mod:`flh.deploy`    paramiko push + systemd unit install, idempotent, verified by the mule
 :mod:`flh.power`     Home Assistant smart-plug control with wrong-entity and wear guards
 :mod:`flh.collect`   the two allowlisted diagnostics: screenshot and journal tail
+:mod:`flh.parity`    Mn+3's state diff: read-only probes over SSH, judged by tools/FrameLink.Parity
 :mod:`flh.testrun`   the test suite, with telemetry off and the exit code propagated
 :mod:`flh.png`       dependency-free PNG writer for the framebuffer screenshot path
 :mod:`flh.ssh`       paramiko session handling and elevation; the only place a password is passed
@@ -33,6 +34,7 @@ __all__ = [
     "collect",
     "config",
     "deploy",
+    "parity",
     "png",
     "power",
     "progress",

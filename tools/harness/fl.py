@@ -15,6 +15,9 @@ has lost its context finds out where the build stands.
               the arrival using the mule's own sha256sum
     collect   the two allowlisted diagnostics (section 3.6): screenshot and journal tail
     power     Home Assistant control of the smart plug, with wrong-entity and wear guards
+    parity    the first of milestone Mn+3's three bars: a state diff of a live frame against
+              the frozen v1 reference, with every expected difference recorded and every
+              gap in coverage named
     status    what has been proven, what this session can do, what to do next
 
 Credentials
@@ -71,6 +74,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from flh import build as build_mod  # noqa: E402
 from flh import collect as collect_mod  # noqa: E402
 from flh import deploy as deploy_mod  # noqa: E402
+from flh import parity as parity_mod  # noqa: E402
 from flh import power as power_mod  # noqa: E402
 from flh import progress, status, testrun, ui  # noqa: E402
 from flh.config import AGENT_PROJECT, HA_ENTITY, RID, TEST_PROJECT, HarnessError  # noqa: E402
@@ -242,6 +246,54 @@ def _parser() -> argparse.ArgumentParser:
         help="DANGEROUS: skip the wrong-entity check after relay-off",
     )
 
+    # --- parity -------------------------------------------------------------
+    p_parity = subparsers.add_parser(
+        "parity",
+        help="state-diff a live frame against the frozen v1 reference",
+        description=(
+            "The first of milestone Mn+3's three bars. Runs read-only, unprivileged probes over "
+            "SSH, then hands the result to tools/FrameLink.Parity, which compares it against "
+            "reference/v1-state-inventory.txt, against an expected-difference ledger, and against "
+            "the resource catalog.\n\n"
+            "Three kinds of difference are separated, because a flat diff proves nothing: "
+            "something v1 had and this frame does not, something this frame has and v1 never did, "
+            "and a value that moved - which for a package splits again into forward (a security "
+            "update, the only drift this project tolerates, computed by the same code the Fleet "
+            "Manager uses) and backward.\n\n"
+            "Coverage is reported rather than assumed. Inventory sections nothing can compare are "
+            "declared with their reason, and so are the catalog resources whose state the v1 "
+            "capture never recorded - those cannot be verified by a state diff at all, and are "
+            "what the other two bars exist for.\n\n"
+            "Two probes need root and are skipped unless --elevate is given; a run without them "
+            "reports 'incomplete' and names them rather than calling a frame at parity on "
+            "evidence it never looked at. Nothing here writes to the frame. Requires FL_PW unless "
+            "--coverage or --from is used.\n\n"
+            "Exit 0 at parity, 2 differences found, 3 the comparison could not be completed."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_parity.add_argument(
+        "--elevate",
+        action="store_true",
+        help="also run the two probes that need root (array firmware, agent state)",
+    )
+    p_parity.add_argument(
+        "--collect-only",
+        action="store_true",
+        help="write the observation and do not judge it",
+    )
+    p_parity.add_argument(
+        "--from",
+        dest="from_observed",
+        default=None,
+        help="judge an observed.json that already exists instead of reaching a frame",
+    )
+    p_parity.add_argument(
+        "--coverage",
+        action="store_true",
+        help="print what a state diff can and cannot answer; needs no frame and no credential",
+    )
+
     # --- status -------------------------------------------------------------
     p_status = subparsers.add_parser(
         "status",
@@ -355,6 +407,22 @@ def main(argv: list[str] | None = None) -> int:
             power_mod.prove_capability(outcome)
             progress.log("power", True, f"{args.action} - {outcome}")
             return 0
+
+        if args.command == "parity":
+            if args.coverage:
+                return parity_mod.coverage()
+            with progress.activity("parity", elevated=args.elevate):
+                outcome = parity_mod.run(
+                    elevate=args.elevate,
+                    collect_only=args.collect_only,
+                    observed=Path(args.from_observed) if args.from_observed else None,
+                )
+            progress.log(
+                "parity",
+                outcome["exitCode"] == 0,
+                f"{outcome.get('verdict', 'collected only')} - {outcome['directory']}",
+            )
+            return int(outcome["exitCode"])
 
         if args.command == "status":
             status.show(json_output=args.json)

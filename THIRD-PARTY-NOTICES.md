@@ -21,7 +21,7 @@ Both files live in `app/vendor/` and are pre-built, minified distributions taken
 | **Version** | The prebuilt `lit-all` bundle. Component versions are embedded in the file: `@lit/reactive-element` 2.1.2, `lit-html` 3.3.3, `lit-element` 4.2.2 — the set shipped by the `lit` 3.3.3 release. Search the file for `reactiveElementVersions`, `litHtmlVersions` and `litElementVersions` to read them back. |
 | **Licence** | BSD-3-Clause |
 | **Copyright** | Copyright 2017–2022 Google LLC |
-| **Used by** | `app/frame-app.js`, `app/frame-grid.js`, `app/frame-setup.js`, `app/frame-tile.js` — the web components that make up the kiosk SPA. |
+| **Used by** | `app/frame-app.js`, `app/frame-grid.js`, `app/frame-tile.js` — the web components that make up the kiosk SPA. |
 
 The bundle carries its own licence headers: 21 `SPDX-License-Identifier: BSD-3-Clause` markers and the accompanying Google LLC copyright lines are preserved verbatim inside the minified file. Do not strip them when copying the file around — the BSD-3-Clause retention clause is exactly what they satisfy.
 

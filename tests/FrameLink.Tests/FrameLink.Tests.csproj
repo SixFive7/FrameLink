@@ -47,6 +47,11 @@
          therefore never run here; what the suite asserts is the offline half — that the committed
          ledger is sound and still describes the pins in source. -->
     <ProjectReference Include="..\..\tools\FrameLink.Upstream\FrameLink.Upstream.csproj" />
+    <!-- Mn+3's parity harness. Same split, same reason: the tool owns the comparison and the
+         ledger, tools/harness/fl.py owns reaching the frame, and this reference is what puts
+         the whole verdict path — parsers, differ, ledger, coverage — inside the ordinary
+         suite with no hardware anywhere near it. -->
+    <ProjectReference Include="..\..\tools\FrameLink.Parity\FrameLink.Parity.csproj" />
   </ItemGroup>
 
 </Project>

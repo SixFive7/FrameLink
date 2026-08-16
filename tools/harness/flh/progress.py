@@ -370,6 +370,14 @@ _ORIENTATION: dict[str, str] = {
         "config contents and hashes, mixer values, firmware versions. This is what Mn+3 "
         "measures 'at parity' against, and the catalog's cross-check."
     ),
+    "parityHarness": (
+        "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes "
+        "over SSH, then tools/FrameLink.Parity judges the result against the parity target, an "
+        "expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the "
+        "catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and "
+        "cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be "
+        "completed."
+    ),
     "reasoningRecord": (
         "git log - every commit message carries why, not what. `git log --oneline` is the "
         "cheapest orientation available and the only place some findings exist at all (the "
@@ -879,7 +887,10 @@ def _milestone_state_from_resources(ledger: dict[str, Any]) -> tuple[str, dict[s
         "notWitnessed": (
             "The triple bar this milestone is graded on - state-diff against the frozen v1 "
             "reference, checkpoint assertions, validation battery on the mule - has not been run "
-            "for any group. No state-diff harness exists yet."
+            "for any group. The state-diff harness now exists (`fl.py parity`, judged by "
+            "tools/FrameLink.Parity) and is tested against fixtures, but it has never been run "
+            "against a frame: no observation has ever been collected and no parity verdict has "
+            "ever been issued. The other two bars have no harness."
         ),
     }
 

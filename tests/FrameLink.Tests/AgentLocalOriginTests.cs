@@ -86,6 +86,27 @@ public sealed class AgentLocalOriginTests : IAsyncLifetime
     }
 
     [Fact]
+    public void Nothing_on_the_frame_asks_a_person_for_a_token_or_remembers_one()
+    {
+        // v1's setup screen collected a hand-pasted token and kept it in localStorage. §3.7 moved
+        // minting into the Fleet Manager — the API secret is generated there, written 0600 and
+        // shown on no surface — so there is nowhere left for anybody to obtain a token by hand,
+        // and a screen asking for one asks for something nobody can supply. That is the defect
+        // guide 8 had, in the browser.
+        Assert.DoesNotContain("frame-setup.js", EmbeddedApp.Paths);
+
+        var app = AgentButtonTests.Asset("frame-app.js");
+        Assert.DoesNotContain("frame-setup", app, StringComparison.Ordinal);
+
+        // The stored credential goes with it, and for a reason that outlives the screen: the token
+        // is app.config.livekit-token's value, recorded by the resource that owns it, and a copy in
+        // the browser is a second writer for it — one that survives the document being withdrawn.
+        // A page that cannot fetch /config.json now has no call to place, which is the honest
+        // answer for a frame whose settings have not been issued (§3.3).
+        Assert.DoesNotContain("localStorage", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Slash_answers_200_which_is_what_the_resource_and_the_kiosk_guard_both_check()
     {
         var status = await LoopbackProbe.StatusAsync(_origin.Port, "/", None);

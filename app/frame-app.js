@@ -1,7 +1,6 @@
 import { LitElement, html, css } from './vendor/lit-all.min.js';
 import { CallClient, callable } from './livekit.js';
 import './frame-grid.js';
-import './frame-setup.js';
 
 // No livekitUrl here, deliberately. The Fleet Manager owns the call server and mints the token,
 // and both values reach this page as fields of the one document the agent serves from what its
@@ -41,7 +40,6 @@ class FrameApp extends LitElement {
     slideshowReady: { state: true },
     _slideshowUp: { state: true },    // probe verdict: the slideshow server answers
     config: { state: true },
-    needsToken: { state: true },
     participants: { state: true },    // [{identity, name, track, muted, quality}]
     selfTrack: { state: true },
     largeId: { state: true },
@@ -83,7 +81,6 @@ class FrameApp extends LitElement {
     this.mode = 'slideshow';
     this.slideshowReady = false;
     this.config = DEFAULT_CONFIG;
-    this.needsToken = false;
     this.participants = [];
     this.selfTrack = null;
     this.largeId = null;
@@ -119,24 +116,21 @@ class FrameApp extends LitElement {
     clearTimeout(this._probeTimer);
   }
 
+  // The document the agent serves is the only source, and nothing is remembered beside it. There
+  // used to be a stored token here, restored when the fetch came back empty or not at all — the
+  // one field that survived a missing document. It is gone with the screen that wrote it: the
+  // Fleet Manager mints every token and the agent records it as app.config.livekit-token, so a
+  // copy in the browser is a second writer for a value one resource owns, and one that outlives
+  // the document that issued it. A fetch that does not land is therefore no call rather than a
+  // call placed on a credential from an earlier configuration — and it is not a silence either,
+  // because a 503 here means this frame has not been issued its settings (§3.3) and §2.6's ladder
+  // is already saying so, in words, on the panel above this page.
   async _loadConfig() {
     let cfg = { ...DEFAULT_CONFIG };
     try {
       const res = await fetch('./config.json', { cache: 'no-store' });
       if (res.ok) cfg = { ...cfg, ...(await res.json()) };
     } catch (_) { /* config.json is optional in dev */ }
-    if (!cfg.token) {
-      // Session fallback for a token entered via the setup screen.
-      // (Persistent on-disk storage is wired in Phase D; tmpfs wipes localStorage on reboot.)
-      //
-      // It restores the credential only. There is deliberately no stored address beside it: a
-      // remembered token paired with a remembered address is exactly the pair that can outlive
-      // the document that issued it, and _reviewCall refuses to dial without an address that came
-      // back in this fetch. So a document that did not arrive means no call, never a call
-      // somewhere stale.
-      const t = localStorage.getItem('framelink_token');
-      if (t) cfg.token = t;
-    }
     this.config = cfg;
   }
 
@@ -145,15 +139,20 @@ class FrameApp extends LitElement {
   // The one place that decides whether this frame calls at all, so the address and the credential
   // are checked together or not at all.
   //
-  // Three outcomes, and the middle one is the one worth naming. A complete pair connects. A pair
-  // with an address and no token is the frame that has somewhere to call and nothing to call
-  // with, which is the only case a person can fix by typing, so it gets the setup screen. Anything
-  // else — no address issued, or neither — runs the slideshow and says nothing about calls, which
-  // is what LiveKitOptions.PublicUrl already specifies for a fleet nobody has set call.livekitUrl
-  // on: "the frame stays green and silent about calls instead of retrying a URL nobody chose".
+  // Two outcomes, and there is deliberately no longer a third. A complete pair connects; anything
+  // else runs the slideshow and says nothing about calls, which is what LiveKitOptions.PublicUrl
+  // already specifies for a fleet nobody has set call.livekitUrl on: "the frame stays green and
+  // silent about calls instead of retrying a URL nobody chose".
+  //
+  // The case that went was an address with no token, which used to open a screen asking a person
+  // to paste one. It was the only half-pair a person could fix by typing, and it stopped being
+  // that when the Fleet Manager took ownership of minting: the API secret lives inside the server,
+  // is written 0600 and is shown on no surface, so there is nowhere left for anybody to obtain a
+  // token from. A frame holding half its credential is a frame waiting for its Fleet Manager, not
+  // one waiting for a person — and what a waiting frame needs is the sentence §2.6 already puts on
+  // the panel, not a text box nobody can fill in.
   _reviewCall() {
-    if (callable(this.config)) { this.needsToken = false; this._startCall(); return; }
-    this.needsToken = !!this.config.livekitUrl;
+    if (callable(this.config)) this._startCall();
   }
 
   _startCall() {
@@ -229,13 +228,6 @@ class FrameApp extends LitElement {
   _onPromote(e) {
     const id = e.detail.id;
     this.largeId = this.largeId === id ? null : id;   // tap toggles fullscreen
-  }
-
-  _onToken(e) {
-    const token = e.detail.token;
-    localStorage.setItem('framelink_token', token);
-    this.config = { ...this.config, token };
-    this._reviewCall();
   }
 
   // ---- Control channel (GPIO button) ----------------------------------------
@@ -361,8 +353,7 @@ class FrameApp extends LitElement {
 
   render() {
     const showSplash =
-      this.mode === 'slideshow' && !this.needsToken &&
-      (!this.slideshowReady || !this.config.immichKioskUrl);
+      this.mode === 'slideshow' && (!this.slideshowReady || !this.config.immichKioskUrl);
     return html`
       <iframe
         class="layer slideshow"
@@ -381,10 +372,6 @@ class FrameApp extends LitElement {
       ></frame-grid>
 
       <div class="touch-shield ${this.mode === 'call' ? 'passthrough' : ''}"></div>
-
-      ${this.needsToken
-        ? html`<frame-setup .identity=${this.config.identity} @token=${this._onToken}></frame-setup>`
-        : ''}
 
       <div class="splash" ?hidden=${!showSplash}>
         <div class="dot"></div>

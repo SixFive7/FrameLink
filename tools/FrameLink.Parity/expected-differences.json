@@ -1,0 +1,208 @@
+{
+  "$comment": [
+    "Every way a v2 frame is allowed to differ from the frozen v1 reference, with the reason.",
+    "",
+    "version2.md milestone Mn+3 grades a frame on being 'mechanically equal to the frozen v1",
+    "reference'. It is not, and never will be, byte for byte: v2 runs an agent v1 never had, it",
+    "has no Docker because decision 40 took it out, and some of what v1 carried exists only",
+    "because a guide told a human to install it. Those differences appear in every run, for the",
+    "life of the fleet. Without somewhere to record why, the diff stabilises at a few hundred",
+    "lines nobody reads, and the one line that matters arrives in the middle of them.",
+    "",
+    "An entry explains a difference; it does not hide it. Explained differences are still",
+    "reported, still counted, and carry their reason and authority into the artifact. What they",
+    "do not do is fail parity — which is what lets the finding count converge to zero and stay",
+    "there while the diff stays honest about its own size.",
+    "",
+    "An entry that matches nothing on a run is reported as stale. Delete it: an excuse nobody",
+    "removes is sitting ready for a real regression that happens to look the same.",
+    "",
+    "Most of what is here comes from one place — the 'Does not become a device resource' section",
+    "of reference/resource-catalog.md, which enumerated exactly this problem while the catalog",
+    "was being written, down to naming sshd-mute-monitor.service as the artifact 'a naive",
+    "state-diff will demand on every v2 frame'. Nothing has been recorded here on a guess: the",
+    "file starts at what the catalog and Appendix A already decided, and everything else is",
+    "meant to be added by a person reading a real run's findings, one entry per decision."
+  ],
+  "entries": [
+    {
+      "id": "docker-absent",
+      "facet": "docker",
+      "kinds": ["missing"],
+      "allKeys": true,
+      "reason": "There is no Docker on a v2 frame. Decision 40 keeps Immich Kiosk upstream but runs it as a supervised child process, and decision 41 has the agent fetch the pinned release and verify its checksum, so the daemon, the container and /etc/docker/daemon.json all go together. The catalog's exclusion section records the same removal as superseding guide 9 step 1 and guide 12 step 8.",
+      "authority": "version2.md decisions 40 and 41; resource-catalog.md 'Docker and everything that exists because of it'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-packages-absent",
+      "facet": "packages",
+      "kinds": ["missing"],
+      "keys": [
+        "docker-ce",
+        "docker-ce-cli",
+        "docker-ce-rootless-extras",
+        "docker-buildx-plugin",
+        "docker-compose-plugin",
+        "docker-model-plugin",
+        "containerd.io"
+      ],
+      "reason": "The seven packages get.docker.com installed on the v1 frame, named one by one in the catalog's list of v1 inventory items that follow Docker out. Nothing on a v2 frame installs them and no resource asserts them.",
+      "authority": "resource-catalog.md 'v1 inventory items that follow Docker out'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-apt-source-absent",
+      "facet": "apt.sources",
+      "kinds": ["missing"],
+      "keys": ["docker.list"],
+      "reason": "The apt source guide 9 step 1 added for download.docker.com. It follows the packages it existed to install, and it is the one legacy .list file in the v1 capture — which is why the apt.sources facet compares that file by name and not by content.",
+      "authority": "resource-catalog.md 'v1 inventory items that follow Docker out'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-units-absent",
+      "facet": "units.system.enabled",
+      "kinds": ["missing"],
+      "keys": ["docker.service", "docker.socket", "containerd.service", "docker-selfheal.service"],
+      "reason": "The three units Docker's own packages enable, plus docker-selfheal.service, which existed to repair a corrupt Docker network store after a power cut. Removing Docker deletes that whole failure class rather than repairing it, which is what the reliability work concluded after the August 2026 incident chain.",
+      "authority": "version2.md decision 40; resource-catalog.md guide 12 step 8 exclusion",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-selfheal-unit-file-absent",
+      "facet": "units.system.files",
+      "kinds": ["missing"],
+      "keys": ["/etc/systemd/system/docker-selfheal.service"],
+      "reason": "The unit file behind docker-selfheal.service. It repaired Docker after power-loss corruption and ensured the slideshow container ran; with no Docker and no container there is nothing for it to do and no guide step that writes it.",
+      "authority": "resource-catalog.md guide 12 step 8 exclusion",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-group-absent",
+      "facet": "users.groups",
+      "kinds": ["missing"],
+      "keys": ["member of docker", "group docker"],
+      "reason": "The docker group and the login user's membership of it, both created by guide 9 step 1's usermod. The catalog's user.framelink.supplementary-groups sets membership by name and does not name docker, so a v2 frame that had it would be the surprising one.",
+      "authority": "resource-catalog.md 'v1 inventory items that follow Docker out'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "docker-interfaces-absent",
+      "facet": "network",
+      "kinds": ["missing"],
+      "keyPrefixes": ["interface docker0", "interface br-"],
+      "reason": "The bridge interfaces the Docker daemon creates — docker0 and the per-compose-network br-* — which exist only while a Docker daemon does. Named explicitly in the catalog's list of v1 inventory items that follow Docker out.",
+      "authority": "resource-catalog.md 'v1 inventory items that follow Docker out'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "kiosk-compose-absent",
+      "facet": "kiosk.compose",
+      "kinds": ["missing"],
+      "allKeys": true,
+      "reason": "The whole ~/immich-kiosk/docker-compose.yml, including the image pin, the loopback port publish and the four KIOSK_* environment values. Every setting in it survives as a kiosk.config.* resource applied to a supervised binary instead; the file itself does not, and neither does the directory it lived in.",
+      "authority": "version2.md decisions 40 and 41; resource-catalog.md guide 9 step 2 and step 3 exclusions",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "sshd-mute-monitor-absent",
+      "facet": "*",
+      "kinds": ["missing"],
+      "keyContains": ["sshd-mute-monitor"],
+      "reason": "A diagnostic the v1 frame carried and the guides never described. Its own unit description says 'FrameLink testbed: sshd mute monitor (diagnostics, remove at fresh-flash)'. It is enabled in the frozen reference, so the catalog predicted this precisely: a naive state diff will demand it on every v2 frame, and it must be excluded explicitly.",
+      "authority": "resource-catalog.md 'v1 artifacts present in the parity reference that are not in any guide and must not be replicated'",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "spa-unit-absent",
+      "facet": "*",
+      "kinds": ["missing"],
+      "keyContains": ["framelink-spa"],
+      "reason": "v1 served the product app from a busybox httpd under framelink-spa.service. Decision 39 has the agent embed and serve the app itself, on the same 127.0.0.1:8888, so the unit has no successor — app.http.local-origin is the resource that replaced it and it owns no unit file.",
+      "authority": "version2.md decision 39; resource-catalog.md guide 10 step 3 exclusion",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "gpio-daemon-absent",
+      "facet": "*",
+      "kinds": ["missing"],
+      "keyContains": ["framelink-gpio"],
+      "reason": "v1 ran the button as a separate python daemon talking to the SPA over a WebSocket on 127.0.0.1:8889. With the daemon and the page inside one binary there is no second process and no port; gpio.button.line is the agent claiming the line directly. The three behaviours that mattered are reimplemented rather than dropped — camera restart after a call, the kiosk liveness watchdog, and the simulated press.",
+      "authority": "resource-catalog.md guide 11 steps 1 and 3 exclusions; version2.md §2.10",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "gpio-daemon-packages-absent",
+      "facet": "packages",
+      "kinds": ["missing"],
+      "keys": ["python3-gpiozero", "python3-lgpio", "python3-websockets"],
+      "reason": "The three packages guide 11 step 1 installed for the python GPIO daemon. The daemon moved inside the agent binary, which links only libc and libm, so nothing on a v2 frame needs a python GPIO stack.",
+      "authority": "resource-catalog.md guide 11 step 1 exclusion; version2.md §2.1",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "chromium-supervision-units-absent",
+      "facet": "*",
+      "kinds": ["missing"],
+      "keyContains": ["chromium-restart", "chromium-watchdog"],
+      "reason": "The two timers and their services that restarted Chromium at 03:00 and watched its memory every five minutes. Decision 47 makes supervision a second agent responsibility beside reconciliation rather than a set of units, and the measured constants survive as the supervision.* fleet settings.",
+      "authority": "version2.md decision 47; resource-catalog.md guide 12 steps 2-4 exclusions",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "git-checkout-packages-absent",
+      "facet": "packages",
+      "kinds": ["missing"],
+      "keys": ["git", "git-man"],
+      "reason": "guide 10 step 1 installed git to clone the app into ~/FrameLink. Decision 39 ships the app inside the agent binary, so there is no checkout to make and nothing to keep it from drifting. pkg.git is the one catalog resource the shipped agent deliberately does not implement, for the same reason — open question 3 obtains xvf_host as a pinned, checksum-verified artifact rather than a clone.",
+      "authority": "resource-catalog.md guide 10 step 1 exclusion; DeviceCatalog's recorded exclusion of pkg.git",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "agent-installed",
+      "facet": "*",
+      "kinds": ["extra"],
+      "keyContains": ["fl-agent"],
+      "reason": "The agent itself — its unit, its enablement and its state directory. It is the whole of v2 and the v1 frame had no equivalent, so every trace of it is an addition by design rather than a difference to close.",
+      "authority": "version2.md §2.1",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "hostname-is-per-device",
+      "facet": "network",
+      "kinds": ["changed"],
+      "keys": ["hostname"],
+      "reason": "The frozen reference was captured from framelink-douwe and a v2 frame is whatever the Fleet Manager named it — identity.hostname is a per-device setting under decision 35's fleet-default-plus-override model. Two frames with the same hostname would be the fault. The half of that resource that is a parity criterion is not the name but that getent hosts answers loopback for it, which the resource's own Observe checks and no capture in the reference could.",
+      "authority": "version2.md decision 35; resource-catalog.md identity.hostname",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "root-partuuid-is-per-card",
+      "facet": "boot.cmdline",
+      "kinds": ["missing", "extra"],
+      "keyPrefixes": ["root=PARTUUID="],
+      "reason": "The root filesystem's partition UUID is written by whatever created the card and differs between two cards flashed from the same image. No resource sets it and none could.",
+      "authority": "resource-catalog.md boot.cmdline.fbcon-rotate notes",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "imager-datasource-token-absent",
+      "facet": "boot.cmdline",
+      "kinds": ["missing"],
+      "keyPrefixes": ["ds=nocloud"],
+      "reason": "Raspberry Pi Imager's cloud-init datasource pin, present because the v1 card was Imager-flashed and absent on a raw-written one. The catalog states outright that no resource owns it and that it is worth leaving alone, because it is the one piece of evidence distinguishing an Imager-provisioned card from a raw-written one.",
+      "authority": "resource-catalog.md boot.cmdline.fbcon-rotate notes",
+      "recordedUtc": "2026-08-16"
+    },
+    {
+      "id": "zram-swap-present",
+      "facet": "system.governor-zram-tmpfs",
+      "kinds": ["extra"],
+      "keyContains": ["zram"],
+      "reason": "swap.zram-active is a catalog resource from guide 5 and a converged v2 frame is expected to have a zram device. The captured block carries no swap line at all, and it cannot be told from the file whether the capture asked and found none or never asked — so an observed zram device is recorded here rather than assumed to be either.",
+      "authority": "resource-catalog.md swap.zram-active; the GOVERNOR_ZRAM_TMPFS block itself",
+      "recordedUtc": "2026-08-16"
+    }
+  ]
+}
