@@ -41,11 +41,18 @@ public sealed record ProbeAnswer(string? Latest, string? Detail = null, string? 
 /// </summary>
 /// <remarks>
 /// <para>
-/// Four kinds because there are four classes of chosen version in this repository, and each
-/// publishes its truth in a different shape: an Apache directory listing, a GitHub release, a
-/// NuGet version index and the .NET release metadata. None of them is guessed from a pattern in a
+/// One kind per class of chosen version in this repository, because each publishes its truth in a
+/// different shape: an Apache directory listing, a GitHub release, a GitHub path's commit history,
+/// a NuGet version index and the .NET release metadata. None of them is guessed from a pattern in a
 /// URL — a probe either reads the document upstream publishes for the purpose or it reports that
 /// it could not.
+/// </para>
+/// <para>
+/// <b>The list grows only when an upstream genuinely cannot be watched by the kinds already here.</b>
+/// <c>github-path-commit</c> was added for exactly one such case: an upstream with zero releases and
+/// zero tags, whose <c>/releases/latest</c> answers 404. Leaving it unregistered would have been the
+/// worse outcome, because a ledger silent about a dependency reads identically to a ledger that has
+/// nothing to say about it.
 /// </para>
 /// <para>
 /// <b>A failed probe is never a pass.</b> "The ledger is current" is a claim about what upstream
@@ -121,6 +128,9 @@ public sealed partial class UpstreamProbes(HttpClient http)
                 UpstreamProbe.GithubRelease => ReadGithub(
                     await GetAsync(probe.Url, UpstreamJson.Default.GithubRelease, cancellationToken)
                         .ConfigureAwait(false)),
+                UpstreamProbe.GithubPathCommit => ReadGithubPathCommit(
+                    await GetAsync(probe.Url, UpstreamJson.Default.IReadOnlyListGithubCommit, cancellationToken)
+                        .ConfigureAwait(false)),
                 UpstreamProbe.NugetPackage => ReadNuget(
                     await GetAsync(probe.Url, UpstreamJson.Default.NugetVersionIndex, cancellationToken)
                         .ConfigureAwait(false)),
@@ -183,6 +193,43 @@ public sealed partial class UpstreamProbes(HttpClient http)
         string.IsNullOrWhiteSpace(release?.TagName)
             ? new ProbeAnswer(null, Failure: "the latest release has no tag.")
             : new ProbeAnswer(release.TagName.TrimStart('v'));
+
+    /// <summary>
+    /// The newest commit that touched the watched path, as a full SHA.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Full rather than abbreviated, because the SHA <i>is</i> the version here: it is what the pin
+    /// carries and what every content-addressed download URL is built from, so an answer a person
+    /// cannot paste back into the pin would only invite a wrong one.
+    /// </para>
+    /// <para>
+    /// <b>An empty list is a failure, not a pass.</b> The path having no commits means upstream
+    /// deleted or renamed the directory this project fetches from — the single most consequential
+    /// thing that can happen to a pin with no release behind it — and reporting that as "nothing to
+    /// see" would hide it behind a green line. It reaches the operator as unreachable, which §7.1
+    /// already treats as blocking a release.
+    /// </para>
+    /// </remarks>
+    private static ProbeAnswer ReadGithubPathCommit(IReadOnlyList<GithubCommit>? commits)
+    {
+        if (commits is null || commits.Count == 0)
+        {
+            return new ProbeAnswer(null, Failure: "no commit has ever touched that path — it may have been moved or deleted.");
+        }
+
+        var newest = commits[0];
+        if (string.IsNullOrWhiteSpace(newest.Sha))
+        {
+            return new ProbeAnswer(null, Failure: "the newest commit for that path has no sha.");
+        }
+
+        var date = newest.Commit?.Committer?.Date;
+
+        return new ProbeAnswer(
+            newest.Sha,
+            string.IsNullOrWhiteSpace(date) ? null : $"last touched {date}");
+    }
 
     /// <summary>
     /// The newest stable version. Prereleases are skipped — nothing here would take one.

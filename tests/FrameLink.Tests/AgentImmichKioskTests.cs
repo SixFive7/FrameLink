@@ -728,6 +728,17 @@ internal sealed class MemorySystemFiles : ISystemFiles
     {
         // No modes in a dictionary.
     }
+
+    /// <summary>
+    /// The path itself, which is the only honest answer a dictionary can give.
+    /// </summary>
+    /// <remarks>
+    /// Nothing here is on a real filesystem, so a caller that resolves a path and then opens it
+    /// would find nothing — which is correct, and is why this double is used only for
+    /// <c>/proc/&lt;pid&gt;/environ</c>. Anything doing binary I/O uses
+    /// <see cref="HostSystemFiles"/> under a temporary root, where <c>Resolve</c> means something.
+    /// </remarks>
+    public string Resolve(string path) => path;
 }
 
 /// <summary>Answers with bytes held in memory, and counts how often it is asked.</summary>

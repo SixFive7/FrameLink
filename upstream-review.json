@@ -68,6 +68,22 @@
       }
     },
     {
+      "id": "xvf-host-tool",
+      "title": "reSpeaker XVF3800 host control tool - the six files the agent fetches to talk to the mic array (decision 63)",
+      "pinnedIn": "src/FrameLink.Agent/Resources/XvfHostRelease.cs",
+      "pinned": "725f38464e73477a30aba9f5c220f1cfdc66d682",
+      "probe": {
+        "kind": "github-path-commit",
+        "url": "https://api.github.com/repos/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/commits?path=host_control/rpi_64bit&per_page=1"
+      },
+      "reviewed": {
+        "utc": "2026-08-16",
+        "upstream": "725f38464e73477a30aba9f5c220f1cfdc66d682",
+        "verdict": "adopted",
+        "note": "Probed live on 2026-08-16 while decision 63 was taken, so this entry points at the pin in source rather than at a paragraph. This is the entry the github-path-commit probe kind was added for: the repository has zero releases and zero tags, /releases/latest answers 404, and the artifact is loose files on a moving master branch - so github-release cannot answer for it at all, and an upstream that silently cannot be checked is worse than one that is not registered. commits?path=host_control/rpi_64bit&per_page=1 answers 200 with 725f38464e73477a30aba9f5c220f1cfdc66d682, committed 2025-07-04T08:41:12Z, and that is the event worth watching: Seeed rebuilding the tool. Six files were downloaded from raw.githubusercontent.com at that SHA and each hashes to what XvfHostReleasePin carries - xvf_host 63f89c6672c0d89bc82d8182cb36013ac3619288780f315a2e0373fb3ed771f2 (1,772,904 bytes), libcommand_map.so c1b424313e48cfe97c5cfce0530ac05fe47f818cc0fba15a9954198ef105282c (151,680), libdevice_i2c.so 7acb02a6ae14c34e3291fb55ec91d681d2902b79916df9fef53b5501fc2d1b3b (72,568), libdevice_usb.so 5b52ee35ef17aa287555abb112ebb1dc8497e11d43acc1bd223170d02e28eddd (73,312), dfu_cmds.yaml 67f6a982567b8d23da85c5806c40344094d21071c631344a47164cd085dddba3 (2,507) and transport_config.yaml 071f1fb87cfbdeffd3ba624713fa0745f27debfbde0544e8ac1af3863c29034d (30). The same six downloaded from today's master head (a652fe79da3a292b25decc0e1e7f267d29bb0284) are byte-for-byte identical, so the directory has been frozen for the thirteen months the repository around it kept moving. A raw URL carrying a full commit SHA is content-addressed, which is what makes a pin possible with no release to point at; the digests are measured here rather than published, because this publisher publishes none - the same weakness a checksums.txt has, since nobody signs one either. Six files and not four: the catalog used to name the binary and three .so files, and Seeed's own host_control/README.md lists dfu_cmds.yaml and transport_config.yaml as required members of the same directory. The seventh file there, xvf_i2c_dfu, is deliberately not fetched - this build does USB DFU through dfu-util and never the I2C path. Nothing is vendored: the repository carries no licence file at all (0 of 19 blobs at this commit, 0 of 51 at head), so redistribution is unlicensed, and the XMOS licence the tool appears to be built under forbids making the software available on a standalone basis while expressly permitting shipping it installed on the devices. The probe watches the directory rather than the six files, so a change to xvf_i2c_dfu would also report as moved - deliberately over-sensitive, because a human reads a moved entry and a missed rebuild reaches a frame. v1's guide 4 obtained these same files by an unpinned git clone --depth 1 of the whole repository and is not a consumer of anything v2 builds."
+      }
+    },
+    {
       "id": "nuget-microsoft-data-sqlite",
       "title": "Microsoft.Data.Sqlite - the Fleet Manager's store, EF Core being unusable under AOT (section 6.2)",
       "pinnedIn": "src/FrameLink.Control/FrameLink.Control.csproj",

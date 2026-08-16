@@ -233,6 +233,18 @@ public sealed record UpstreamEntry
             problems.Add($"{Id}: a {UpstreamProbe.DotnetChannel} probe needs a channel.");
         }
 
+        // A path-commit probe with no path watches the default branch, which moves for reasons that
+        // have nothing to do with the artifact. It would answer, it would answer differently every
+        // week, and every answer would be noise — the one failure mode a release gate cannot carry,
+        // because a gate that always says "moved" is a gate nobody reads.
+        if (string.Equals(Probe.Kind, UpstreamProbe.GithubPathCommit, StringComparison.Ordinal)
+            && Probe.Url?.Query.Contains("path=", StringComparison.Ordinal) != true)
+        {
+            problems.Add(
+                $"{Id}: a {UpstreamProbe.GithubPathCommit} probe needs a path= in its query, "
+                + "or it watches the whole branch.");
+        }
+
         if (string.IsNullOrWhiteSpace(Reviewed.Upstream))
         {
             problems.Add($"{Id}: no reviewed upstream version, so nothing can be compared against it.");
@@ -275,6 +287,31 @@ public sealed record UpstreamProbe
     /// <summary>A GitHub repository's latest release.</summary>
     public const string GithubRelease = "github-release";
 
+    /// <summary>
+    /// The newest commit touching one path in a GitHub repository.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>For an upstream that publishes no releases at all.</b>
+    /// <see cref="GithubRelease"/> reads <c>tag_name</c> from <c>/releases/latest</c>, and against
+    /// <c>respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY</c> that endpoint answers <b>404</b> — zero
+    /// releases, zero tags, loose files on a moving default branch. Registering that upstream under
+    /// a probe kind which cannot answer for it would have been worse than leaving it out: §7.1 makes
+    /// unreachable block a release exactly as a move does, so every future <c>check</c> would have
+    /// stopped on a probe that could never succeed, and the honest reading of the failure would have
+    /// been drowned by an entry crying wolf.
+    /// </para>
+    /// <para>
+    /// <b>A path, never a branch.</b> <c>commits?path=…&amp;per_page=1</c> answers 200 with the
+    /// newest commit that touched that path, which is precisely the event worth a human's attention:
+    /// <i>upstream rebuilt the artifact this project fetches</i>. Watching the branch head instead
+    /// would report "moved" on every unrelated push — this repository's head has moved several times
+    /// since the pinned directory last did — so the missing <c>path=</c> is a defect
+    /// <see cref="UpstreamEntry.Problems"/> refuses rather than a detail of the URL.
+    /// </para>
+    /// </remarks>
+    public const string GithubPathCommit = "github-path-commit";
+
     /// <summary>A NuGet package's published versions.</summary>
     public const string NugetPackage = "nuget-package";
 
@@ -292,7 +329,7 @@ public sealed record UpstreamProbe
     /// would put a value that changes weekly in front of a gate that runs once per release.
     /// </remarks>
     public static IReadOnlyList<string> Kinds { get; } =
-        [RaspiosImages, GithubRelease, NugetPackage, DotnetChannel];
+        [RaspiosImages, GithubRelease, GithubPathCommit, NugetPackage, DotnetChannel];
 
     /// <summary>Which of <see cref="Kinds"/> this is.</summary>
     public string Kind { get; init; } = string.Empty;

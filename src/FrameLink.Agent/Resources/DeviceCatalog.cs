@@ -97,6 +97,18 @@ public sealed record DeviceCatalogContext
     /// </remarks>
     public IKioskDownload? KioskDownload { get; init; }
 
+    /// <summary>
+    /// How the pinned reSpeaker control tool is fetched (decision 63: fetched, never vendored).
+    /// </summary>
+    /// <remarks>
+    /// Its own seam rather than a share of <see cref="KioskDownload"/>, following the same house
+    /// shape <c>ILiveKitDownload</c> takes: one installer, one download, so a test can starve or
+    /// corrupt either without touching the other. Absent means
+    /// <see cref="UnreachableXvfHostDownload"/>, so a catalog built off a frame reports the fetch as
+    /// unreachable rather than reaching the network from a test.
+    /// </remarks>
+    public IXvfHostDownload? XvfHostDownload { get; init; }
+
     /// <summary>How files the agent creates are locked down.</summary>
     /// <remarks>
     /// Needed from the kiosk block onwards: the fetched executable has to carry the executable bit,

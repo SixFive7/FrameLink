@@ -202,18 +202,18 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fixed.
 - **Risk** — —
-- **Notes** — Only reason for `git` on the frame is fetching the reSpeaker repository (guide 4) and the FrameLink checkout (guide 10). Guide 10's use is superseded by the embedded app. Whether guide 4's use survives depends on how the agent obtains `xvf_host` — see open question 3. If it does not, this resource disappears.
+- **Notes** — Only reason for `git` on the frame was fetching the reSpeaker repository (guide 4) and the FrameLink checkout (guide 10). Guide 10's use is superseded by the embedded app, and guide 4's is superseded by decision 63 — the agent now fetches six pinned raw files, not a clone. **This resource therefore has no remaining consumer.** It is kept for now rather than deleted so that the removal is a decision of its own with the catalog's numbering, the ordering table and the parity facet map moved in one change; nothing in v2 depends on it.
 
 **`tool.xvf-host.installed`**
 
 - **From** — [guide 4 step 2](../docs/4-audio-configuration.md#2-install-and-verify-the-xvf3800-host-control-tool)
-- **Sets** — Seeed's aarch64 `xvf_host` binary and its three sibling `.so` files present at a fixed path, binary executable. v1 path: `~/xvf3800/host_control/rpi_64bit/xvf_host`.
-- **Observe** — `test -x <path>/xvf_host` and the three `.so` files present with the pinned SHA-256 set.
-- **Verify** — presence and hashes **plus** a live `(cd <dir> && ./xvf_host VERSION)` returning the `Found device VID: 10374 PID: 26 interface: 3` banner. The extra half proves the HID control interface is reachable, which presence alone does not.
+- **Sets** — Seeed's aarch64 `xvf_host` and its **five** sidecar files — `libcommand_map.so`, `libdevice_i2c.so`, `libdevice_usb.so`, `dfu_cmds.yaml`, `transport_config.yaml` — present in `/var/lib/fl-agent/xvf3800/host_control/rpi_64bit`, each matching its pinned SHA-256, `xvf_host` executable. v1 path: `~/xvf3800/host_control/rpi_64bit/xvf_host`, still searched second.
+- **Observe** — SHA-256 of all six files against `XvfHostReleasePin.Current`, plus the executable bit on `xvf_host`, plus a live `(cd <dir> && ./xvf_host VERSION)` returning the `Found device VID: 10374 PID: 26 interface: 3` banner. The last half proves the HID control interface is reachable, which presence and hashes alone do not.
+- **Verify** — identical, and it survives §2.4's reboot by construction: nothing is remembered. Every pass re-hashes the files on disk and re-runs the round trip, so a claim that the install "succeeded" can never outlive the files it describes.
 - **dependsOn** — —
-- **Value source** — fixed; the upstream release is pinned by the catalog.
+- **Value source** — fixed; the six files are pinned at commit `725f3846` by `src/FrameLink.Agent/Resources/XvfHostRelease.cs` and reviewed in `upstream-review.json` under `xvf-host-tool`.
 - **Risk** — —
-- **Notes** — The binary loads its `.so` files **relative to its own directory**, so the working directory is part of the contract, not an incidental `cd`. Root is required — Seeed ship no udev rule for the HID node. Under v2 this is the same shape as Immich Kiosk (pinned upstream artifact, checksum-verified) rather than a git clone.
+- **Notes** — The binary loads its `.so` files **relative to its own directory**, so the working directory is part of the contract, not an incidental `cd`. Root is required — Seeed ship no udev rule for the HID node. **Six files, not four** (the earlier count of "three sibling `.so` files" was wrong): Seeed's own `host_control/README.md` lists `dfu_cmds.yaml` and `transport_config.yaml` as required members of the same directory. The seventh file there, `xvf_i2c_dfu`, is deliberately not fetched — this build does USB DFU through `dfu-util` and never the I2C path. Delivery is the Immich Kiosk shape (pinned upstream artifact, checksum-verified, fetched never vendored) but pinned at a **commit SHA** rather than a release, because the upstream repository has zero releases and zero tags; see decision 63 and open question 3 below.
 
 **`pkg.dfu-util`**
 
@@ -245,7 +245,7 @@ attached to them:
 - **dependsOn** — `firmware.xvf3800.version`
 - **Value source** — fixed.
 - **Risk** — —
-- **Notes** — On firmware 2.0.10 this boots low, so Act is normally a no-op — but it is still independently verifiable and a future firmware could default differently, which is exactly why it is its own resource. The same readback carries two diagnostics worth keeping: the **second** value is `X0D30`, the hardware Mute button (a `1` means someone pressed it, and mic capture is silent), and the **fourth** is `X0D33`, the LED ring rail (active-high). Neither is agent-settable; both belong in telemetry.
+- **Notes** — On firmware 2.0.10 this boots low, so Act is normally a no-op — but it is still independently verifiable and a future firmware could default differently, which is exactly why it is its own resource. **The default on the shipping 2.0.6 firmware is genuinely unknown and is open question 13**; nothing here depends on the answer, because Observe reads the pin rather than assuming it. The same readback carries two diagnostics worth keeping: the **second** value is `X0D30`, the hardware Mute button (a `1` means someone pressed it, and mic capture is silent), and the **fourth** is `X0D33`, the LED ring rail (active-high). Neither is agent-settable; both belong in telemetry.
 
 **`audio.mixer.pcm0-playback-volume`**
 
@@ -1368,14 +1368,28 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
    *Reading adopted:* split brick-capable by recovery cost (mic-array brick keeps the Pi bootable and
    is hand-recoverable; boot-partition brick is not), and place DFU just ahead of the audio block.
 
-3. **How does the agent obtain `xvf_host` and the firmware images?** Guide 4 gets both from a
-   `git clone --depth 1` of a GitHub repository into `~/xvf3800`. [§2.1](../version2.md)'s "no
-   supplemental program files, ever" is about the agent's own delivery, and Immich Kiosk is the
-   explicit precedent for a pinned, checksum-verified upstream artifact — but `xvf_host` needs three
-   sibling `.so` files and a fixed working directory, which is more than a single static binary.
-   *Reading adopted:* treat it as the Immich Kiosk shape (pinned upstream fetch, checksum verified,
-   under `/var/lib/fl-agent`), which makes `pkg.git` unnecessary. If the operator prefers the clone,
-   `pkg.git` stays and `tool.xvf-host.installed` gains a git dependency.
+3. **How does the agent obtain `xvf_host` and the firmware images?**
+   **— DECIDED 2026-08-16, as a commit-pinned fetch of six files (decision 63).**
+   Guide 4 got both from an unpinned `git clone --depth 1` into `~/xvf3800`. The reading previously
+   adopted here — the Immich Kiosk shape, a pinned checksum-verified upstream artifact under
+   `/var/lib/fl-agent` — is what shipped, with **two corrections the investigation forced**.
+   *First, the count was wrong:* the entry above said the binary and three sibling `.so` files, and
+   Seeed's own `host_control/README.md` lists `dfu_cmds.yaml` and `transport_config.yaml` in the same
+   directory, so the verified set is **six files**. *Second, there is nothing to pin in the ordinary
+   sense:* measured 2026-08-16, the upstream repository has **zero releases and zero tags**, and
+   `GET /releases/latest` answers **404** — the artifact is loose files on a moving default branch.
+   So the pin is a **commit SHA**, `725f38464e73477a30aba9f5c220f1cfdc66d682`, and every download is
+   a `raw.githubusercontent.com` URL built from it, which is content-addressed and therefore
+   immutable; the six SHA-256 digests in `XvfHostReleasePin.Current` are the second lock and were
+   measured, not published, because this publisher publishes none. `pkg.git` loses its last consumer
+   (see its entry above). The ledger gained a `github-path-commit` probe kind to watch this upstream
+   at all, since `github-release` cannot; the entry is `xvf-host-tool` in `upstream-review.json`.
+   **What was rejected, and must stay rejected:** vendoring the six files into this repository
+   (unlicensed — upstream carries no licence file at all, and the XMOS terms the tool appears to be
+   built under forbid standalone redistribution), and building `xvf_host` from XMOS's
+   `host_xvf_control` source, which would make this project an XMOS Licensee bound by
+   no-derivative-works terms. [Appendix A decision 63](../version2.md) is where that reasoning lives
+   and it is load-bearing, not commentary.
 
 4. **Where does browser and camera supervision live?**
    **— DECIDED 2026-08-15, as supervision.**
@@ -1486,3 +1500,24 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
     *Reading adopted:* the example file is correct — offline serving is a stated product requirement
     ([§2.6](../version2.md): an outage in the operator's house must never blank a frame in someone
     else's) — so the running frame is drifted and the catalog's desired value includes the parameter.
+
+13. **Is the speaker amplifier on by default on the *shipping* 2.0.6 array firmware?**
+    **This one needs a bench measurement and cannot be settled from any document.** Guide 4 step 4
+    measured it on **2.0.10** only — "boots with `X0D31` low, so the amp is effectively enabled out of
+    the box" — and the guide's step order means the first speaker test happened *after* the DFU
+    flash, so it says nothing about a factory-fresh array. `research/camera-audio.md` asserts the
+    opposite for the general case ("must be enabled via `xvf_host` command"), and it is a
+    pre-decision note rather than a measurement. Seeed's own `host_control/README.md` shows a stock
+    readback of `GPO_READ_VALUES 0 0 0 1 0`, whose third value is `0`, while the prose beside it says
+    the opposite of its own data and its own pin table.
+    *Why it is not resolved by picking a side:* nothing in v2 depends on the answer, and that is
+    deliberate. `audio.xvf3800.gpo-x0d31-amp-enable` **reads the pin and writes it when it is not
+    `0`**, so it converges whichever way a fresh array boots; no code anywhere assumes a default.
+    What the answer changes is the *severity* of a frame that cannot fetch `xvf_host`: the amp
+    resource sits behind `firmware.xvf3800.version`, which sits behind `tool.xvf-host.installed`, so
+    on a factory-fresh 2.0.6 array with no tool the pin is never asserted. If 2.0.6 boots with the
+    amp enabled, that frame is merely untuned; if it boots with the amp disabled, that frame is
+    **silent**, and the tool moves from nice-to-have to load-bearing for a first-boot unit.
+    *The experiment:* on a bench array that has never been flashed, run `xvf_host GPO_READ_VALUES`
+    and read the third value, then play a tone without writing anything. Five minutes, one unit, and
+    it settles the question permanently.

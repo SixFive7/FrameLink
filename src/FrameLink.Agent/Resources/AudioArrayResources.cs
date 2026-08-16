@@ -424,11 +424,10 @@ public sealed class HdmiAudioOffResource : IResource
 /// </para>
 /// <para>
 /// <b>Two candidate directories, in order.</b> The agent-owned path under
-/// <c>/var/lib/fl-agent</c> is where open question 3's adopted reading puts a pinned upstream
-/// artifact; <c>~/xvf3800</c> is where guide 4's <c>git clone</c> puts it, which is what a frame
-/// built by hand has and what the v1 reference records. Finding it is not the same as installing
-/// it — see <see cref="XvfHostToolResource"/> for what this build can and cannot do about a
-/// frame that has neither.
+/// <c>/var/lib/fl-agent</c> is where <see cref="XvfHostInstaller"/> puts the pinned files;
+/// <c>~/xvf3800</c> is where guide 4's <c>git clone</c> puts them, which is what a frame built by
+/// hand has and what the v1 reference records. Finding a binary is not the same as finding the
+/// <i>pinned</i> one — <see cref="XvfHostToolResource"/> is where the digests decide which.
 /// </para>
 /// </remarks>
 public sealed class XvfHost
@@ -456,9 +455,6 @@ public sealed class XvfHost
 
     /// <summary>Sets one GPO pin by its XMOS port number.</summary>
     public const string GpoWriteCommand = "GPO_WRITE_VALUE";
-
-    /// <summary>How many sibling shared libraries the binary ships with.</summary>
-    public const int LibraryCount = 3;
 
     /// <summary>The banner a working HID round trip prints first.</summary>
     public const string DeviceBanner = "Found device";
@@ -515,40 +511,6 @@ public sealed class XvfHost
 
         return root.TrimEnd('/') + "/" + FirmwareSubdirectory
             + "/respeaker_xvf3800_usb_dfu_firmware_v" + version + ".bin";
-    }
-
-    /// <summary>Whether the binary under <paramref name="root"/> may be executed.</summary>
-    public bool IsExecutable(string root) =>
-        _files.ModeOf(ToolPath(root)) is { } mode
-        && (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
-
-    /// <summary>Marks the binary executable — guide 4 step 2's <c>chmod +x</c>.</summary>
-    public void MakeExecutable(string root)
-    {
-        var path = ToolPath(root);
-        var mode = _files.ModeOf(path) ?? HostSystemFiles.DefaultFileMode;
-        _files.SetMode(path, mode | UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
-    }
-
-    /// <summary>How many <c>.so</c> files sit beside the binary.</summary>
-    /// <remarks>
-    /// Counted rather than named. The catalog says three sibling libraries and does not say which,
-    /// the v1 reference does not capture the directory listing, and inventing three file names
-    /// would be exactly the fabrication §0.4 forbids. The count is a cheap structural check and
-    /// the live round trip below is the real proof anyway.
-    /// </remarks>
-    public int Libraries(string root)
-    {
-        var count = 0;
-        foreach (var path in _files.ListFiles(ToolDirectory(root)))
-        {
-            if (path.Contains(".so", StringComparison.Ordinal))
-            {
-                count++;
-            }
-        }
-
-        return count;
     }
 
     /// <summary>Runs one command against the array, from the binary's own directory.</summary>
@@ -662,27 +624,41 @@ public sealed class XvfHost
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Observe is complete; Act is deliberately not, and the gap is named rather than papered
-/// over.</b> The catalog's value source for this resource is "fixed; the upstream release is
-/// pinned by the catalog", and open question 3 records that no such pin has been chosen: the
-/// reading it adopts is Immich Kiosk's shape — a pinned, checksum-verified upstream fetch — but
-/// Seeed publish the tool as files inside a git tree rather than as a release artifact, and the
-/// four SHA-256 values that would make a fetch verifiable are not in this repository and cannot
-/// be asserted from memory (§7.1, §0.4). So this build finds the tool and proves it works; it
-/// does not download one.
+/// <b>Observe and Act are both complete, and the pin is what closed the gap.</b> This resource
+/// used to find the tool and refuse to install one, because the catalog claimed a "pinned
+/// SHA-256 set" that did not exist anywhere in this repository and inventing a URL would have
+/// been the fabrication §0.4 forbids. Open question 3 is now answered (decision 63): the six
+/// files are pinned at a commit SHA, fetched from content-addressed
+/// <c>raw.githubusercontent.com</c> URLs and verified against measured digests before anything
+/// is put in place. <see cref="XvfHostReleasePin"/> holds the whole of it.
 /// </para>
 /// <para>
-/// <b>What Act does do is the one repair it can make honestly:</b> guide 4 step 2's
-/// <c>chmod +x</c>, for a tree that is present but not executable. Anything else is a refusal
-/// that names what is missing, and the refusal reaches an operator through §2.5's ladder with
-/// the reason attached — which is the correct end for a frame that needs a decision nobody has
-/// taken yet, and a great deal better than a fetch invented from a guessed URL.
+/// <b>Six files, and Observe hashes all of them on every pass.</b> The catalog used to say four —
+/// the binary and three <c>.so</c> files — and Seeed's own <c>host_control/README.md</c> lists
+/// <c>dfu_cmds.yaml</c> and <c>transport_config.yaml</c> in the same directory. Counting shared
+/// libraries was the best structural check available while no digests existed; it is strictly
+/// weaker than hashing the set, so it is gone. Hashing rather than remembering is also what makes
+/// §2.4's Verify real: a note saying an install succeeded would survive a boot the files did not.
+/// </para>
+/// <para>
+/// <b>The live round trip stays, and it is the half a digest cannot answer.</b> Six correct files
+/// prove the tool is installed; only <c>xvf_host VERSION</c> answering its <c>Found device</c>
+/// banner proves the array is plugged in, enumerated and reachable over its HID control interface.
+/// That is what survives a reboot as a claim about the whole path rather than about the disk.
+/// </para>
+/// <para>
+/// <b>Both roots are still searched, and the pin decides which one is in sync.</b> A frame built
+/// by hand carries guide 4's <c>git clone</c> under <c>~/xvf3800</c>; if those bytes are the
+/// pinned bytes the frame is in sync where it stands and downloads nothing. If they are not, the
+/// repair is a verified install into <c>/var/lib/fl-agent/xvf3800</c>, which
+/// <see cref="XvfHost.Root"/> prefers, so the next pass observes the agent-owned copy.
 /// </para>
 /// <para>
 /// <b>It is the root of the array chain</b>, so a frame with no tool leaves
 /// <c>firmware.xvf3800.version</c> and, through it, the playback mixer resources
 /// <c>Blocked(dependency)</c> — visibly waiting on this one thing rather than each failing on
-/// its own. That is §2.2's DAG doing its job, and it is why the refusal says what it says.
+/// its own. That is §2.2's DAG doing its job, and it is why a refusal here has to be loud and
+/// has to name which file was wrong.
 /// </para>
 /// </remarks>
 public sealed class XvfHostToolResource : IResource
@@ -692,15 +668,18 @@ public sealed class XvfHostToolResource : IResource
 
     private readonly XvfHost _tool;
     private readonly ISystemFiles _files;
+    private readonly XvfHostInstaller _installer;
 
     /// <summary>Creates the resource.</summary>
-    public XvfHostToolResource(XvfHost tool, ISystemFiles files)
+    public XvfHostToolResource(XvfHost tool, ISystemFiles files, XvfHostInstaller installer)
     {
         ArgumentNullException.ThrowIfNull(tool);
         ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(installer);
 
         _tool = tool;
         _files = files;
+        _installer = installer;
     }
 
     /// <inheritdoc/>
@@ -720,59 +699,57 @@ public sealed class XvfHostToolResource : IResource
             return new ResourceObservation(true, "a working control tool", "no sound hardware on this machine");
         }
 
-        const string Expected = "xvf_host present, executable, and the array answering it";
+        var pin = _installer.Pin;
+        var expected = string.Create(
+            CultureInfo.InvariantCulture,
+            $"the {pin.Files.Count} files pinned at {pin.Commit[..12]}, {XvfHost.Binary} executable, and the array answering it");
 
         if (_tool.Root() is not { } root)
         {
             return new ResourceObservation(
                 false,
-                Expected,
+                expected,
                 $"{XvfHost.Binary} is in none of: {string.Join(", ", _tool.Roots)}");
         }
 
-        if (!_tool.IsExecutable(root))
+        var directory = XvfHost.ToolDirectory(root);
+        var faults = await _installer.UnverifiedAsync(directory, cancellationToken).ConfigureAwait(false);
+
+        if (faults.Count > 0)
         {
-            return new ResourceObservation(false, Expected, $"{XvfHost.ToolPath(root)} is not executable");
+            return new ResourceObservation(false, expected, $"{directory}: {string.Join("; ", faults)}");
         }
 
-        var libraries = _tool.Libraries(root);
         var reply = await _tool.RunAsync(root, [XvfHost.VersionCommand], cancellationToken).ConfigureAwait(false);
-        var answered = XvfHost.Answered(reply);
 
-        return new ResourceObservation(
-            answered && libraries >= XvfHost.LibraryCount,
-            Expected,
-            answered
-                ? string.Create(
+        return XvfHost.Answered(reply)
+            ? new ResourceObservation(
+                true,
+                expected,
+                string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{XvfHost.ToolDirectory(root)}: the array answered, {libraries} shared libraries beside it")
-                : $"{XvfHost.ToolDirectory(root)}: the array did not answer — {Trim(reply.Combined)}");
+                    $"{directory}: all {pin.Files.Count} files match the pin, and the array answered"))
+            : new ResourceObservation(
+                false,
+                expected,
+                $"{directory}: the files match the pin, but the array did not answer — {Trim(reply.Combined)}");
     }
 
     /// <inheritdoc/>
-    public ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
+    public async ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        var pin = _installer.Pin;
+        var result = await _installer.InstallAsync(cancellationToken).ConfigureAwait(false);
 
-        if (_tool.Root() is not { } root)
-        {
-            return ValueTask.FromResult(new ResourceAction(
-                $"refused to install {XvfHost.Binary} — this build has no pinned upstream source for it "
-                    + $"(resource catalog open question 3); expected it at {XvfHost.ToolPath(XvfHost.AgentDirectory)}",
-                "This frame needs a program from the makers of its microphone unit, and nobody has yet decided where it should fetch it from."));
-        }
+        var change = string.Create(
+            CultureInfo.InvariantCulture,
+            $"fetch {pin.Files.Count} files from {pin.RawBaseUrl}, verify sha256, install into {XvfHostInstaller.TargetDirectory}");
 
-        if (!_tool.IsExecutable(root))
-        {
-            _tool.MakeExecutable(root);
-            return ValueTask.FromResult(new ResourceAction(
-                $"chmod +x {XvfHost.ToolPath(root)}",
-                "Allowing this frame to run the program that talks to its microphone and speaker unit."));
-        }
-
-        return ValueTask.FromResult(new ResourceAction(
-            $"left {XvfHost.ToolDirectory(root)} alone — the tool is there and executable, and the array did not answer it",
-            "The program is installed correctly, so the microphone and speaker unit itself is not responding."));
+        return new ResourceAction(
+            result is XvfHostInstallResult.Installed or XvfHostInstallResult.AlreadyInstalled
+                ? change
+                : $"{change} (refused: {result})",
+            "Downloading the program this frame uses to talk to its microphone and speaker unit, and checking every file, byte for byte, that it arrived intact.");
     }
 
     private static string Trim(string output)

@@ -112,6 +112,50 @@ public sealed class UpstreamLedgerTests
     }
 
     [Fact]
+    public void The_xvf_host_pin_and_the_ledger_agree_on_the_commit()
+    {
+        // The same tie the other two fetched artifacts get. It matters more here, not less: there
+        // is no release and no tag behind this pin, so the commit SHA *is* the version — it is what
+        // every download URL is built from, and a ledger recording a different one would be a
+        // review of bytes no frame will ever fetch.
+        var entry = Ledger.Find("xvf-host-tool");
+        Assert.NotNull(entry);
+
+        Assert.Equal(XvfHostReleasePin.Current.Commit, entry.Pinned);
+        Assert.Equal(UpstreamProbe.GithubPathCommit, entry.Probe.Kind);
+
+        // The probe watches the same directory the pin fetches from, which is the only way a
+        // `check` run can answer for this entry at all.
+        Assert.Equal(XvfHostReleasePin.Current.CommitsUrl, entry.Probe.Url!.ToString());
+        Assert.Contains(
+            XvfHostReleasePin.Current.DirectoryInRepository,
+            entry.Probe.Url.ToString(),
+            StringComparison.Ordinal);
+
+        // And every digest a human would re-check the pin against is in the note, so re-checking is
+        // reading one field rather than reconstructing what was looked at.
+        Assert.All(
+            XvfHostReleasePin.Current.Files,
+            file => Assert.Contains(file.Sha256, entry.Reviewed.Note, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_ledger_can_watch_an_upstream_that_publishes_no_releases_at_all()
+    {
+        // Why the kind exists, asserted rather than described. `github-release` reads tag_name from
+        // /releases/latest, and against this repository that endpoint answers 404 — zero releases,
+        // zero tags. Registering it under a kind that cannot answer would have blocked every future
+        // release on a probe that could never succeed, and an upstream nobody can check is worse
+        // than one nobody registered.
+        var entry = Ledger.Find("xvf-host-tool");
+        Assert.NotNull(entry);
+
+        Assert.NotEqual(UpstreamProbe.GithubRelease, entry.Probe.Kind);
+        Assert.DoesNotContain("releases/latest", entry.Probe.Url!.ToString(), StringComparison.Ordinal);
+        Assert.Contains("/commits", entry.Probe.Url.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_target_framework_band_and_the_ledger_agree()
     {
         var entry = Ledger.Find("dotnet-lts-band");
@@ -180,7 +224,7 @@ public sealed class UpstreamLedgerTests
         // the tool has no probe that could answer for one. Somebody widening the ledger has to
         // widen this list first, which is a diff a person reads.
         Assert.Equal(
-            ["raspios-images", "github-release", "nuget-package", "dotnet-channel"],
+            ["raspios-images", "github-release", "github-path-commit", "nuget-package", "dotnet-channel"],
             UpstreamProbe.Kinds);
     }
 
@@ -339,4 +383,97 @@ public sealed class UpstreamDetectionTests
 
         Assert.Contains(ledger.Problems(), problem => problem.Contains("share this id", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void A_path_commit_probe_that_watches_a_whole_branch_is_refused()
+    {
+        // Without `path=` the probe answers with the newest commit on the default branch, which
+        // moves for reasons that have nothing to do with the artifact. It would answer, it would
+        // answer differently every week, and a gate that always says "moved" is a gate nobody
+        // reads — so it is a structural fault rather than a URL detail.
+        var branch = Reviewed("abc") with
+        {
+            Probe = new UpstreamProbe
+            {
+                Kind = UpstreamProbe.GithubPathCommit,
+                Url = new Uri("https://api.github.com/repos/owner/repo/commits?per_page=1"),
+            },
+        };
+
+        var watched = branch with
+        {
+            Probe = branch.Probe with
+            {
+                Url = new Uri("https://api.github.com/repos/owner/repo/commits?path=dir&per_page=1"),
+            },
+        };
+
+        Assert.Contains(branch.Problems(), problem => problem.Contains("path=", StringComparison.Ordinal));
+        Assert.Empty(watched.Problems());
+    }
+
+    [Fact]
+    public async Task A_path_that_has_moved_reports_the_new_commit_in_full()
+    {
+        // Full rather than abbreviated: the SHA *is* the version for an upstream with no releases,
+        // it is what every content-addressed download URL is built from, and an answer nobody can
+        // paste back into the pin would only invite a wrong one.
+        const string Body = """
+            [{"sha":"725f38464e73477a30aba9f5c220f1cfdc66d682",
+              "commit":{"committer":{"date":"2025-07-04T08:41:12Z"}}}]
+            """;
+
+        var answer = await ProbeWith(System.Net.HttpStatusCode.OK, Body);
+
+        Assert.Equal("725f38464e73477a30aba9f5c220f1cfdc66d682", answer.Latest);
+        Assert.Null(answer.Failure);
+        Assert.Contains("2025-07-04", answer.Detail!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_path_with_no_commits_at_all_is_a_failure_rather_than_a_pass()
+    {
+        // An empty list means upstream deleted or renamed the directory this project fetches from —
+        // the single most consequential thing that can happen to a pin with no release behind it.
+        // Reporting it as "nothing to see" would hide it behind a green line.
+        var answer = await ProbeWith(System.Net.HttpStatusCode.OK, "[]");
+
+        Assert.Null(answer.Latest);
+        Assert.Contains("moved or deleted", answer.Failure!, StringComparison.Ordinal);
+        Assert.Equal(
+            UpstreamState.Unreachable,
+            UpstreamProbes.Classify(Reviewed("725f3846"), answer).State);
+    }
+
+    [Fact]
+    public async Task An_upstream_that_answers_404_to_the_commit_list_is_unreachable()
+    {
+        var answer = await ProbeWith(System.Net.HttpStatusCode.NotFound, "{}");
+
+        Assert.Null(answer.Latest);
+        Assert.NotNull(answer.Failure);
+    }
+
+    private static async Task<ProbeAnswer> ProbeWith(System.Net.HttpStatusCode status, string body)
+    {
+        using var http = new HttpClient(new CannedHandler(status, body));
+        var probes = new UpstreamProbes(http);
+
+        return await probes.ProbeAsync(
+            new UpstreamProbe
+            {
+                Kind = UpstreamProbe.GithubPathCommit,
+                Url = new Uri("https://api.github.invalid/repos/owner/repo/commits?path=dir&per_page=1"),
+            },
+            TestContext.Current.CancellationToken);
+    }
+}
+
+/// <summary>Answers every request with one canned response, so a probe can be read offline.</summary>
+internal sealed class CannedHandler(System.Net.HttpStatusCode status, string body) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
 }

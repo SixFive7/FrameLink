@@ -76,6 +76,21 @@ public interface ISystemFiles
 
     /// <summary>Sets the POSIX mode of <paramref name="path"/>.</summary>
     void SetMode(string path, UnixFileMode mode);
+
+    /// <summary>
+    /// The real filesystem path this instance would touch for <paramref name="path"/>.
+    /// </summary>
+    /// <remarks>
+    /// For the one thing this interface deliberately does not offer: binary I/O. Text is the whole
+    /// of what a reconciled <i>setting</i> ever is, so <see cref="ReadText"/> and
+    /// <see cref="WriteText"/> are the write surface and stay that way. A pinned upstream artifact
+    /// is not a setting — it is 1.8 MB of ELF that has to be streamed, hashed and renamed into
+    /// place — and <c>XvfHostInstaller</c> does that with the same real file APIs
+    /// <c>KioskInstaller</c> and <c>FileBinarySwap</c> use. Handing it the resolved path is what
+    /// keeps a single logical path (<c>/var/lib/fl-agent/xvf3800/...</c>) meaning the same place to
+    /// the installer and to <c>XvfHost</c>, on a frame and under a test root alike.
+    /// </remarks>
+    string Resolve(string path);
 }
 
 /// <summary>

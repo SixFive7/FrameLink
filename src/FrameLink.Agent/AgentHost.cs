@@ -350,6 +350,7 @@ public sealed class AgentHost
                 Button = button,
                 Kiosk = kiosk,
                 KioskDownload = new HttpKioskDownload(http, _log),
+                XvfHostDownload = new HttpXvfHostDownload(http, _log),
                 Permissions = PosixFilePermissions.Instance,
 
                 // §2.8's root. The served version is whatever the out-of-band check last learned,

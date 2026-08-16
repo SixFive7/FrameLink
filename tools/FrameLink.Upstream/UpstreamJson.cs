@@ -17,6 +17,7 @@ namespace FrameLink.Upstream;
     WriteIndented = true)]
 [JsonSerializable(typeof(UpstreamLedger))]
 [JsonSerializable(typeof(GithubRelease))]
+[JsonSerializable(typeof(IReadOnlyList<GithubCommit>))]
 [JsonSerializable(typeof(NugetVersionIndex))]
 [JsonSerializable(typeof(DotnetReleasesIndex))]
 public sealed partial class UpstreamJson : JsonSerializerContext;
@@ -27,6 +28,34 @@ public sealed record GithubRelease
     /// <summary>The tag, usually with a leading <c>v</c> this tool strips.</summary>
     [JsonPropertyName("tag_name")]
     public string? TagName { get; init; }
+}
+
+/// <summary>One entry of GitHub's commit list for a path.</summary>
+public sealed record GithubCommit
+{
+    /// <summary>The full commit SHA — what a raw content URL is addressed by, and what is pinned.</summary>
+    [JsonPropertyName("sha")]
+    public string? Sha { get; init; }
+
+    /// <summary>The commit body, for the date this tool prints beside the SHA.</summary>
+    [JsonPropertyName("commit")]
+    public GithubCommitDetail? Commit { get; init; }
+}
+
+/// <summary>The dated half of a commit.</summary>
+public sealed record GithubCommitDetail
+{
+    /// <summary>Who committed it, and when.</summary>
+    [JsonPropertyName("committer")]
+    public GithubCommitSignature? Committer { get; init; }
+}
+
+/// <summary>A commit signature, of which only the date is read.</summary>
+public sealed record GithubCommitSignature
+{
+    /// <summary>ISO-8601, e.g. <c>2025-07-04T08:41:12Z</c>.</summary>
+    [JsonPropertyName("date")]
+    public string? Date { get; init; }
 }
 
 /// <summary>The NuGet flat-container version index for one package.</summary>

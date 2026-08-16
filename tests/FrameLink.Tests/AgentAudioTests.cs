@@ -712,83 +712,229 @@ public sealed class AgentAudioTests
     [Fact]
     public async Task The_control_tool_is_in_sync_only_when_the_array_answers_it()
     {
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 10");
+        // Six correct files prove the tool is installed. Only the round trip proves the array is
+        // plugged in, enumerated and reachable over its HID control interface, which is the half a
+        // digest can never answer.
+        using var fixture = new XvfHostFixture();
+        fixture.SeedPinnedFiles(XvfHost.AgentDirectory);
 
-        Assert.True((await Observe(Audio(files, processes), XvfHostToolResource.ResourceName)).InSync);
+        Assert.True((await fixture.Observe()).InSync);
 
-        // Present, executable, and the array does not answer — a different fault from a missing
-        // binary, and the delta has to say which.
         var directory = XvfHost.ToolDirectory(XvfHost.AgentDirectory);
-        processes.Answers[$"env -C {directory} LD_LIBRARY_PATH={directory} {directory}/xvf_host VERSION"] =
+        fixture.Processes.Answers[
+            $"env -C {directory} LD_LIBRARY_PATH={directory} {directory}/xvf_host VERSION"] =
             new ProcessResult(1, string.Empty, "Device (USB)::device_init() -- No device found");
 
-        var silent = await Observe(Audio(files, processes), XvfHostToolResource.ResourceName);
+        var silent = await fixture.Observe();
 
         Assert.False(silent.InSync);
-        Assert.Contains("did not answer", silent.Observed, StringComparison.Ordinal);
+        Assert.Contains("the files match the pin, but the array did not answer", silent.Observed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task A_frame_with_no_control_tool_is_refused_rather_than_sent_to_a_guessed_url()
+    public async Task A_frame_with_no_control_tool_fetches_the_pinned_files_and_verifies_every_one()
     {
-        // Open question 3 is open: the catalog's reading is a pinned, checksum-verified upstream
-        // fetch, and no pin has been chosen. Inventing one would be the fabrication §0.4 forbids,
-        // so the resource escalates carrying the reason instead.
-        using var files = new TemporaryFiles();
-        files.Seed(AlsaCards.CardsPath, ArrayIsCardZero);
+        // Open question 3's answer (decision 63). The refusal this replaces was correct while no
+        // pin existed; what makes the fetch legitimate now is that every byte is checked against a
+        // digest measured from upstream before anything is put in place.
+        using var fixture = new XvfHostFixture();
+        fixture.ServeEverything();
 
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        var block = Audio(files, processes);
+        var before = await fixture.Observe();
+        Assert.False(before.InSync);
+        Assert.Contains(XvfHost.AgentDirectory, before.Observed, StringComparison.Ordinal);
 
-        var observation = await Observe(block, XvfHostToolResource.ResourceName);
+        var action = await fixture.Act();
 
-        Assert.False(observation.InSync);
-        Assert.Contains(XvfHost.AgentDirectory, observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("fetch 6 files", action.Change, StringComparison.Ordinal);
+        Assert.DoesNotContain("refused", action.Change, StringComparison.Ordinal);
 
-        var action = await Find(block, XvfHostToolResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
+        // Content-addressed: every URL carries the pinned commit, so the bytes behind it cannot be
+        // changed without the pin changing.
+        Assert.Equal(6, fixture.Download.Opened.Count);
+        Assert.All(
+            fixture.Download.Opened,
+            url => Assert.Contains(fixture.Pin.Commit, url.ToString(), StringComparison.Ordinal));
 
-        Assert.Contains("no pinned upstream source", action.Change, StringComparison.Ordinal);
-        Assert.Contains("open question 3", action.Change, StringComparison.Ordinal);
+        Assert.True((await fixture.Observe()).InSync);
     }
 
     [Fact]
-    public async Task A_tool_that_is_present_but_not_executable_is_repaired_rather_than_refused()
+    public async Task A_download_that_does_not_match_the_pin_is_refused_and_nothing_is_installed()
     {
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 10", executable: false);
+        // The loud refusal §0.4 and §2.5 both want. A half-filled directory that looks installed is
+        // the one outcome worse than an empty one.
+        using var fixture = new XvfHostFixture();
+        fixture.ServeEverything();
+        fixture.Corrupt(XvfHost.Binary);
 
-        var block = Audio(files, processes);
-        var observation = await Observe(block, XvfHostToolResource.ResourceName);
+        var action = await fixture.Act();
+
+        Assert.Contains($"refused: {XvfHostInstallResult.ChecksumMismatch}", action.Change, StringComparison.Ordinal);
+        Assert.False(fixture.Exists(XvfHost.AgentDirectory, XvfHost.Binary));
+        Assert.False(fixture.Exists(XvfHost.AgentDirectory, XvfHost.Binary + XvfHostInstaller.StagingSuffix));
+        Assert.False((await fixture.Observe()).InSync);
+    }
+
+    [Fact]
+    public async Task A_server_that_keeps_sending_is_cut_off_at_the_pinned_length()
+    {
+        // /var/lib/fl-agent is on the card the frame boots from, so a download bounded only by the
+        // other end's goodwill is a card-filling bug waiting for a bad day.
+        using var fixture = new XvfHostFixture();
+        fixture.ServeEverything();
+        fixture.Oversize(XvfHost.Binary);
+
+        var action = await fixture.Act();
+
+        Assert.Contains($"refused: {XvfHostInstallResult.SizeMismatch}", action.Change, StringComparison.Ordinal);
+        Assert.False(fixture.Exists(XvfHost.AgentDirectory, XvfHost.Binary + XvfHostInstaller.StagingSuffix));
+    }
+
+    [Fact]
+    public async Task An_upstream_that_cannot_be_reached_is_refused_rather_than_left_looking_installed()
+    {
+        using var fixture = new XvfHostFixture();
+
+        var action = await fixture.Act();
+
+        Assert.Contains($"refused: {XvfHostInstallResult.Unreachable}", action.Change, StringComparison.Ordinal);
+        Assert.False((await fixture.Observe()).InSync);
+    }
+
+    [Fact]
+    public async Task A_tool_that_is_present_but_not_executable_is_repaired_without_a_download()
+    {
+        // Guide 4 step 2's `chmod +x`, kept as the one repair that must never cost 2.1 MB. A
+        // byte-perfect binary nothing can run produces exactly the silence a missing one does, so
+        // it is named as its own fault rather than folded into the digest comparison.
+        using var fixture = new XvfHostFixture();
+        fixture.SeedPinnedFiles(XvfHost.AgentDirectory, executable: false);
+        fixture.ServeEverything();
+
+        var observation = await fixture.Observe();
 
         Assert.False(observation.InSync);
-        Assert.Contains("not executable", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains($"{XvfHost.Binary} is not executable", observation.Observed, StringComparison.Ordinal);
 
-        var action = await Find(block, XvfHostToolResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
+        await fixture.Act();
 
-        Assert.Contains("chmod +x", action.Change, StringComparison.Ordinal);
-        Assert.True((await Observe(Audio(files, processes), XvfHostToolResource.ResourceName)).InSync);
+        Assert.Empty(fixture.Download.Opened);
+        Assert.True((await fixture.Observe()).InSync);
+    }
+
+    [Fact]
+    public async Task A_missing_sidecar_file_is_drift_even_though_the_binary_itself_is_right()
+    {
+        // The catalog used to describe four files. Seeed's own host_control/README.md lists
+        // dfu_cmds.yaml and transport_config.yaml in the same directory, and a resource asserting
+        // completeness over a directory it had only half looked at is the fault this catches.
+        using var fixture = new XvfHostFixture();
+        fixture.SeedPinnedFiles(XvfHost.AgentDirectory, except: "transport_config.yaml");
+
+        var observation = await fixture.Observe();
+
+        Assert.False(observation.InSync);
+        Assert.Contains("transport_config.yaml is missing", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_pinned_state_survives_a_restart_because_it_is_re_read_rather_than_remembered()
+    {
+        // §2.4: "applied" is never claimed from a successful write. A note that an install
+        // succeeded would survive a boot that the files did not, so a second resource over the same
+        // filesystem — which is what a process restart or a reboot produces — has to reach the same
+        // verdict by looking, and has to reach a different one when a file goes missing.
+        using var fixture = new XvfHostFixture();
+        fixture.ServeEverything();
+        await fixture.Act();
+
+        Assert.True((await fixture.Observe(fresh: true)).InSync);
+
+        fixture.Remove(XvfHost.AgentDirectory, "libdevice_usb.so");
+
+        var afterLoss = await fixture.Observe(fresh: true);
+
+        Assert.False(afterLoss.InSync);
+        Assert.Contains("libdevice_usb.so is missing", afterLoss.Observed, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task The_tool_is_also_found_where_guide_four_puts_it()
     {
         // A frame built by hand has the tree under ~/xvf3800, which is what the v1 reference
-        // records. Finding it is not the same as installing it, and the observed text says which
-        // directory answered.
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        var session = new FakeUserSession();
-        var root = session.HomeDirectory + "/" + XvfHost.HomeSubdirectory;
+        // records. If those are the pinned bytes the frame is in sync where it stands and downloads
+        // nothing; the observed text says which directory answered.
+        using var fixture = new XvfHostFixture();
+        var home = fixture.HomeRoot;
 
-        SeedTool(files, processes, root, "VERSION 2 0 10", "GPO_READ_VALUES 0 0 0 1 0", executable: true);
+        fixture.SeedPinnedFiles(home);
+        fixture.ServeEverything();
 
-        var observation = await Observe(Audio(files, processes, session: session), XvfHostToolResource.ResourceName);
+        var observation = await fixture.Observe();
 
         Assert.True(observation.InSync);
-        Assert.Contains(XvfHost.ToolDirectory(root), observation.Observed, StringComparison.Ordinal);
+        Assert.Contains(XvfHost.ToolDirectory(home), observation.Observed, StringComparison.Ordinal);
+        Assert.Empty(fixture.Download.Opened);
+    }
+
+    [Fact]
+    public async Task A_hand_built_clone_that_is_not_the_pinned_bytes_is_replaced_by_a_verified_install()
+    {
+        // Guide 4's clone was never pinned, so a frame can hold any revision of it. The repair is
+        // not to edit somebody's home directory: it is a verified install into the agent-owned
+        // tree, which XvfHost.Root() prefers, so the next pass observes the copy this build chose.
+        using var fixture = new XvfHostFixture();
+        var home = fixture.HomeRoot;
+
+        fixture.SeedPinnedFiles(home);
+        fixture.Damage(home, "libcommand_map.so");
+        fixture.ServeEverything();
+
+        var before = await fixture.Observe();
+
+        Assert.False(before.InSync);
+        Assert.Contains(XvfHost.ToolDirectory(home), before.Observed, StringComparison.Ordinal);
+        Assert.Contains("libcommand_map.so is a different file", before.Observed, StringComparison.Ordinal);
+
+        await fixture.Act();
+        var after = await fixture.Observe();
+
+        Assert.True(after.InSync);
+        Assert.Contains(XvfHost.ToolDirectory(XvfHost.AgentDirectory), after.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_shipping_pin_names_the_six_files_seeed_publish_at_one_immutable_commit()
+    {
+        // §7.1: a version claim is a reviewable fact, not memory. Every value below was measured on
+        // 2026-08-16 by fetching the six URLs; what this asserts is the shape those measurements
+        // have to keep — a full commit SHA, content-addressed URLs built from it, and one
+        // executable among six files.
+        var pin = XvfHostReleasePin.Current;
+
+        Assert.Equal(6, pin.Files.Count);
+        Assert.Equal(
+            ["dfu_cmds.yaml", "libcommand_map.so", "libdevice_i2c.so", "libdevice_usb.so", "transport_config.yaml", "xvf_host"],
+            pin.Files.Select(file => file.Name).Order(StringComparer.Ordinal));
+
+        Assert.Equal(40, pin.Commit.Length);
+        Assert.All(pin.Commit, character => Assert.True(char.IsAsciiHexDigitLower(character)));
+
+        // xvf_i2c_dfu is the seventh file in that directory and is deliberately not fetched: this
+        // build does USB DFU through dfu-util and never the I2C path.
+        Assert.DoesNotContain(pin.Files, file => file.Name.Contains("i2c_dfu", StringComparison.Ordinal));
+
+        Assert.Equal(XvfHost.Binary, Assert.Single(pin.Files, file => file.Executable).Name);
+
+        Assert.All(pin.Files, file => Assert.Equal(64, file.Sha256.Length));
+        Assert.All(pin.Files, file => Assert.True(file.SizeBytes > 0));
+        Assert.All(
+            pin.Files,
+            file => Assert.StartsWith(
+                "https://raw.githubusercontent.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/" + pin.Commit + "/",
+                pin.UrlOf(file).ToString(),
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -1237,5 +1383,193 @@ public sealed class AgentAudioTests
         var end = body.IndexOf("\n====", StringComparison.Ordinal);
 
         return end < 0 ? body : body[..end];
+    }
+}
+
+/// <summary>
+/// A frame, a pin over six small files, and a download that serves exactly those files.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>A test pin rather than the shipping one, for the same reason the Immich Kiosk fixture builds
+/// its own archive:</b> the real pin names 2.1 MB of somebody else's binaries, and the licence
+/// position that made a fetch the right answer at all (decision 63) is precisely that those bytes
+/// are never in this repository. So the payloads here are generated, and their digests are measured
+/// from the payloads — which is the same relationship the shipping pin has to upstream's bytes.
+/// </para>
+/// <para>
+/// The binary's payload deliberately crosses the installer's 64 kB copy buffer, so the streaming
+/// path is the path under test rather than a single-read shortcut.
+/// </para>
+/// </remarks>
+internal sealed class XvfHostFixture : IDisposable
+{
+    private readonly TemporaryFiles _files = new();
+    private readonly FakeUserSession _session = new();
+    private readonly Dictionary<string, byte[]> _payloads = new(StringComparer.Ordinal);
+
+    public XvfHostFixture()
+    {
+        _files.Seed(AlsaCards.CardsPath, " 0 [Array          ]: USB-Audio - reSpeaker XVF3800 4-Mic Array\n");
+
+        var files = new List<XvfHostFile>();
+
+        foreach (var (name, executable) in ((string Name, bool Executable)[])
+            [
+                (XvfHost.Binary, true),
+                ("libcommand_map.so", false),
+                ("libdevice_i2c.so", false),
+                ("libdevice_usb.so", false),
+                ("dfu_cmds.yaml", false),
+                ("transport_config.yaml", false),
+            ])
+        {
+            var payload = new byte[executable ? 200_000 : 512];
+            for (var index = 0; index < payload.Length; index++)
+            {
+                payload[index] = (byte)((index + name.Length) % 251);
+            }
+
+            _payloads[name] = payload;
+            files.Add(new XvfHostFile(
+                name,
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(payload)),
+                payload.Length,
+                executable));
+        }
+
+        Pin = new XvfHostReleasePin
+        {
+            Owner = "respeaker",
+            Repository = "reSpeaker_XVF3800_USB_4MIC_ARRAY",
+            Commit = "0123456789abcdef0123456789abcdef01234567",
+            DirectoryInRepository = "host_control/rpi_64bit",
+            Files = files,
+            ReviewedUtc = new DateTimeOffset(2026, 8, 16, 0, 0, 0, TimeSpan.Zero),
+        };
+
+        const string Banner = "Device (USB)::device_init() -- Found device VID: 10374 PID: 26 interface: 3\n";
+
+        foreach (var root in (string[])[XvfHost.AgentDirectory, HomeRoot])
+        {
+            var directory = XvfHost.ToolDirectory(root);
+            Processes.Answers[
+                $"env -C {directory} LD_LIBRARY_PATH={directory} {directory}/{XvfHost.Binary} {XvfHost.VersionCommand}"] =
+                new ProcessResult(0, Banner + "VERSION 2 0 10", string.Empty);
+        }
+    }
+
+    public XvfHostReleasePin Pin { get; }
+
+    public RecordingProcessRunner Processes { get; } = new();
+
+    public StubXvfHostDownload Download { get; } = new();
+
+    public string HomeRoot => _session.HomeDirectory.TrimEnd('/') + "/" + XvfHost.HomeSubdirectory;
+
+    /// <summary>Serves every pinned file, as upstream would.</summary>
+    public void ServeEverything()
+    {
+        foreach (var (name, payload) in _payloads)
+        {
+            Download.Payloads[name] = payload;
+        }
+    }
+
+    /// <summary>Serves the right length of the wrong bytes for one file.</summary>
+    public void Corrupt(string name)
+    {
+        var payload = (byte[])_payloads[name].Clone();
+        payload[^1] ^= 0xFF;
+        Download.Payloads[name] = payload;
+    }
+
+    /// <summary>Serves more bytes than the pin allows for one file.</summary>
+    public void Oversize(string name) => Download.Payloads[name] = new byte[_payloads[name].Length + 4096];
+
+    /// <summary>Puts the pinned files on disk, as an already-provisioned frame would have them.</summary>
+    public void SeedPinnedFiles(string root, bool executable = true, string? except = null)
+    {
+        foreach (var file in Pin.Files)
+        {
+            if (string.Equals(file.Name, except, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            Write(root, file.Name, _payloads[file.Name]);
+
+            if (file.Executable && executable)
+            {
+                _files.Files.SetMode(
+                    XvfHost.ToolDirectory(root) + "/" + file.Name,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            }
+        }
+    }
+
+    /// <summary>Replaces one on-disk file with bytes that are not the pinned ones.</summary>
+    public void Damage(string root, string name) => Write(root, name, [1, 2, 3, 4]);
+
+    /// <summary>Takes one on-disk file away, as a half-wiped card would.</summary>
+    public void Remove(string root, string name) =>
+        _files.Files.DeleteFile(XvfHost.ToolDirectory(root) + "/" + name);
+
+    public bool Exists(string root, string name) =>
+        _files.Files.FileExists(XvfHost.ToolDirectory(root) + "/" + name);
+
+    /// <summary>Observes through a resource built for this call, or through a shared one.</summary>
+    /// <param name="fresh">
+    /// True builds a new resource and a new installer over the same filesystem, which is what a
+    /// process restart or a reboot leaves behind. It is how "the state survived" is asked as a
+    /// question about the disk rather than about an object's memory.
+    /// </param>
+    public async Task<ResourceObservation> Observe(bool fresh = false) =>
+        await Resource(fresh).ObserveAsync(TestContext.Current.CancellationToken);
+
+    public async Task<ResourceAction> Act() =>
+        await Resource(fresh: false).ActAsync(TestContext.Current.CancellationToken);
+
+    public void Dispose() => _files.Dispose();
+
+    private void Write(string root, string name, byte[] content)
+    {
+        var resolved = _files.Files.Resolve(XvfHost.ToolDirectory(root) + "/" + name);
+        Directory.CreateDirectory(Path.GetDirectoryName(resolved)!);
+        File.WriteAllBytes(resolved, content);
+    }
+
+    private XvfHostToolResource? _resource;
+
+    private XvfHostToolResource Resource(bool fresh)
+    {
+        if (fresh)
+        {
+            _resource = null;
+        }
+
+        return _resource ??= new XvfHostToolResource(
+            new XvfHost(_files.Files, Processes, _session),
+            _files.Files,
+            new XvfHostInstaller(_files.Files, Download, new RecordingLog(), Pin));
+    }
+}
+
+/// <summary>Answers with bytes held in memory, keyed by file name, and records every URL asked for.</summary>
+internal sealed class StubXvfHostDownload : IXvfHostDownload
+{
+    public Dictionary<string, byte[]> Payloads { get; } = new(StringComparer.Ordinal);
+
+    public List<Uri> Opened { get; } = [];
+
+    public Task<Stream?> OpenAsync(Uri url, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(url);
+
+        Opened.Add(url);
+        var name = url.Segments[^1];
+
+        return Task.FromResult<Stream?>(
+            Payloads.TryGetValue(name, out var payload) ? new MemoryStream(payload) : null);
     }
 }

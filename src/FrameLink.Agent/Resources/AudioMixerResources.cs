@@ -1112,6 +1112,11 @@ public static class AudioCatalog
         ArgumentNullException.ThrowIfNull(context);
 
         var tool = new XvfHost(context.Files, context.Processes, context.Session);
+        var installer = new XvfHostInstaller(
+            context.Files,
+            context.XvfHostDownload ?? UnreachableXvfHostDownload.Instance,
+            context.Log);
+
         var mixer = new AlsaMixer(context.Processes, context.Files);
         var session = new SessionAudio(context.Session, context.Files, context.Clock);
 
@@ -1184,7 +1189,7 @@ public static class AudioCatalog
             // Position 22 of the catalog's ordering, but declared here rather than with the
             // package block: it is not an apt package, and it exists only to serve the two
             // resources below it.
-            new XvfHostToolResource(tool, context.Files),
+            new XvfHostToolResource(tool, context.Files, installer),
 
             // Position 54 — brick-capable, hand-recoverable, and deliberately ahead of the values
             // it validates (open question 2).
