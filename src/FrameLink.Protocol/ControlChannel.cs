@@ -122,6 +122,36 @@ public static class ControlWire
     /// </remarks>
     public const string KindPackageInventory = "package-inventory";
 
+    /// <summary>
+    /// Agent to server, on <see cref="ProtocolConstants.ChannelTelemetry"/>. The agent's own
+    /// free-text self-report, when it has changed since the hello carried it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same string, the same vocabulary and the same stored field as
+    /// <see cref="HandshakeHello.AgentStatus"/>.</b> The handshake is the designed carrier of the
+    /// self-report and stays it; what it cannot do is speak twice. §4.2 puts a handshake on every
+    /// connect, and a converged frame does not reconnect — it holds one session for as long as it
+    /// is up, measured at over an hour on the development frame — so a value that travelled only
+    /// in the hello was pinned to whatever the loop happened to be doing in the seconds after the
+    /// last reboot, which is never the answer an operator needs. This carries the change, so the
+    /// field the Fleet Manager renders is the one the frame currently means.
+    /// </para>
+    /// <para>
+    /// <b>Deliberately not buffered when the frame is offline</b>, unlike everything else the
+    /// agent sends (§4.1). A self-report is the current picture rather than history, and the next
+    /// hello carries it, so a buffered one could only ever arrive stale behind a fresher one
+    /// saying the same thing or better.
+    /// </para>
+    /// <para>
+    /// The fourth exercise of the growth rule this class documents: a new <c>Kind</c> and a new
+    /// payload shape, with the frozen envelope and the four handshake payloads untouched (§4.2).
+    /// An older server ignores the kind and an older agent never sends it; neither is a broken
+    /// socket, and in both cases the hello's value stands exactly as it does today.
+    /// </para>
+    /// </remarks>
+    public const string KindAgentStatus = "agent-status";
+
     /// <summary>Property name carrying the ping's sequence number on the wire.</summary>
     private const string SequenceProperty = "sequence";
 
@@ -171,6 +201,32 @@ public sealed record AgentPong
 {
     /// <summary>The sequence number from the ping being answered.</summary>
     public required long Sequence { get; init; }
+}
+
+/// <summary>
+/// The agent's self-report, re-sent mid-session because it changed —
+/// <see cref="ControlWire.KindAgentStatus"/>. <b>Frozen once shipped.</b>
+/// </summary>
+/// <remarks>
+/// Two fields, and there is no third on purpose. Anything the operator needs beyond the sentence
+/// itself — which resource, how many attempts, when the next one is — is already
+/// <see cref="ReconcileReport"/>'s, arriving on the same channel from the same pass, and a second
+/// copy here would be a second thing to keep true.
+/// </remarks>
+public sealed record AgentStatusUpdate
+{
+    /// <summary>The frame this is about.</summary>
+    /// <remarks>
+    /// Carried like every other agent-to-server payload's, and trusted like none of them: the
+    /// server binds what it stores to the id the socket proved, never to the id in the body.
+    /// </remarks>
+    public required string DeviceId { get; init; }
+
+    /// <summary>
+    /// The self-report, in the shape <see cref="AgentHealth.Describe"/> composes and
+    /// <see cref="AgentHealth.Classify"/> reads.
+    /// </summary>
+    public required string Status { get; init; }
 }
 
 /// <summary>

@@ -31,6 +31,7 @@ namespace FrameLink.Protocol;
 [JsonSerializable(typeof(AgentRelease))]
 [JsonSerializable(typeof(AgentPing))]
 [JsonSerializable(typeof(AgentPong))]
+[JsonSerializable(typeof(AgentStatusUpdate))]
 [JsonSerializable(typeof(SettingsPush))]
 [JsonSerializable(typeof(RetryRequest))]
 [JsonSerializable(typeof(OperatorContact))]

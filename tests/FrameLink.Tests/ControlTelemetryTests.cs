@@ -210,6 +210,50 @@ public sealed class ControlTelemetryTests
     }
 
     [Fact]
+    public async Task A_self_report_that_arrives_mid_session_replaces_the_one_the_hello_carried()
+    {
+        // §4.2's handshake is the designed carrier of the self-report and it only ever speaks
+        // once per connection — so on a frame that converges and then holds one session for days,
+        // the hello's value is the one thing the operator must not be shown. The vocabulary is not
+        // read here: the string is stored verbatim and classified once, where every row is.
+        await using var server = await ControlServer.StartAsync("a very long operator password");
+        using var key = ECDsa.Create(ECCurve.NamedCurves.nistP256);
+        var deviceId = await server.EnrolAsync(key, "a very long operator password");
+
+        await using var agent = await server.ConnectAgentAsync(
+            key,
+            agentStatus: AgentHealth.Describe(AgentResourceStatus.Progressing, "linux-arm64"));
+
+        Assert.True(
+            await server.WaitForDeviceAsync(
+                deviceId,
+                d => d.Health == AgentHealth.Working,
+                TimeSpan.FromSeconds(5)),
+            "the hello's self-report never reached the device row");
+
+        var lastSeenFromTheHandshake = (await server.ListDevicesAsync())
+            .Devices.Single(d => d.DeviceId == deviceId).LastSeenUtc;
+
+        await agent.SendStatusAsync(AgentHealth.Describe(AgentResourceStatus.InSync, "linux-arm64"));
+
+        Assert.True(
+            await server.WaitForDeviceAsync(
+                deviceId,
+                d => d.Health == AgentHealth.InSync,
+                TimeSpan.FromSeconds(5)),
+            "the changed self-report never reached the device row");
+
+        var device = (await server.ListDevicesAsync()).Devices.Single(d => d.DeviceId == deviceId);
+
+        Assert.Equal("InSync(linux-arm64)", device.AgentStatus);
+
+        // Only the self-report moved. `lastSeenUtc` is the last proven handshake, and it doubles
+        // as §3.5's "offline since" and as the pending-row expiry clock — this message rides an
+        // already-open socket rather than a fresh proof, so it must not stamp either.
+        Assert.Equal(lastSeenFromTheHandshake, device.LastSeenUtc);
+    }
+
+    [Fact]
     public async Task An_unreadable_payload_is_dropped_without_taking_the_connection_with_it()
     {
         // §4.2 freezes the envelope precisely so that a newer or damaged peer stays legible.
@@ -229,6 +273,7 @@ public sealed class ControlTelemetryTests
 
         await using var agent = await server.ConnectAgentAsync(key);
         await agent.SendGarbageOnAsync(ControlWire.KindReconcileReport, ProtocolConstants.ChannelTelemetry);
+        await agent.SendGarbageOnAsync(ControlWire.KindAgentStatus, ProtocolConstants.ChannelTelemetry);
         await agent.SendReportAsync(Report(deviceId, 2));
 
         var reconcile = await server.WaitForReconcileAsync(deviceId, report => report?.Sequence == 2);

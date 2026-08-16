@@ -131,6 +131,61 @@ public static class AgentHealth
             ? status
             : string.Create(CultureInfo.InvariantCulture, $"{status}({detail})");
 
+    /// <summary>
+    /// Composes the self-report of a loop that is in <paramref name="loopState"/>.
+    /// </summary>
+    /// <param name="loopState">
+    /// One of <see cref="LoopStateNames"/> — what the reconciliation loop published with its last
+    /// census — or <see langword="null"/> before there has been one.
+    /// </param>
+    /// <param name="detail">Anything the agent wants to say, in its own words.</param>
+    /// <returns>
+    /// The string to write into <see cref="HandshakeHello.AgentStatus"/>, or
+    /// <see langword="null"/> when the agent has nothing at all to say.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>The loop is the only thing that knows, so this is the only place the two vocabularies
+    /// meet.</b> §2.2's loop publishes a <c>loopState</c> with every census and the Fleet Manager
+    /// classifies a §2.3 term, and until this existed nothing joined them: the agent composed one
+    /// <c>Progressing(…)</c> string when the process started and never recomputed it, so a frame
+    /// converged at 81 of 81 reported itself part-way through applying something for as long as it
+    /// stayed up. Every device in the fleet list read <i>Online — working</i>, always, and in the
+    /// direction that hides trouble.
+    /// </para>
+    /// <para>
+    /// <b><see cref="LoopStateNames.BackingOff"/> is <see cref="AgentResourceStatus.Progressing"/>
+    /// and not <see cref="AgentResourceStatus.Degraded"/>.</b> A resource waiting out §2.4's delay
+    /// has attempts left and is going to take them; §2.5 reaches <c>Degraded</c> only when the
+    /// budget is exhausted, at which point the loop is <see cref="LoopStateNames.Escalated"/>.
+    /// Reporting a fault during an ordinary retry is the false alarm <see cref="Working"/>'s
+    /// remarks are about, arriving one layer earlier.
+    /// </para>
+    /// <para>
+    /// <b>A loop state this build does not recognise — including none at all — reports the detail
+    /// alone</b>, with no vocabulary head, which <see cref="Classify"/> reads as
+    /// <see cref="Unknown"/>. That is the honest answer for the seconds between a process starting
+    /// and its first pass finishing, and for a frame whose loop has stopped saying anything: it
+    /// has not observed itself, so it says what it does know — what it is running, and how it
+    /// found its Fleet Manager — and claims nothing about its own convergence. §2.6's rule runs in
+    /// both directions, and <c>InSync</c> before the first observation would break it in the
+    /// direction that hides trouble.
+    /// </para>
+    /// </remarks>
+    public static string? ReportFor(string? loopState, string? detail) =>
+        HeadFor(loopState) is { } head ? Describe(head, detail) : detail;
+
+    /// <summary>The §2.3 term a loop in <paramref name="loopState"/> is reporting, or null.</summary>
+    private static string? HeadFor(string? loopState) => loopState switch
+    {
+        LoopStateNames.Converged => AgentResourceStatus.InSync,
+        LoopStateNames.Reconciling => AgentResourceStatus.Progressing,
+        LoopStateNames.AwaitingReboot => AgentResourceStatus.AwaitingReboot,
+        LoopStateNames.BackingOff => AgentResourceStatus.Progressing,
+        LoopStateNames.Escalated => AgentResourceStatus.Escalated,
+        _ => null,
+    };
+
     /// <summary>Reads the coarse health out of a free-text self-report.</summary>
     /// <param name="agentStatus">
     /// <see cref="HandshakeHello.AgentStatus"/> verbatim, or <see langword="null"/>.

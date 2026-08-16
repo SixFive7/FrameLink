@@ -32,6 +32,33 @@ public interface IDeviceStore
     Task<DeviceRecord> RecordContactAsync(DeviceContact contact, int pendingCap, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Replaces one device's free-text self-report, without touching anything else on the row.
+    /// </summary>
+    /// <param name="deviceId">The id the socket proved, never the one a payload claimed.</param>
+    /// <param name="agentStatus">The self-report, verbatim.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    /// <returns>True if a row was updated; false if this Fleet Manager has no such device.</returns>
+    /// <remarks>
+    /// <para>
+    /// The mid-session half of <see cref="RecordContactAsync"/>'s
+    /// <see cref="DeviceContact.AgentStatus"/>. A handshake happens on every connect (§4.2) and a
+    /// converged frame does not reconnect, so the hello alone pinned the value for the whole of a
+    /// frame's uptime; the agent re-sends it when it changes and this is where that lands.
+    /// </para>
+    /// <para>
+    /// <b>It deliberately does not move <c>last_seen_utc</c>.</b> That column is the last proven
+    /// handshake and doubles as §3.5's "offline since" and as the pending-row expiry clock — and
+    /// this write is authenticated by an already-open socket rather than by a fresh proof, so
+    /// letting it stamp the clock would make an unproven message extend a pending row's life.
+    /// </para>
+    /// <para>
+    /// It creates nothing. A row exists before a device can hold a session at all, so a miss means
+    /// the operator forgot the frame mid-session, and inventing a row would resurrect it.
+    /// </para>
+    /// </remarks>
+    Task<bool> RecordStatusAsync(string deviceId, string? agentStatus, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Lists devices, newest contact first.
     /// </summary>
     /// <param name="includeBlocked">

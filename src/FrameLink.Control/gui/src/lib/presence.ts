@@ -63,6 +63,22 @@ export function isWorking(device: DeviceView): boolean {
 	return device.health === 'working';
 }
 
+/**
+ * True when the frame has told us nothing we can classify — used to pick the wording, not the
+ * state.
+ *
+ * `unknown` is deliberately not a problem (`AgentHealth.Unknown`): an agent is under no obligation
+ * to speak the §2.3 vocabulary, and treating silence as trouble is how a whole fleet ends up amber.
+ * But it is not *in sync* either, and until the agent composed its self-report from the loop's own
+ * `loopState` this branch was so rare — a row that had never carried a status at all — that the
+ * plain "Online — connected and in sync" was allowed to cover it. It is now the honest answer for
+ * the seconds between a frame connecting and its first reconciliation pass finishing, and for a
+ * frame whose loop has stopped saying anything, so it gets a sentence that claims nothing.
+ */
+export function hasNotReported(device: DeviceView): boolean {
+	return device.health === 'unknown';
+}
+
 interface PresenceDescriptor {
 	/** Sentence-case label. Rendered exactly as §3.5 names the state. */
 	readonly label: string;
@@ -124,6 +140,20 @@ export function describePresence(device: DeviceView): PresenceDescriptor & { pre
 			tone: 'info',
 			label: 'Online — working',
 			meaning: 'Connected, and the agent is part-way through applying something.'
+		};
+	}
+
+	// Neither working nor verified: the frame has not said. `PRESENCE.online` reads "Connected and
+	// in sync", which would be this console asserting a convergence nobody has observed — the same
+	// dishonesty in the opposite direction from the one above, and the one §2.6 spells out as
+	// "what the frame says about itself is what it observed, in both directions". The tone drops
+	// to the neutral one rather than to a warning, because `unknown` is not a fault.
+	if (presence === 'online' && hasNotReported(device)) {
+		return {
+			...PRESENCE.online,
+			presence,
+			tone: 'info',
+			meaning: 'Connected. This frame has not reported on its own state yet.'
 		};
 	}
 

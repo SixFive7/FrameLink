@@ -86,7 +86,15 @@ public sealed class ControlLink
     public string? HardwareSerial { get; init; }
 
     /// <summary>Free-text self-report sent in the hello (§4.2).</summary>
-    public string? AgentStatusText { get; init; }
+    /// <remarks>
+    /// Read on every attempt rather than captured, for the same reason the endpoint list is
+    /// (see the constructor) and with a sharper consequence: a self-report fixed at construction
+    /// is a claim about a loop that had not run yet, repeated on every connect for the life of the
+    /// process. <c>AgentStatusReporter.Hello</c> is what the agent passes here, so the hello
+    /// carries what the loop is at the moment it is sent — and that reporter also pushes the value
+    /// again when it changes without a reconnect, which is the case a converged frame is in.
+    /// </remarks>
+    public Func<string?>? AgentStatusText { get; init; }
 
     /// <summary>
     /// Where an attempt publishes its transport so the reconciler can send telemetry (§4.1).
@@ -223,7 +231,7 @@ public sealed class ControlLink
                     Identity = _identity,
                     Hub = _hub,
                     HardwareSerial = HardwareSerial,
-                    AgentStatusText = AgentStatusText,
+                    AgentStatusText = AgentStatusText?.Invoke(),
                     HandshakeTimeout = HandshakeTimeout,
                     OnVerdict = _onVerdict,
                     Uplink = Uplink,

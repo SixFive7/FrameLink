@@ -785,6 +785,15 @@ public sealed class TestAgent : IAsyncDisposable
             ProtocolJson.Default.ReconcileReport,
             ProtocolConstants.ChannelTelemetry);
 
+    /// <summary>Sends a changed self-report on the <c>telemetry</c> channel (§3.5).</summary>
+    public Task SendStatusAsync(string status) =>
+        SendAsync(
+            _socket,
+            ControlWire.KindAgentStatus,
+            new AgentStatusUpdate { DeviceId = DeviceId, Status = status },
+            ProtocolJson.Default.AgentStatusUpdate,
+            ProtocolConstants.ChannelTelemetry);
+
     /// <summary>Sends a package inventory on the <c>telemetry</c> channel (§4.1).</summary>
     public Task SendPackagesAsync(PackageInventory inventory) =>
         SendAsync(

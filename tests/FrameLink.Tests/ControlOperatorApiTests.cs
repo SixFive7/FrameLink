@@ -232,6 +232,48 @@ public sealed class ControlOperatorApiTests
         string expected) =>
         Assert.Equal(expected, AgentHealth.Classify(agentStatus));
 
+    [Theory]
+
+    // The loop's own state, turned into the §2.3 term the ladder reads. Converged is the row that
+    // was wrong for every frame in the fleet: the agent composed one `Progressing(...)` at startup
+    // and never recomputed it, so nothing could ever produce `in-sync` here.
+    [InlineData(LoopStateNames.Converged, AgentResourceStatus.InSync, AgentHealth.InSync)]
+    [InlineData(LoopStateNames.Reconciling, AgentResourceStatus.Progressing, AgentHealth.Working)]
+    [InlineData(LoopStateNames.AwaitingReboot, AgentResourceStatus.AwaitingReboot, AgentHealth.Working)]
+
+    // Waiting out §2.4's delay is not a fault. The budget is not spent, the attempt is going to be
+    // taken, and §2.5 only reaches Degraded at the far end of that — where the loop is escalated.
+    [InlineData(LoopStateNames.BackingOff, AgentResourceStatus.Progressing, AgentHealth.Working)]
+    [InlineData(LoopStateNames.Escalated, AgentResourceStatus.Escalated, AgentHealth.Degraded)]
+    public void What_the_loop_is_doing_is_what_the_frame_reports(
+        string loopState,
+        string expectedHead,
+        string expectedHealth)
+    {
+        var report = AgentHealth.ReportFor(loopState, "linux-arm64, endpoints resolved by boot-file");
+
+        Assert.Equal($"{expectedHead}(linux-arm64, endpoints resolved by boot-file)", report);
+        Assert.Equal(expectedHealth, AgentHealth.Classify(report));
+    }
+
+    [Fact]
+    public void A_frame_that_has_not_looked_at_itself_yet_claims_nothing()
+    {
+        // "I do not know yet" is a legitimate state and has a value already: an unrecognised head —
+        // or none at all — classifies as `unknown`, which AgentHealth documents as deliberately not
+        // a problem. What it must not do is claim in-sync, which is the same dishonesty as the
+        // defect above with the sign flipped.
+        var beforeTheFirstPass = AgentHealth.ReportFor(null, "linux-arm64, endpoints resolved by mDNS");
+
+        Assert.Equal("linux-arm64, endpoints resolved by mDNS", beforeTheFirstPass);
+        Assert.Equal(AgentHealth.Unknown, AgentHealth.Classify(beforeTheFirstPass));
+
+        // A loop state from a newer build lands in the same place rather than in an exception or a
+        // fault, which is the forward compatibility §4.2's freeze is for.
+        Assert.Equal(AgentHealth.Unknown, AgentHealth.Classify(AgentHealth.ReportFor("hibernating", null)));
+        Assert.Null(AgentHealth.ReportFor(null, null));
+    }
+
     [Fact]
     public void The_agents_own_self_report_classifies_as_something_the_ladder_can_use()
     {

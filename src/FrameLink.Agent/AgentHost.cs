@@ -452,6 +452,17 @@ public sealed class AgentHost
             Retry = () => retryFromFrame(),
         });
 
+        // §2.3's vocabulary, composed from the loop's own state rather than from anything this
+        // method knows at construction. The detail is what makes a broken agent legible and does
+        // not move; the head in front of it is `loopState` and moves constantly, which is why the
+        // reporter is passed as a delegate below and runs a loop of its own further down.
+        using var reporter = new AgentStatusReporter(
+            hub,
+            uplink,
+            _log,
+            identity.DeviceId,
+            $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}");
+
         var link = new ControlLink(
             new WebSocketControlTransportFactory(),
             hub,
@@ -510,12 +521,11 @@ public sealed class AgentHost
 
             // Free text with a vocabulary head, per AgentHealth. The head is what the Fleet
             // Manager classifies and renders a presence badge from; the parenthesis is for a
-            // person reading the row. `Progressing` is the honest term at this point: the agent
-            // is coming up and has verified nothing yet, so claiming InSync would be a lie the
-            // console would repeat.
-            AgentStatusText = AgentHealth.Describe(
-                AgentResourceStatus.Progressing,
-                $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}"),
+            // person reading the row. A delegate rather than a string, because this used to be a
+            // constant `Progressing(...)` composed here and never revisited — so the fleet list
+            // said every frame was part-way through applying something for as long as its agent
+            // stayed up, including frames that had converged and frames that had given up.
+            AgentStatusText = reporter.Hello,
         };
 
         var supervisor = new Supervisor(new SupervisionServices
@@ -553,7 +563,7 @@ public sealed class AgentHost
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Nine loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // Twelve loops now, and none is gated on another finishing. §1.2.2: a frame must provision
         // and self-heal with the server unreachable, so the reconciler runs from the first second
         // whether or not anything ever answers. What adoption gates is the resources that need
         // issued values, and it gates them through the DAG (§2.2) rather than by not running.
@@ -562,10 +572,16 @@ public sealed class AgentHost
         // exactly when no help is coming — and the inventory buffers on disk like everything else
         // on that channel (§4.1). The button in particular has to work with nothing reachable,
         // because pressing it is how somebody in this room starts a call.
-        var running = new List<Task>(10)
+        var running = new List<Task>(12)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
+
+            // The other half of the hello's self-report. §4.2 puts a handshake on every connect
+            // and a converged frame never reconnects, so without this the Fleet Manager's row
+            // would keep whatever the loop was doing in the seconds after the last reboot for the
+            // whole of a frame's uptime. It sends nothing while nothing changes.
+            reporter.RunAsync(shutdown.Token),
             updates.RunAsync(shutdown.Token),
             loop.RunAsync(shutdown.Token),
             supervisor.RunAsync(shutdown.Token),

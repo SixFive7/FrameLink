@@ -98,6 +98,20 @@ public sealed class SqliteDeviceStore(SqliteDatabase database, TimeProvider cloc
     }
 
     /// <inheritdoc/>
+    public async Task<bool> RecordStatusAsync(
+        string deviceId,
+        string? agentStatus,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await database.OpenWriteAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = scope.Connection.CreateCommand();
+        command.CommandText = "UPDATE devices SET agent_status = $status WHERE device_id = $id;";
+        command.Parameters.AddWithValue("$id", deviceId);
+        command.Parameters.AddWithValue("$status", (object?)agentStatus ?? DBNull.Value);
+        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) > 0;
+    }
+
+    /// <inheritdoc/>
     public async Task<IReadOnlyList<DeviceRecord>> ListAsync(
         bool includeBlocked,
         CancellationToken cancellationToken)

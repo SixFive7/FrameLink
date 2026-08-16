@@ -269,6 +269,96 @@ public sealed class AgentControlLinkTests
         Assert.NotNull(hub);
     }
 
+    [Fact]
+    public void The_hello_carries_what_the_loop_is_now_and_not_what_it_was_at_startup()
+    {
+        // The defect, at the layer that composes the sentence. `AgentStatusText` used to be a
+        // string set once when the process started; a frame that had converged, or given up, went
+        // on claiming `Progressing` on every connect for as long as the process lived.
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        using var uplink = new AgentUplink();
+        using var reporter = new AgentStatusReporter(hub, uplink, NullLog.Instance, "AAAA-BBBB-CCCC-DDDD", "linux-arm64");
+
+        Assert.Equal("linux-arm64", reporter.Hello());
+
+        Reconcile(hub, LoopStateNames.Reconciling);
+        Assert.Equal("Progressing(linux-arm64)", reporter.Hello());
+
+        Reconcile(hub, LoopStateNames.Converged);
+        Assert.Equal("InSync(linux-arm64)", reporter.Hello());
+
+        Reconcile(hub, LoopStateNames.Escalated);
+        Assert.Equal("Escalated(linux-arm64)", reporter.Hello());
+    }
+
+    [Fact]
+    public async Task A_self_report_that_has_not_changed_is_not_sent_again()
+    {
+        // A pass on a converged frame publishes to the hub every few minutes and says the same
+        // thing every time (§2.2 — a pass is a sweep of observations). Re-sending on each of those
+        // would put a message on the wire per frame per pass to say nothing at all.
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        using var uplink = new AgentUplink();
+        using var reporter = new AgentStatusReporter(hub, uplink, NullLog.Instance, "AAAA-BBBB-CCCC-DDDD", "linux-arm64");
+        await using var transport = new RecordingUplink();
+        using var attached = uplink.Attach(transport);
+
+        using var stop = new CancellationTokenSource();
+        var running = reporter.RunAsync(stop.Token);
+
+        Reconcile(hub, LoopStateNames.Converged);
+        Assert.True(await transport.WaitForAsync(1), "the change was never pushed");
+
+        // Two more passes that observe the same thing, and one that is a different loop state but
+        // the same §2.3 term — backing off is progressing, and the operator's row does not move.
+        Reconcile(hub, LoopStateNames.Converged);
+        Reconcile(hub, LoopStateNames.Reconciling);
+        Reconcile(hub, LoopStateNames.BackingOff);
+
+        Assert.True(await transport.WaitForAsync(2), "the move away from converged was never pushed");
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        await stop.CancelAsync();
+        await running;
+
+        Assert.Equal(2, transport.Sent.Count);
+        Assert.Equal(2, reporter.Sent);
+        Assert.Equal("InSync(linux-arm64)", StatusOf(transport.Sent[0]));
+        Assert.Equal("Progressing(linux-arm64)", StatusOf(transport.Sent[1]));
+    }
+
+    [Fact]
+    public async Task A_frame_with_no_session_buffers_nothing_and_lets_the_next_hello_say_it()
+    {
+        // Deliberately unlike every other thing the agent sends (§4.1). A self-report is the
+        // current picture, and §4.2 puts a handshake on every connect — so a buffered one could
+        // only ever arrive stale, behind the hello that already said the same thing or better.
+        var hub = new AgentStatusHub(AgentStatusFactory.Starting());
+        using var uplink = new AgentUplink();
+        using var reporter = new AgentStatusReporter(hub, uplink, NullLog.Instance, "AAAA-BBBB-CCCC-DDDD", "linux-arm64");
+
+        using var stop = new CancellationTokenSource();
+        var running = reporter.RunAsync(stop.Token);
+
+        Reconcile(hub, LoopStateNames.Escalated);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
+
+        await stop.CancelAsync();
+        await running;
+
+        Assert.Equal(0, reporter.Sent);
+        Assert.Equal("Escalated(linux-arm64)", reporter.Hello());
+    }
+
+    private static void Reconcile(AgentStatusHub hub, string loopState) =>
+        hub.Publish(status => status with
+        {
+            Reconcile = status.Reconcile with { LoopState = loopState },
+        });
+
+    private static string? StatusOf(ReadOnlyMemory<byte> frame) =>
+        WireMessage.Decode(frame.Span)?.PayloadAs(ProtocolJson.Default.AgentStatusUpdate)?.Status;
+
     private static async Task<(AgentStatusHub Hub, string DeviceId)> RunAsync(
         RecordingServer server,
         int attempts,
@@ -448,4 +538,66 @@ internal sealed class RecordedConnection : IControlTransport
         IsDisposed = true;
         return ValueTask.CompletedTask;
     }
+}
+
+/// <summary>
+/// A live session as far as <see cref="AgentUplink"/> is concerned: it records and never answers.
+/// </summary>
+/// <remarks>
+/// Deliberately not <see cref="RecordedConnection"/>. That one plays a scripted handshake for the
+/// reconnect loop; this one exists for the other thing an attempt publishes its transport for —
+/// the long-lived senders that write to a session they do not own — and the only question those
+/// tests ask is what bytes went up.
+/// </remarks>
+internal sealed class RecordingUplink : IControlTransport
+{
+    private readonly List<ReadOnlyMemory<byte>> _sent = [];
+    private readonly Lock _gate = new();
+
+    /// <summary>Every frame this transport was handed, in order.</summary>
+    public IReadOnlyList<ReadOnlyMemory<byte>> Sent
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return [.. _sent];
+            }
+        }
+    }
+
+    /// <summary>Waits until at least <paramref name="count"/> frames have arrived, or gives up.</summary>
+    public async Task<bool> WaitForAsync(int count)
+    {
+        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            if (Sent.Count >= count)
+            {
+                return true;
+            }
+
+            await Task.Delay(5, TestContext.Current.CancellationToken);
+        }
+
+        return Sent.Count >= count;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask SendAsync(ReadOnlyMemory<byte> utf8, CancellationToken cancellationToken)
+    {
+        lock (_gate)
+        {
+            _sent.Add(utf8);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public ValueTask<ReadOnlyMemory<byte>?> ReceiveAsync(CancellationToken cancellationToken) =>
+        ValueTask.FromResult<ReadOnlyMemory<byte>?>(null);
+
+    /// <inheritdoc/>
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

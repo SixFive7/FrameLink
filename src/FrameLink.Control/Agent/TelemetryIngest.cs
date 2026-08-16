@@ -23,6 +23,7 @@ namespace FrameLink.Control.Agent;
 public sealed class TelemetryIngest(
     IFleetTelemetryStore telemetry,
     IPackageStore packages,
+    IDeviceStore devices,
     FleetEvents events,
     ILogger<TelemetryIngest> logger)
 {
@@ -59,6 +60,26 @@ public sealed class TelemetryIngest(
 
             await packages
                 .RecordInventoryAsync(inventory with { DeviceId = deviceId }, cancellationToken)
+                .ConfigureAwait(false);
+
+            events.Publish(deviceId);
+            return;
+        }
+
+        if (string.Equals(envelope.Kind, ControlWire.KindAgentStatus, StringComparison.Ordinal))
+        {
+            if (envelope.PayloadAs(ProtocolJson.Default.AgentStatusUpdate) is not { } update)
+            {
+                logger.UnreadableTelemetry(deviceId, envelope.Kind);
+                return;
+            }
+
+            // Into the same column the hello writes, verbatim and unclassified. §3.5's presence
+            // ladder is derived once, by AgentHealth.Classify, at the moment a row is rendered —
+            // so nothing here reads the vocabulary, and the server never becomes a second opinion
+            // about what a frame is doing.
+            await devices
+                .RecordStatusAsync(deviceId, update.Status, cancellationToken)
                 .ConfigureAwait(false);
 
             events.Publish(deviceId);
