@@ -669,10 +669,49 @@ public sealed class ChromiumKioskRunningResource : IResource
     /// <see cref="KioskChildEnvironment"/>, which takes the neighbouring <c>environ</c>.
     /// </para>
     /// <para>
-    /// <b>Split on NUL, never rendered to a line and split on spaces.</b> The separator is what
-    /// makes this the exact vector rather than an approximation of it: a Chromium child carries
-    /// <c>--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)</c> on this build, and a
-    /// whitespace split turns that one argument into seven.
+    /// <b>NUL is the separator wherever the kernel wrote one</b>, and that is what makes this the
+    /// exact vector rather than an approximation of it: a Chromium child carries
+    /// <c>--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)</c> on this build, and
+    /// splitting a NUL-delimited block on whitespace turns that one argument into seven.
+    /// </para>
+    /// <para>
+    /// <b>The file has a second shape, and Chromium is the reason this resource meets it.</b>
+    /// <c>proc(5)</c> is explicit that <i>"if, after an <c>execve</c>, the process modifies its
+    /// argv strings, those changes will show up here"</i> — the kernel serves the bytes between
+    /// <c>arg_start</c> and <c>arg_end</c>, whatever the process has since put there. Chromium
+    /// rewrites exactly that region: <c>set_process_title_linux.cc</c> implements
+    /// <c>setproctitle</c> by overwriting the argv area with <b>one space-joined string</b> and
+    /// NUL-padding the remainder, so the block a frame's kernel holds for the browser carries no
+    /// NUL between two arguments at all.
+    /// </para>
+    /// <para>
+    /// <b>Measured on the mule, 2026-08-16, from the frame's own screen.</b> With the reading fixed
+    /// and the argv diagnostic in place, <c>unit.chromium-kiosk.running-matches-content</c> printed
+    /// all twenty-five arguments inside one <see cref="Summarise"/> rendering whose limit is
+    /// <see cref="DiagnosticArgumentLimit"/> — four — and no <i>"and N more arguments"</i> tail. A
+    /// vector of twenty-five cannot render that way and a vector of one can, so the split had
+    /// produced a single token holding the whole command line, and every one of the thirteen
+    /// declared arguments was reported missing from a browser that was carrying all of them. The
+    /// resource escalated at 3/3 and stopped the pass.
+    /// </para>
+    /// <para>
+    /// <b>The read path was excluded first, by measurement rather than by reasoning.</b>
+    /// <see cref="ISystemFiles"/> is text-oriented and <c>cmdline</c> is NUL-delimited binary, so
+    /// the standing suspicion was that the NULs never survived <see cref="ISystemFiles.ReadText"/>.
+    /// They do: a self-contained build reading real <c>/proc/&lt;pid&gt;/cmdline</c> on Linux
+    /// returns every NUL, tokenises correctly, and keeps a space-bearing argument whole. The bytes
+    /// on the frame genuinely have spaces where the separators should be, which is why the fix is
+    /// here and not in the read.
+    /// </para>
+    /// <para>
+    /// <b>So the two shapes are told apart by the kernel's own signature, not by preference.</b> An
+    /// argv vector of two or more arguments always carries a NUL between them; a rewritten title
+    /// never does. A single token with a space in it is therefore a title, and the space is the
+    /// separator <c>setproctitle</c> put there — a title's only structure, not a second guess at a
+    /// vector's. What that costs is real and is stated rather than hidden: an argument containing a
+    /// space cannot be recovered from a rewritten block by anything. It costs this resource nothing
+    /// today, because the crash-reporter argument belongs to a renderer and <c>MainPID</c> never
+    /// names one.
     /// </para>
     /// <para>
     /// Absent and empty both answer null. A pid whose <c>cmdline</c> cannot be read is a pid with
@@ -687,7 +726,16 @@ public sealed class ChromiumKioskRunningResource : IResource
 
         var raw = files.ReadText(string.Create(CultureInfo.InvariantCulture, $"/proc/{pid}/cmdline"));
 
-        return raw?.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+        if (raw is null)
+        {
+            return null;
+        }
+
+        var vector = raw.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+
+        return vector is [var title] && title.Contains(' ')
+            ? title.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            : vector;
     }
 
     /// <summary>

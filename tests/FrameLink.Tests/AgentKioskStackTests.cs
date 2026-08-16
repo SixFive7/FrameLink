@@ -995,12 +995,102 @@ public sealed class AgentKioskStackTests
         Assert.Contains("--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)", renderer);
     }
 
+    [Fact]
+    public async Task A_kernel_shaped_command_line_reaches_the_compare_with_its_separators_intact()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+
+        await unit.ActAsync(None);
+
+        // The read path that stood accused, exercised end to end and cleared. ISystemFiles is
+        // text-oriented and cmdline is NUL-delimited binary, so the standing suspicion was that the
+        // separators never survived ReadText. They do: raw kernel bytes are put on disk here with
+        // no text writer anywhere in the seeding, and HostSystemFiles.ReadText hands CommandLineOf
+        // every one of them back. Measured the same way off a frame — a self-contained build
+        // reading a real /proc/<pid>/cmdline on Linux returns each NUL, tokenises correctly, and
+        // keeps a space-bearing argument whole.
+        var argv = MeasuredBrowserCommandLine.Split(' ');
+        SeedCommandLineBytes(files, 1198, string.Join('\0', argv) + '\0');
+
+        var declared = ChromiumKioskUnitResource.ExecStartArguments(files.Read(unit.Path));
+        var read = ChromiumKioskRunningResource.CommandLineOf(files.Files, 1198);
+
+        Assert.NotNull(read);
+        Assert.Equal(argv.Length, read.Count);
+        Assert.Equal(ChromiumKioskUnitResource.Flags.Count + 1, declared.Count);
+        Assert.Empty(ChromiumKioskRunningResource.MissingFrom(read, declared));
+    }
+
+    [Fact]
+    public async Task A_browser_that_rewrote_its_own_argv_is_still_read_as_the_vector_it_was_started_with()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // The shape the frame's kernel actually held on 2026-08-16, and the shape the frame's own
+        // screen printed back. Chromium's set_process_title_linux.cc implements setproctitle by
+        // overwriting the argv area with one space-joined string and NUL-padding the remainder, and
+        // proc(5) says the kernel serves whatever is in that region — so /proc/1198/cmdline carries
+        // no NUL between two arguments at all. Split on NUL alone it is a single token, no declared
+        // argument is ever found inside it, and unit.chromium-kiosk.running-matches-content
+        // reported all thirteen missing from a browser that was carrying all thirteen. That is what
+        // escalated at 3/3, stopped the pass, left four resources at att=0/3 with the album setting
+        // never written, and put a repair screen on a frame whose browser was up and drawing.
+        SeedCommandLineBytes(files, 1198, MeasuredBrowserCommandLine + "\0\0\0\0");
+
+        var declared = ChromiumKioskUnitResource.ExecStartArguments(files.Read(unit.Path));
+        var read = ChromiumKioskRunningResource.CommandLineOf(files.Files, 1198);
+
+        Assert.NotNull(read);
+        Assert.Equal(MeasuredBrowserCommandLine.Split(' ').Length, read.Count);
+        Assert.Empty(ChromiumKioskRunningResource.MissingFrom(read, declared));
+
+        session.Answers[ShowMainPid] = new ProcessResult(0, Running(1198), string.Empty);
+
+        var observation = await running.ObserveAsync(None);
+
+        Assert.True(observation.InSync, observation.Observed);
+
+        // And the discriminator is the kernel's own signature rather than a preference: a vector of
+        // two or more always carries a NUL between them, so a lone argument is left exactly as it
+        // was delimited and never taken apart looking for a separator that was never written.
+        SeedCommandLineBytes(files, 4242, "/usr/lib/chromium/chromium\0");
+
+        var lone = ChromiumKioskRunningResource.CommandLineOf(files.Files, 4242);
+
+        Assert.NotNull(lone);
+        Assert.Equal("/usr/lib/chromium/chromium", Assert.Single(lone));
+    }
+
     /// <summary>
     /// Writes a <c>/proc/&lt;pid&gt;/cmdline</c> the way the kernel presents one: NUL between the
     /// arguments and a NUL after the last.
     /// </summary>
     private static void SeedCommandLine(TemporaryFiles files, int pid, params string[] argv) =>
         files.Seed($"/proc/{pid}/cmdline", string.Join('\0', argv) + '\0');
+
+    /// <summary>
+    /// Writes a <c>/proc/&lt;pid&gt;/cmdline</c> as the bytes themselves, with no text writer in
+    /// the seeding path.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TemporaryFiles.Seed"/> goes through <see cref="HostSystemFiles.WriteText"/>, so a
+    /// test written on it proves only that the shipping writer and the shipping reader agree. The
+    /// question this file has to answer is narrower — what the shipping <i>reader</i> does with
+    /// bytes it did not write — so the bytes are laid down directly at the resolved path.
+    /// </remarks>
+    private static void SeedCommandLineBytes(TemporaryFiles files, int pid, string content)
+    {
+        var resolved = files.Files.Resolve($"/proc/{pid}/cmdline");
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(resolved)!);
+        File.WriteAllBytes(resolved, System.Text.Encoding.UTF8.GetBytes(content));
+    }
 
     [Fact]
     public async Task Swap_reads_the_zram_row_rather_than_the_presence_of_any_swap()
