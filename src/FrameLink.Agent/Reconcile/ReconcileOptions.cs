@@ -35,6 +35,14 @@ public sealed record ReconcileOptions
     /// <para>
     /// A retry grants a fresh three, so the cost of this being too short is one press.
     /// </para>
+    /// <para>
+    /// <b>Changing it is retroactive, and deliberately so</b> (decision 74). The attempt ledger is
+    /// durable (§2.1) and this number is not, so a frame provisioned under the old five carries
+    /// counts this budget cannot express. <see cref="ReconcileLoop.AttemptsWithin(int, int)"/>
+    /// clamps them on read so that no surface asserts <c>attempt 5 of 3</c>; nothing rewrites the
+    /// stored counters, and a resource that has already spent more than this allows escalates on
+    /// its next failure rather than being granted a fresh allowance.
+    /// </para>
     /// </remarks>
     public int AttemptBudget { get; init; } = 3;
 

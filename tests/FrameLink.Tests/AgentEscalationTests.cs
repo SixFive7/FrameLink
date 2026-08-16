@@ -285,6 +285,102 @@ public sealed class AgentEscalationTests
     }
 
     [Fact]
+    public void An_attempt_count_is_never_read_as_more_than_the_budget_can_express()
+    {
+        // Decision 74. The ledger is durable and the budget is not, so a frame provisioned under
+        // decision 7's five carries counts of four and five into decision 67's three. Every read
+        // that compares or displays one has to answer with a number the budget can express, or the
+        // frame says `att=5/3` — which was measured, and which cannot be true.
+        Assert.Equal(3, ReconcileLoop.AttemptsWithin(5, 3));
+        Assert.Equal(3, ReconcileLoop.AttemptsWithin(3, 3));
+        Assert.Equal(2, ReconcileLoop.AttemptsWithin(2, 3));
+        Assert.Equal(0, ReconcileLoop.AttemptsWithin(-1, 3));
+
+        // A budget of zero is not a clamp to zero: nothing in the loop sets one, and reading every
+        // count as none would hide a whole history behind a misconfiguration.
+        Assert.Equal(5, ReconcileLoop.AttemptsWithin(5, 0));
+    }
+
+    [Fact]
+    public async Task A_ledger_written_under_a_larger_budget_narrates_a_pair_that_can_be_true()
+    {
+        // The measured defect: `Attempts=4, Escalations=0` survives a budget cut from five to
+        // three. HasGivenUp does not catch it — no escalation is on the record — so the resource is
+        // acted on, and the old arithmetic made that `attempt 5 of 3`.
+        //
+        // What this asserts is the coherence, not the escalation. The escalation is correct and
+        // deliberate: a budget reduction is retroactive by design (decision 74), because the
+        // operator lowered it precisely because attempts cost card wear.
+        var resource = Broken();
+        using var harness = new ReconcileHarness(Options, resource) { Telemetry = { Connected = true } };
+
+        harness.Journal.Update(state => ReconcileJournal.WithEntry(
+            state,
+            ReconcileJournal.EntryFor(state, "broken") with { Attempts = 4, Escalations = 0 }));
+
+        var outcome = await harness.PassAsync();
+        var status = ReconcileHarness.StatusOf(outcome, "broken");
+
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(Options.AttemptBudget, status.AttemptBudget);
+        Assert.Equal(Options.AttemptBudget, status.Attempts);
+        Assert.True(
+            status.Attempts <= status.AttemptBudget,
+            $"a resource cannot have spent {status.Attempts} of {status.AttemptBudget} attempts");
+
+        // The screen and the operator's alert read the same clamped number, so neither surface can
+        // show a count the other cannot account for.
+        Assert.Equal(Options.AttemptBudget, harness.Hub.Current.Reconcile.Attempt);
+        Assert.Equal(Options.AttemptBudget, harness.Hub.Current.Reconcile.AttemptBudget);
+        Assert.All(
+            harness.Telemetry.OfKind(DeviceEventKinds.Escalation),
+            escalation => Assert.True(
+                escalation.Attempts <= Options.AttemptBudget,
+                $"an escalation reported {escalation.Attempts} attempts against a budget of {Options.AttemptBudget}"));
+
+        // The ledger keeps one counter, bounded by the budget in force, rather than a second
+        // unbounded one beside it — the unbounded history is the escalation events, which §3.5
+        // keeps for a month. What is deliberately *not* done is a reset: the escalation stands, so
+        // the frame is still stopped and its operator has not been silently un-notified.
+        var entry = ReconcileJournal.EntryFor(harness.Journal.Read(), "broken");
+        Assert.Equal(3, entry.Attempts);
+        Assert.Equal(1, entry.Escalations);
+        Assert.True(harness.Loop.HasStopped);
+    }
+
+    [Fact]
+    public async Task A_frame_that_gave_up_under_a_larger_budget_still_reports_a_coherent_pair()
+    {
+        // The other half of decision 74, and the one an operator sees for as long as the frame
+        // stays stopped: the resource is never walked again, so the row comes from the ledger
+        // through the stopped-device path rather than from a fresh observation.
+        var resource = Broken();
+        using var harness = new ReconcileHarness(Options, resource) { Telemetry = { Connected = true } };
+
+        harness.Journal.Update(state => ReconcileJournal.WithEntry(
+            state,
+            ReconcileJournal.EntryFor(state, "broken") with
+            {
+                Attempts = 5,
+                Escalations = 1,
+                EscalationNotified = true,
+                Delta = "expected 'want', observed 'have-not'",
+            }));
+
+        var outcome = await harness.PassAsync();
+        var status = ReconcileHarness.StatusOf(outcome, "broken");
+
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(ResourceStatusKind.Escalated, status.Kind);
+        Assert.Equal(Options.AttemptBudget, status.Attempts);
+        Assert.Equal(Options.AttemptBudget, status.AttemptBudget);
+
+        // Nothing was rewritten to achieve it: the true history is still on disk, where a
+        // post-mortem can read it.
+        Assert.Equal(5, ReconcileJournal.EntryFor(harness.Journal.Read(), "broken").Attempts);
+    }
+
+    [Fact]
     public async Task An_escalation_stops_the_whole_pass_and_not_just_the_resource_that_raised_it()
     {
         // Decision 68, and the measurement behind it: the attempt budget is per resource, so one

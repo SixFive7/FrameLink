@@ -303,7 +303,55 @@ public sealed class ReconcileLoop
     {
         ArgumentNullException.ThrowIfNull(entry);
 
-        return entry.Escalations > 0 && entry.Attempts >= attemptBudget;
+        return entry.Escalations > 0 && AttemptsWithin(entry, attemptBudget) >= attemptBudget;
+    }
+
+    /// <summary>
+    /// A stored attempt count as the <i>current</i> budget can express it (decision 74).
+    /// </summary>
+    /// <param name="attempts">What the ledger holds.</param>
+    /// <param name="attemptBudget">The budget in force right now.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>The attempt ledger is durable and the budget is not.</b> §2.1 persists attempts across
+    /// the reboot every resource takes, so a frame provisioned under decision 7's budget of five
+    /// carries counts of four and five into decision 67's budget of three. Measured on the frame,
+    /// that produced <c>att=5/3</c> in the live report — a pair that cannot be true, and one that
+    /// an operator reasonably reads as a counter that has run away.
+    /// </para>
+    /// <para>
+    /// <b>Clamping is on read only; nothing rewrites the journal to fit.</b> Resetting stored
+    /// counters would silently un-escalate frames whose operator has already been notified, which
+    /// is a worse failure than an incoherent number. What this does is narrower: every place that
+    /// <i>compares</i> a count against the budget or <i>shows</i> it beside the budget uses the
+    /// value the budget can express, so the two halves of every "attempt N of M" agree.
+    /// </para>
+    /// <para>
+    /// <b>A budget reduction is therefore retroactive by design.</b> A resource that has already
+    /// spent four attempts escalates on its next failure under a policy allowing three — it does
+    /// not receive three fresh ones. That is the new policy applied rather than a defect: the
+    /// operator lowered the budget because attempts cost card wear (decision 67), and a resource
+    /// that has already spent more than the new budget is precisely the one that policy is about.
+    /// The recovery from being wrong about it is unchanged and is one press: a retry grants a
+    /// fresh, whole budget.
+    /// </para>
+    /// <para>
+    /// It can only ever <i>understate</i> what a frame has spent, never overstate it, which is the
+    /// safe direction: the true history stays in the journal and in the escalation events on the
+    /// <c>events</c> channel, neither of which this touches.
+    /// </para>
+    /// </remarks>
+    public static int AttemptsWithin(int attempts, int attemptBudget) =>
+        attempts < 0 ? 0
+        : attemptBudget > 0 && attempts > attemptBudget ? attemptBudget
+        : attempts;
+
+    /// <summary>One ledger entry's attempts, as <paramref name="attemptBudget"/> can express them.</summary>
+    public static int AttemptsWithin(ResourceLedgerEntry entry, int attemptBudget)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+
+        return AttemptsWithin(entry.Attempts, attemptBudget);
     }
 
     /// <summary>Runs passes until the frame converges, halts, or the agent stops.</summary>
@@ -503,7 +551,7 @@ public sealed class ReconcileLoop
                 Kind = ResourceStatusKind.Blocked,
                 BlockedBy = stoppedBy,
                 Delta = $"not attempted: waiting for '{stoppedBy}'",
-                Attempts = entry.Attempts,
+                Attempts = Spent(entry),
                 AttemptBudget = _services.Options.AttemptBudget,
                 Escalations = entry.Escalations,
             });
@@ -546,7 +594,7 @@ public sealed class ReconcileLoop
                 ? $"Booted, and came back to verify '{state.Pending!.Resource}'."
                 : "Booted.",
             delta: null,
-            attempts: state.Pending?.Attempt ?? 0,
+            attempts: AttemptsWithin(state.Pending?.Attempt ?? 0, _services.Options.AttemptBudget),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -583,7 +631,12 @@ public sealed class ReconcileLoop
             _services.Log.Warn(
                 $"{resource.Name}: the agent restarted without a reboot, so '{pending.Change}' is still unproven. Asking again.");
 
-            return await CrossAndVerifyAsync(resource, pending.Attempt, pending.Change, pending.Gloss, cancellationToken)
+            return await CrossAndVerifyAsync(
+                    resource,
+                    AttemptsWithin(pending.Attempt, _services.Options.AttemptBudget),
+                    pending.Change,
+                    pending.Gloss,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
 
@@ -613,7 +666,12 @@ public sealed class ReconcileLoop
         else
         {
             _services.Log.Warn($"{resource.Name}: did not survive the reboot — {observation.Delta}.");
-            var failed = await RecordFailureAsync(resource, pending.Attempt, observation.Delta, pending.Change, cancellationToken)
+            var failed = await RecordFailureAsync(
+                    resource,
+                    AttemptsWithin(pending.Attempt, _services.Options.AttemptBudget),
+                    observation.Delta,
+                    pending.Change,
+                    cancellationToken)
                 .ConfigureAwait(false);
 
             if (failed.Kind.HasGivenUp())
@@ -657,7 +715,7 @@ public sealed class ReconcileLoop
                     Kind = ResourceStatusKind.Blocked,
                     BlockedBy = blocker,
                     Delta = $"waiting for '{blocker}'",
-                    Attempts = entry.Attempts,
+                    Attempts = Spent(entry),
                     AttemptBudget = _services.Options.AttemptBudget,
                 });
 
@@ -691,7 +749,7 @@ public sealed class ReconcileLoop
                     Kind = ResourceStatusKind.Progressing,
                     Delta = entry.Delta,
                     Action = entry.Change,
-                    Attempts = entry.Attempts,
+                    Attempts = Spent(entry),
                     AttemptBudget = _services.Options.AttemptBudget,
                     NextAttemptUtc = next,
                 });
@@ -717,7 +775,7 @@ public sealed class ReconcileLoop
                     Kind = ResourceStatusKind.Blocked,
                     BlockedBy = SilentAuthority,
                     Delta = observation.Delta,
-                    Attempts = entry.Attempts,
+                    Attempts = Spent(entry),
                     AttemptBudget = _services.Options.AttemptBudget,
                     NextAttemptUtc = recheck,
                 });
@@ -751,7 +809,7 @@ public sealed class ReconcileLoop
                     Name = resource.Name,
                     Kind = ResourceStatusKind.Progressing,
                     Delta = $"{observation.Delta} — expected while supervision restarts it ({behaviour})",
-                    Attempts = entry.Attempts,
+                    Attempts = Spent(entry),
                     AttemptBudget = _services.Options.AttemptBudget,
                 });
 
@@ -768,7 +826,7 @@ public sealed class ReconcileLoop
                     Name = resource.Name,
                     Kind = ResourceStatusKind.Progressing,
                     Delta = observation.Delta,
-                    Attempts = entry.Attempts,
+                    Attempts = Spent(entry),
                     AttemptBudget = _services.Options.AttemptBudget,
                 });
 
@@ -827,7 +885,7 @@ public sealed class ReconcileLoop
         List<ResourceStatus> ordered,
         CancellationToken cancellationToken)
     {
-        var attempt = entry.Attempts + 1;
+        var attempt = NextAttempt(entry);
 
         _services.Log.Info($"{resource.Name}: drifted — {observation.Delta}. Attempt {attempt} of {_services.Options.AttemptBudget}.");
 
@@ -1273,9 +1331,9 @@ public sealed class ReconcileLoop
             notified = await EmitAsync(
                 DeviceEventKinds.Escalation,
                 resource.Name,
-                EscalationSummary(resource, entry.Attempts, entry.Change),
+                EscalationSummary(resource, Spent(entry), entry.Change),
                 entry.Delta,
-                entry.Attempts,
+                Spent(entry),
                 cancellationToken).ConfigureAwait(false);
 
             if (notified)
@@ -1292,7 +1350,7 @@ public sealed class ReconcileLoop
             Kind = notified ? ResourceStatusKind.Escalated : ResourceStatusKind.Degraded,
             Delta = entry.Delta,
             Action = entry.Change,
-            Attempts = entry.Attempts,
+            Attempts = Spent(entry),
             AttemptBudget = _services.Options.AttemptBudget,
             Escalations = entry.Escalations,
         };
@@ -1308,6 +1366,24 @@ public sealed class ReconcileLoop
     /// has a visible end, so it never reads as a hang.
     /// </remarks>
     private DateTimeOffset Recheck() => _services.Clock.UtcNow + _services.Options.UnevaluableRecheck;
+
+    /// <summary>What this resource has spent, as the current budget can express it (decision 74).</summary>
+    private int Spent(ResourceLedgerEntry entry) => AttemptsWithin(entry, _services.Options.AttemptBudget);
+
+    /// <summary>The number the next attempt on this resource carries.</summary>
+    /// <remarks>
+    /// Bounded by the budget, so a resource carrying more spent attempts than the budget allows
+    /// narrates <i>attempt 3 of 3</i> and escalates, rather than narrating <i>attempt 5 of 3</i>
+    /// and escalating anyway. The escalation is the same either way — see
+    /// <see cref="AttemptsWithin(int, int)"/> on why a budget reduction is retroactive — and the
+    /// difference is entirely in whether the frame says something a person can believe.
+    /// </remarks>
+    private int NextAttempt(ResourceLedgerEntry entry)
+    {
+        var budget = _services.Options.AttemptBudget;
+        var next = AttemptsWithin(entry, budget) + 1;
+        return budget > 0 && next > budget ? budget : next;
+    }
 
     private static DateTimeOffset Sooner(DateTimeOffset? earliest, DateTimeOffset candidate) =>
         earliest is { } current && current <= candidate ? current : candidate;
@@ -1326,13 +1402,23 @@ public sealed class ReconcileLoop
         return null;
     }
 
-    private static ResourceStatus Terminal(string name, ResourceStatusKind kind, ResourceLedgerEntry entry) => new()
+    /// <summary>
+    /// The row for a resource that gave up and that this build's catalog no longer contains.
+    /// </summary>
+    /// <remarks>
+    /// It carries the budget as well as the count, which it did not before decision 74. A row with
+    /// attempts and no budget beside them renders as a bare "attempt 5" with nothing to read it
+    /// against — which is the same incoherence <see cref="AttemptsWithin(int, int)"/> exists to
+    /// remove, one field short of it.
+    /// </remarks>
+    private ResourceStatus Terminal(string name, ResourceStatusKind kind, ResourceLedgerEntry entry) => new()
     {
         Name = name,
         Kind = kind,
         Delta = entry.Delta,
         Action = entry.Change,
-        Attempts = entry.Attempts,
+        Attempts = Spent(entry),
+        AttemptBudget = _services.Options.AttemptBudget,
         Escalations = entry.Escalations,
     };
 
