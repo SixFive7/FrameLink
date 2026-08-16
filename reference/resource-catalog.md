@@ -93,8 +93,9 @@ are listed in their own section. Total **79**.
 
 **These two resources are scheduled first, by operator decision (2026-08-15).**
 [§5.5](../version2.md) schedules brick-capable resources last; [§2.7](../version2.md) requires the
-agent to narrate on `/dev/tty1` "from the first second of the first boot" and forbids blank
-screens. Open question 1 recorded the collision and left it to the operator. It is now decided in
+agent to narrate on its own virtual terminal, `/dev/tty8`, "from the first second of the first
+boot" and forbids blank screens. Open question 1 recorded the collision and left it to the
+operator. It is now decided in
 favour of §2.7: on-screen narration is the product's primary honesty mechanism and it is worth
 nothing if there is no screen. The brick risk was raised explicitly and accepted, and the decision
 is recorded as [decision 46](../version2.md), with §2.7 and §5.5 both pointing at it.
@@ -114,7 +115,10 @@ report `disconnected`, **there is no DSI connector at all**, `dmesg` repeats
 `/sys/class/tty/console/active` reads `ttyAMA10 tty1`, so **opening `/dev/tty1` and writing a whole
 designed frame returns without error and produces no pixels.** A console stage that trusted its own
 write would report success while showing nothing — the same shape of failure
-[§2.4](../version2.md) exists to catch.
+[§2.4](../version2.md) exists to catch. That measurement was taken on `/dev/tty1`, and the console
+stage has since moved to `/dev/tty8` ([decision 57](../version2.md)); the finding transfers
+unchanged, because what is missing on a dark frame is `/dev/fb0` — with no framebuffer, no virtual
+terminal produces pixels, whichever one is in front.
 
 **The write discipline this group runs behind.** These are the three mitigations that make an early
 slot affordable rather than reckless, and they are part of both entries below rather than advice
@@ -1044,8 +1048,10 @@ orders.
 immediately after `agent.version` and **ahead of `agent.keypair` and `agent.adoption`**.
 [§2.7](../version2.md)'s console narration and its ban on blank screens are the product's primary
 honesty mechanism, and they are worth nothing without a lit panel: on a stock image there is no DSI
-connector, no `/dev/fb0` and no backlight, and a write to `/dev/tty1` succeeds while producing no
-pixels. Placing them ahead of adoption is deliberate rather than incidental —
+connector, no `/dev/fb0` and no backlight, and a write to the console succeeds while producing no
+pixels — measured on `/dev/tty1`, and equally true of the `/dev/tty8` the stage renders on since
+[decision 57](../version2.md), because it is the framebuffer that is missing and not any particular
+terminal. Placing them ahead of adoption is deliberate rather than incidental —
 [§2.6](../version2.md) renders `NotAdopted`, `ControlNotConfigured` and `NoContact` *on the frame*,
 and an unadopted or unreachable frame is precisely the one whose screen has to work. **This narrows
 §5.5's ordering clause by two resources; it does not repeal the rule.** Every other brick-capable
@@ -1317,7 +1323,8 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
 1. **The display overlay is brick-capable but is also the precondition for any visible output.**
    **— DECIDED 2026-08-15, in favour of [§2.7](../version2.md).**
    [§5.5](../version2.md) schedules brick-capable resources last; [§2.7](../version2.md) requires
-   console narration on `/dev/tty1` "from the first second of the first boot" and forbids blank
+   console narration — on `/dev/tty8` since [decision 57](../version2.md), on `/dev/tty1` when this
+   was decided — "from the first second of the first boot" and forbids blank
    screens. With `boot.config.dtoverlay-waveshare-panel` scheduled 76th, the frame provisioned almost
    entirely with a dark panel and the operator saw nothing until the end.
    *Reading previously adopted:* keep the literal §5.5 ordering in the table above and flag the
@@ -1327,7 +1334,9 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
    explicitly and accepted. Hardware measurement on the stock mule settled it — no DSI connector, no
    `/dev/fb0`, no backlight device, `vc4-drm: [drm] Cannot find any crtc or sizes`, and writes to
    `/dev/tty1` that succeed while producing no pixels, so a naive console stage would have reported
-   success while showing nothing. `boot.cmdline.fbcon-rotate` and
+   success while showing nothing (the stage renders on `/dev/tty8` since
+   [decision 57](../version2.md), where the same holds — the missing device is `/dev/fb0`).
+   `boot.cmdline.fbcon-rotate` and
    `boot.config.dtoverlay-waveshare-panel` now sit at positions 2 and 3, depend on `agent.version`
    alone, run ahead of adoption, and keep validate-before-write, a boot-partition backup of both
    files, and boot-count self-repair. Every other brick-capable resource keeps its last slot: the

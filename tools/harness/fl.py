@@ -184,7 +184,7 @@ def _parser() -> argparse.ArgumentParser:
             "session and grim installed (v1 used it in docs/8-webrtc-validation.md step 7; it is "
             "not a base-image package). The framebuffer path reads /dev/fb0 and encodes the PNG "
             "on the workstation - it needs nothing installed on the mule and is the only path "
-            "that can see the agent's console stage on /dev/tty1. Requires FL_PW."
+            "that can see the agent's console stage on /dev/tty8. Requires FL_PW."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
