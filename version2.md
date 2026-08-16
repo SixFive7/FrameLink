@@ -1047,15 +1047,18 @@ E2E testing begins.
   container, both built inside Linux containers. The gap is the operator's workstation.
   [Guide 2](docs/2-sd-flash-first-boot.md) is built around thirteen Raspberry Pi Imager captures
   with Windows title bars, one showing the card `Mounted as F:\` — the tool is cross-platform,
-  the screenshots are not, and re-shooting them is the expensive part — and guides
-  [7](docs/7-livekit-server.md) and [8](docs/8-webrtc-validation.md) install the LiveKit CLI with
-  the same `winget` line, the only Windows-only command in any guide. The harness under
+  the screenshots are not, and re-shooting them is the expensive part — and
+  [guide 7](docs/7-livekit-server.md) installs the LiveKit CLI with a `winget` line, the only
+  Windows-only command left in any guide. Guide 8 carried the identical line until it stopped
+  needing the CLI at all: §3.7 made the API secret internal to the Fleet Manager, so the guide's
+  credential half became impossible rather than merely Windows-bound, and what replaced it — a
+  soak of a real call between the household's own frames — runs entirely over SSH. The harness under
   `tools/harness/` is already portable and no operator runs it, so it is the smallest part of
   this. **Image generation is no longer part of this item** — it moved into v2 as §3.9 and
   milestone M2.5 (decision 52), and it delivers most of the rest on its own: hand someone a
   ready-to-flash file and their workstation's OS stops mattering, since flashing it needs no
   Imager customisation and no mounted boot partition. What is left here is the guides themselves —
-  guide 2's thirteen Windows screenshots and the two `winget` lines. ⚠ Until those are re-shot, a
+  guide 2's thirteen Windows screenshots and guide 7's one `winget` line. ⚠ Until those are re-shot, a
   household with no Windows machine still has no supported path through the *guides*, even though
   it now has one through the product.
 

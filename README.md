@@ -117,7 +117,7 @@ The build is split into one hardware guide and twelve software guides, each step
 5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
 6. [Camera](docs/6-camera.md) — dedicated PipeWire camera node, H.264 1080p30, full field of view
 7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker Compose + token minting
-8. [WebRTC hardware validation](docs/8-webrtc-validation.md) — the 2 GB go/no-go gate
+8. [WebRTC call-load validation](docs/8-webrtc-validation.md) — soak a real call, the 2 GB go/no-go gate
 9. [Immich Kiosk](docs/9-immich-kiosk.md) — Docker photo slideshow (offline-capable)
 10. [Kiosk SPA](docs/10-spa.md) — slideshow iframe, video grid, LiveKit client
 11. [GPIO button daemon](docs/11-gpio-button.md) — Python gpiozero → WebSocket toggle

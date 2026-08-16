@@ -27,14 +27,14 @@ Everything the first unit knows — the display and audio configuration, the kio
 | [05 Kiosk base](5-kiosk-base.md)                                   | labwc + Chromium fullscreen                     | 0.5 day          | 04                         |
 | [06 Camera](6-camera.md)                                           | Dedicated PipeWire camera node (H.264 1080p30 FoV) | 0.5 day       | 05                         |
 | [07 LiveKit server](7-livekit-server.md)                           | LiveKit in Docker + token minting               | 1 day            | 06                         |
-| [08 WebRTC hardware validation](8-webrtc-validation.md)            | Prove 2 GB can handle 5-way call (go/no-go)     | 2-3 days         | 07                         |
+| [08 WebRTC call-load validation](8-webrtc-validation.md)           | Soak a real call to prove 2 GB holds (go/no-go) | 2-3 days         | 06                         |
 | [09 Immich Kiosk](9-immich-kiosk.md)                               | Docker slideshow (offline-capable cache)        | 0.5 day          | 08                         |
 | [10 SPA](10-spa.md)                                                | Build the kiosk shell + LiveKit client          | 3-5 days         | 09                         |
 | [11 GPIO button daemon](11-gpio-button.md)                         | Python gpiozero daemon                          | 0.5 day          | 10                         |
 | [12 systemd & reliability](12-systemd-and-reliability.md)          | Services, watchdog, SD protection, restart      | 1-2 days         | 11                         |
 | [13 Multi-device deploy](13-multi-device-deploy.md)                | Scale to all units                              | 1-2 days         | 12                         |
 
-Total estimated: ~10-15 days of focused work, assuming the hardware validation gate (guide 07) passes. That estimate is what the golden image saves on every unit after the first — a clone goes from blank SD card to verified frame in well under a day.
+Total estimated: ~10-15 days of focused work, assuming the call-load validation gate (guide 08) passes. That estimate is what the golden image saves on every unit after the first — a clone goes from blank SD card to verified frame in well under a day.
 
 The two commands are the master's health check, run on the first unit. The first asks systemd for the live state of the four FrameLink user services — the app server and kiosk browser from [guide 10](10-spa.md), the button daemon from [guide 11](11-gpio-button.md), and the camera node from [guide 6](6-camera.md). The second lists the running Docker containers, which must include the `immich-kiosk` slideshow from [guide 9](9-immich-kiosk.md).
 
