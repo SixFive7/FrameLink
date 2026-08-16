@@ -131,12 +131,11 @@ public sealed class AgentSessionReadinessTests
         // are gated before they escalate rather than after, which is the whole reason for one
         // shared gate instead of five copies of d275689's window.
         using var files = new TemporaryFiles();
-        var processes = new RecordingProcessRunner();
 
         var session = Waiting();
         var unit = new ChromiumKioskUnitResource(files.Files, session);
         await unit.ActAsync(None);
-        var running = new ChromiumKioskRunningResource(files.Files, processes, session, unit);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
         Assert.Equal(ObservationOutcome.Unevaluable, (await running.ObserveAsync(None)).Outcome);
 
         Assert.Equal(

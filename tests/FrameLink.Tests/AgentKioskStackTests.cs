@@ -38,6 +38,32 @@ public sealed class AgentKioskStackTests
     /// <summary>What <c>loginctl list-sessions --no-legend</c> prints on a frame that logged in.</summary>
     private const string LoggedInOnTty1 = "      1 1000 framelink seat0 tty1  active no   -";
 
+    /// <summary>The one question the running-browser resource asks the user manager, verbatim.</summary>
+    private const string ShowMainPid = "systemctl --user show chromium-kiosk.service -p MainPID";
+
+    /// <summary>
+    /// The kiosk browser's command line as <c>/proc/1253/cmdline</c> carried it on the mule,
+    /// 2026-08-16, with the frame healthy and drawing.
+    /// </summary>
+    /// <remarks>
+    /// Verbatim, and being verbatim is the whole point of it. <c>argv[0]</c> is
+    /// <c>/usr/lib/chromium/chromium</c> because <c>/usr/bin/chromium</c> — the path the unit
+    /// declares — is a shell script that <c>exec</c>s it, and the eleven flags in front of the
+    /// declared twelve come from that wrapper and from <c>rpi-chromium-mods</c>. Nothing here is
+    /// constructed to make a test pass: this is what the kernel held while the resource was
+    /// reporting the browser absent on every boot.
+    /// </remarks>
+    private const string MeasuredBrowserCommandLine =
+        "/usr/lib/chromium/chromium --force-renderer-accessibility --enable-remote-extensions "
+        + "--show-component-extension-options --enable-gpu-rasterization --no-default-browser-check "
+        + "--disable-pings --media-router=0 --disable-dev-shm-usage --enable-remote-extensions "
+        + "--load-extension --use-angle=gles --ozone-platform=wayland "
+        + "--user-data-dir=/tmp/framelink-chromium --kiosk --noerrdialogs --disable-infobars "
+        + "--disable-session-crashed-bubble --no-first-run "
+        + "--auto-accept-camera-and-microphone-capture --enable-features=UsePipeWireCamera "
+        + "--autoplay-policy=no-user-gesture-required --disable-background-timer-throttling "
+        + "--disable-renderer-backgrounding http://127.0.0.1:8888/";
+
     [Fact]
     public async Task Autologin_writes_the_drop_in_with_the_empty_ExecStart_that_makes_it_override()
     {
@@ -657,13 +683,59 @@ public sealed class AgentKioskStackTests
     }
 
     [Fact]
+    public async Task The_browser_the_wrapper_script_exec_d_is_still_this_units_browser()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // The failure this pins, measured across five boots of the mule: /usr/bin/chromium is a
+        // 5,920-byte shell script whose last line execs /usr/lib/chromium/chromium, so the path the
+        // unit declares is on no running command line at all — `pgrep -a chromium | grep -c
+        // '/usr/bin/chromium'` was 0 against 12 for the library path. The resource identified the
+        // browser by that path and so reported "no browser process is running" on every boot,
+        // forever, while the browser was up and drawing; the restart it triggered took a working
+        // browser down five times a boot. Both halves of the identification are gone: the process is
+        // the one systemd names, and the comparison never mentions a binary.
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1253", string.Empty);
+        SeedCommandLine(files, 1253, MeasuredBrowserCommandLine.Split(' '));
+
+        var observation = await running.ObserveAsync(None);
+
+        Assert.True(observation.InSync, observation.Observed);
+        Assert.DoesNotContain(ChromiumKioskUnitResource.Browser, MeasuredBrowserCommandLine, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_declared_arguments_leave_out_the_binary_the_wrapper_replaces()
+    {
+        using var files = new TemporaryFiles();
+        var unit = new ChromiumKioskUnitResource(files.Files, new FakeUserSession());
+
+        await unit.ActAsync(None);
+
+        // The second half of the same defect, and it has to be fixed with the first or the resource
+        // only fails in a new way: with the binary left in, `declared[0]` is /usr/bin/chromium and
+        // the compare would go from "no browser process is running" to "running without
+        // /usr/bin/chromium" — still never converging, on the same cause.
+        var declared = ChromiumKioskUnitResource.ExecStartArguments(files.Read(unit.Path));
+
+        Assert.Equal(ChromiumKioskUnitResource.Flags.Count + 1, declared.Count);
+        Assert.DoesNotContain(ChromiumKioskUnitResource.Browser, declared);
+        Assert.Equal(ChromiumKioskUnitResource.Flags[0], declared[0]);
+        Assert.Equal(ChromiumKioskUnitResource.Origin, declared[^1]);
+    }
+
+    [Fact]
     public async Task The_running_browser_may_carry_more_flags_than_the_unit_declares()
     {
         using var files = new TemporaryFiles();
         var session = new FakeUserSession();
-        var processes = new RecordingProcessRunner();
         var unit = new ChromiumKioskUnitResource(files.Files, session);
-        var running = new ChromiumKioskRunningResource(files.Files, processes, session, unit);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
 
         await unit.ActAsync(None);
 
@@ -671,11 +743,17 @@ public sealed class AgentKioskStackTests
         // /etc/chromium.d/ at launch. The running command line is a legitimate *superset* of
         // ExecStart, so an equality compare reports drift on a healthy frame on every pass forever.
         var declared = ChromiumKioskUnitResource.ExecStartArguments(files.Read(unit.Path));
-        var injected = "/usr/bin/chromium --enable-features=VaapiVideoDecoder,UsePipeWireCamera "
-            + "--use-gl=egl --disable-features=UseChromeOSDirectVideoDecoder "
-            + string.Join(' ', declared.Skip(1));
+        string[] injected =
+        [
+            "/usr/lib/chromium/chromium",
+            "--enable-features=VaapiVideoDecoder,UsePipeWireCamera",
+            "--use-gl=egl",
+            "--disable-features=UseChromeOSDirectVideoDecoder",
+            .. declared,
+        ];
 
-        processes.Answers["pgrep -a chromium"] = new ProcessResult(0, "701 " + injected, string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=701", string.Empty);
+        SeedCommandLine(files, 701, injected);
 
         Assert.True((await running.ObserveAsync(None)).InSync);
     }
@@ -685,16 +763,19 @@ public sealed class AgentKioskStackTests
     {
         using var files = new TemporaryFiles();
         var session = new FakeUserSession();
-        var processes = new RecordingProcessRunner();
         var unit = new ChromiumKioskUnitResource(files.Files, session);
-        var running = new ChromiumKioskRunningResource(files.Files, processes, session, unit);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
 
         await unit.ActAsync(None);
 
-        processes.Answers["pgrep -a chromium"] = new ProcessResult(
-            0,
-            "701 /usr/bin/chromium --ozone-platform=wayland --kiosk http://127.0.0.1:8888/",
-            string.Empty);
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=701", string.Empty);
+        SeedCommandLine(
+            files,
+            701,
+            "/usr/lib/chromium/chromium",
+            "--ozone-platform=wayland",
+            "--kiosk",
+            "http://127.0.0.1:8888/");
 
         var observation = await running.ObserveAsync(None);
 
@@ -706,20 +787,99 @@ public sealed class AgentKioskStackTests
     }
 
     [Fact]
-    public void Renderers_are_not_mistaken_for_the_browser_they_belong_to()
+    public async Task A_browser_this_unit_does_not_own_cannot_stand_in_for_it()
     {
-        const string Listing = """
-            712 /usr/bin/chromium --type=zygote --no-zygote-sandbox
-            740 /usr/bin/chromium --type=renderer --enable-features=UsePipeWireCamera
-            701 /usr/bin/chromium --ozone-platform=wayland --kiosk http://127.0.0.1:8888/
-            """;
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
 
-        var main = ChromiumKioskRunningResource.MainProcessLine(Listing);
+        await unit.ActAsync(None);
 
-        Assert.NotNull(main);
-        Assert.DoesNotContain("--type=", main, StringComparison.Ordinal);
-        Assert.Contains("--kiosk", main, StringComparison.Ordinal);
+        // A Chromium somebody started over SSH carries the same binary and can carry every declared
+        // flag, so no reading of the process table can tell it from the unit's. MainPID can: this
+        // unit has no main process, and that is the verdict — which is also the exact wording
+        // SupervisionInterlock and Supervisor quote as the transient a restart produces.
+        SeedCommandLine(files, 4242, MeasuredBrowserCommandLine.Split(' '));
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=0", string.Empty);
+
+        var observation = await running.ObserveAsync(None);
+
+        Assert.False(observation.InSync);
+        Assert.Equal("no browser process is running", observation.Observed);
     }
+
+    [Fact]
+    public async Task A_user_manager_that_will_not_answer_is_not_a_dead_browser()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        session.Answers[ShowMainPid] = new ProcessResult(
+            1,
+            string.Empty,
+            "Failed to connect to user scope bus: No such file or directory");
+
+        var observation = await running.ObserveAsync(None);
+
+        Assert.False(observation.InSync);
+        Assert.DoesNotContain("no browser process is running", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("Failed to connect to user scope bus", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Renderers_are_not_mistaken_for_the_browser_they_belong_to()
+    {
+        using var files = new TemporaryFiles();
+        var session = new FakeUserSession();
+        var unit = new ChromiumKioskUnitResource(files.Files, session);
+        var running = new ChromiumKioskRunningResource(files.Files, session, unit);
+
+        await unit.ActAsync(None);
+
+        // Thirteen chromium processes were in the tree on the mule and twelve of them are not the
+        // browser. Nothing here filters them: MainPID names one process, so the zygote and the
+        // renderer are never candidates in the first place.
+        SeedCommandLine(files, 1277, "/usr/lib/chromium/chromium", "--type=zygote", "--no-zygote-sandbox");
+        SeedCommandLine(
+            files,
+            1352,
+            "/usr/lib/chromium/chromium",
+            "--type=renderer",
+            "--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)",
+            "--ozone-platform=wayland");
+        SeedCommandLine(files, 1253, MeasuredBrowserCommandLine.Split(' '));
+
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1253", string.Empty);
+        Assert.True((await running.ObserveAsync(None)).InSync);
+
+        // And if systemd ever named one, it would be drift rather than a healthy frame: a renderer
+        // carries none of the kiosk flags.
+        session.Answers[ShowMainPid] = new ProcessResult(0, "MainPID=1352", string.Empty);
+        var observation = await running.ObserveAsync(None);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("--kiosk", observation.Observed, StringComparison.Ordinal);
+
+        // The renderer is also what proves the NUL split: a whitespace split would turn its
+        // crash-reporter argument into seven, and this file's whole claim is that the vector is the
+        // kernel's rather than a rendering of it.
+        var renderer = ChromiumKioskRunningResource.CommandLineOf(files.Files, 1352);
+
+        Assert.NotNull(renderer);
+        Assert.Contains("--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)", renderer);
+    }
+
+    /// <summary>
+    /// Writes a <c>/proc/&lt;pid&gt;/cmdline</c> the way the kernel presents one: NUL between the
+    /// arguments and a NUL after the last.
+    /// </summary>
+    private static void SeedCommandLine(TemporaryFiles files, int pid, params string[] argv) =>
+        files.Seed($"/proc/{pid}/cmdline", string.Join('\0', argv) + '\0');
 
     [Fact]
     public async Task Swap_reads_the_zram_row_rather_than_the_presence_of_any_swap()

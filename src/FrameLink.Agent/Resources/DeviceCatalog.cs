@@ -374,7 +374,7 @@ public static class DeviceCatalog
 
             kioskUnit,
             new ChromiumKioskEnabledResource(context.Session),
-            new ChromiumKioskRunningResource(context.Files, context.Processes, context.Session, kioskUnit),
+            new ChromiumKioskRunningResource(context.Files, context.Session, kioskUnit),
 
             // Positions 48–53, the camera chain. It sits after the browser and before the product
             // layer, and its own order is the catalog's: switch WirePlumber's camera hunting off

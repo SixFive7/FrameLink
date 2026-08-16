@@ -1,3 +1,4 @@
+using System.Globalization;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
@@ -139,13 +140,36 @@ public sealed class ChromiumKioskUnitResource : IResource
             + "WantedBy=default.target\n";
     }
 
-    /// <summary>The <c>ExecStart</c> arguments a unit document declares, continuations joined.</summary>
+    /// <summary>
+    /// The arguments a unit document's <c>ExecStart=</c> declares — continuations joined, and the
+    /// executable itself excluded.
+    /// </summary>
     /// <remarks>
+    /// <para>
     /// Written as a parser rather than as a constant because the resource that consumes it —
     /// <see cref="ChromiumKioskRunningResource"/> — has to compare the running process against
     /// <b>the unit file on disk</b>, which is the thing systemd actually started. Reading the
     /// desired constant instead would make "the file drifted and the browser is faithfully running
     /// the drifted version" report as healthy.
+    /// </para>
+    /// <para>
+    /// <b>Dropping the executable is the measured half of this, not tidiness.</b> On Trixie
+    /// <c>/usr/bin/chromium</c> is a 5,920-byte shell script whose last line is
+    /// <c>exec $LIBDIR/$APPNAME $CHROMIUM_FLAGS "$@"</c>. <c>exec</c> replaces the process image, so
+    /// by the time there is a process to look at, its <c>argv[0]</c> is
+    /// <c>/usr/lib/chromium/chromium</c> and the path this unit declares appears <i>nowhere on the
+    /// running machine</i> — measured on the mule, <c>pgrep -a chromium | grep -c
+    /// '/usr/bin/chromium'</c> is 0 against 12 for the library path. A comparison that included the
+    /// executable could therefore never converge: it would report the browser as carrying every
+    /// declared argument except its own binary, on a frame where nothing is wrong, forever.
+    /// Everything after the executable — the twelve flags and the URL — survives the <c>exec</c>
+    /// unchanged, and is exactly what this comparison is for.
+    /// </para>
+    /// <para>
+    /// Dropping <i>by position</i> rather than by matching <see cref="Browser"/> is deliberate: it
+    /// also swallows systemd's <c>ExecStart=</c> prefixes (<c>-</c>, <c>@</c>, <c>+</c>, <c>!</c>),
+    /// and it cannot go stale the next time Debian moves the binary.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<string> ExecStartArguments(string? unitDocument)
     {
@@ -163,8 +187,10 @@ public sealed class ChromiumKioskUnitResource : IResource
                 continue;
             }
 
-            return line["ExecStart=".Length..]
+            var tokens = line["ExecStart=".Length..]
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            return tokens.Length <= 1 ? [] : tokens[1..];
         }
 
         return [];
@@ -305,18 +331,60 @@ public sealed class ChromiumKioskEnabledResource : IResource
 /// old URL and the old camera backend while every file on it reads correctly.
 /// </para>
 /// <para>
-/// <b>The compare is containment, never equality, and that is measured rather than defensive.</b>
-/// <c>pkg.chromium</c> drags in <c>rpi-chromium-mods</c>, which injects flags from
-/// <c>/etc/chromium.d/</c> at launch — so the running command line is a legitimate <b>superset</b>
-/// of <c>ExecStart</c>. An equality compare reports drift on a perfectly healthy frame, on every
-/// pass, forever: the agent would restart the browser every five minutes and the delta would never
-/// close, because the extra flags are put back by the launcher each time.
+/// <b>The process is the one systemd owns, asked of systemd — never a process found by grepping
+/// for a path.</b> The unit's <c>MainPID</c> is read from the user manager and its command line
+/// from <c>/proc/&lt;pid&gt;/cmdline</c>. That is the whole identification, and each half of it is
+/// paying for a measured failure:
+/// </para>
+/// <list type="bullet">
+/// <item><b>The path is not a name the running machine carries.</b> On Trixie
+/// <c>/usr/bin/chromium</c> is a shell script that <c>exec</c>s <c>/usr/lib/chromium/chromium</c>,
+/// so a check for the declared path matches nothing — measured on the mule, 0 lines against 12 for
+/// the library path. This resource reported <i>"no browser process is running"</i> on every boot,
+/// forever, while the browser was up and drawing: <c>Started</c> at 15.2–15.4 s, the verdict at
+/// 40.9–41.2 s, so the browser had been alive for 25.7 s each time it was declared absent. It is
+/// not a race and never was, and the Act it triggered — a restart — took a working browser down
+/// five times a boot and twice raced the compositor into <i>Failed to connect to Wayland
+/// display</i>.</item>
+/// <item><b>A path also cannot tell this unit's browser from any other.</b> A Chromium somebody
+/// started over SSH carries the same binary and can carry the same flags. <c>MainPID</c> is the
+/// only answer that is about <i>the unit</i>, and it comes from the process manager that started
+/// it.</item>
+/// </list>
+/// <para>
+/// <b>Two alternatives were considered and are worse.</b> Matching the unit's cgroup is equally
+/// authoritative but yields the whole tree — thirteen processes on the mule — with no marker for
+/// which is the main one, so the renderer-filtering guesswork would come straight back; and
+/// building the path (<c>user.slice/user-1000.slice/user@1000.service/app.slice/…</c>) hard-codes a
+/// layout that moves between systemd versions, which is the same class of assumption as the binary
+/// path. Asserting on distinctive arguments — <c>--kiosk</c> plus the URL — survives the wrapper,
+/// but it never establishes <i>whose</i> process it found, so a hand-started browser would satisfy
+/// it while the unit lay dead.
 /// </para>
 /// <para>
-/// <b>Renderers are excluded from the compare.</b> <c>pgrep -a chromium</c> lists the whole tree,
-/// and a renderer's command line carries <c>--type=renderer</c> and none of the kiosk flags.
-/// Comparing against the first line <c>pgrep</c> happens to return would report drift depending on
-/// process scheduling.
+/// <b>The compare is containment, never equality, and that is measured rather than defensive.</b>
+/// <c>pkg.chromium</c> drags in <c>rpi-chromium-mods</c>, which injects flags from
+/// <c>/etc/chromium.d/</c>, and the wrapper script adds more of its own
+/// (<c>--force-renderer-accessibility</c>, <c>--enable-remote-extensions</c>, <c>--use-angle=gles</c>
+/// and others, all present on the mule) — so the running command line is a legitimate
+/// <b>superset</b> of <c>ExecStart</c>. An equality compare reports drift on a perfectly healthy
+/// frame, on every pass, forever: the agent would restart the browser every five minutes and the
+/// delta would never close, because the extra flags are put back by the launcher each time.
+/// Undeclared extras are therefore not a fault, and must not be made one here.
+/// </para>
+/// <para>
+/// <b>Renderers stopped being a hazard rather than being filtered out.</b> They were the reason the
+/// old <c>pgrep -a chromium</c> reading had to skip lines carrying <c>--type=</c>: the listing is
+/// the whole process tree in scheduling order. <c>MainPID</c> names one process and it is the
+/// browser itself, so there is nothing to disambiguate.
+/// </para>
+/// <para>
+/// <b>What is deliberately unchanged:</b> <c>MainPID</c> is <c>0</c> while the unit sits in its
+/// three <c>ExecStartPre</c> commands waiting for the Wayland socket and for the agent's own origin
+/// to answer, so a browser that is legitimately on its way up reads as "no browser process is
+/// running" for that window — exactly as the <c>pgrep</c> reading did. Supervision's interlock
+/// covers a restart and <see cref="UserSessionGate"/> covers the start of a boot; anything left is
+/// the same behaviour as before this fix and is not being widened here on no measurement.
 /// </para>
 /// </remarks>
 public sealed class ChromiumKioskRunningResource : IResource
@@ -324,25 +392,24 @@ public sealed class ChromiumKioskRunningResource : IResource
     /// <summary>The catalog id.</summary>
     public const string ResourceName = "unit.chromium-kiosk.running-matches-content";
 
+    /// <summary>The unit property carrying the pid of the process systemd started.</summary>
+    public const string MainPidProperty = "MainPID";
+
     private readonly ISystemFiles _files;
-    private readonly IProcessRunner _processes;
     private readonly IUserSession _session;
     private readonly ChromiumKioskUnitResource _unit;
 
     /// <summary>Creates the resource.</summary>
     public ChromiumKioskRunningResource(
         ISystemFiles files,
-        IProcessRunner processes,
         IUserSession session,
         ChromiumKioskUnitResource unit)
     {
         ArgumentNullException.ThrowIfNull(files);
-        ArgumentNullException.ThrowIfNull(processes);
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(unit);
 
         _files = files;
-        _processes = processes;
         _session = session;
         _unit = unit;
     }
@@ -373,31 +440,54 @@ public sealed class ChromiumKioskRunningResource : IResource
                 $"{_unit.Path} declares no ExecStart to compare against");
         }
 
-        // After the ExecStart compare, which reads a file and needs no session, and before the
-        // process check, which is the browser the session starts.
-        if (await UserSessionGate
-                .NotSettledAsync(_session, $"a running browser carrying all {declared.Count} declared arguments", cancellationToken)
-                .ConfigureAwait(false) is { } waiting)
+        var expected = $"a running browser carrying all {declared.Count} declared arguments";
+
+        // After the ExecStart read, which takes a file and needs no session, and before the two
+        // questions that do need one: which process this unit owns, and what it was started with.
+        if (await UserSessionGate.NotSettledAsync(_session, expected, cancellationToken).ConfigureAwait(false)
+            is { } waiting)
         {
             return waiting;
         }
 
-        var listed = await _processes.RunAsync("pgrep", ["-a", "chromium"], cancellationToken).ConfigureAwait(false);
-        var running = MainProcessLine(listed.StandardOutput);
+        var shown = await _session
+            .RunAsync(
+                "systemctl",
+                ["--user", "show", ChromiumKioskUnitResource.UnitName, "-p", MainPidProperty],
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        if (running is null)
+        if (MainPidIn(shown.StandardOutput) is not { } pid)
+        {
+            // Not "nothing is running" — nothing was asked successfully. The two have to stay
+            // apart, or a user manager that would not answer reads as a dead browser and the Act
+            // restarts something that was never observed.
+            return new ResourceObservation(
+                false,
+                expected,
+                $"the user manager did not say which process runs {ChromiumKioskUnitResource.UnitName}{Refusal(shown)}");
+        }
+
+        if (pid == 0)
+        {
+            return new ResourceObservation(false, expected, "no browser process is running");
+        }
+
+        if (CommandLineOf(_files, pid) is not { Count: > 0 } running)
         {
             return new ResourceObservation(
                 false,
-                "a running browser matching the unit",
-                "no browser process is running");
+                expected,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"no browser process is running (systemd names process {pid}, which has no command line to read)"));
         }
 
         var missing = MissingFrom(running, declared);
 
         return new ResourceObservation(
             missing.Count == 0,
-            $"a running browser carrying all {declared.Count} declared arguments",
+            expected,
             missing.Count == 0
                 ? $"running with all {declared.Count} declared arguments"
                 : $"running without {string.Join(", ", missing)}");
@@ -418,17 +508,34 @@ public sealed class ChromiumKioskRunningResource : IResource
             "Restarting this frame's browser so it picks up the instructions that were written for it.");
     }
 
-    /// <summary>The <c>pgrep -a</c> line belonging to the main browser process, or null.</summary>
-    public static string? MainProcessLine(string pgrepOutput)
+    /// <summary>
+    /// The pid in a <c>systemctl show -p MainPID</c> answer, or null when it carried none.
+    /// </summary>
+    /// <remarks>
+    /// <b>Zero is a real reading and must not collapse into null.</b> systemd reports
+    /// <c>MainPID=0</c> for a unit with no main process — stopped, failed, or still inside its
+    /// <c>ExecStartPre</c> — which is "no browser process is running", a different fact from a user
+    /// manager that could not be asked. Null is reserved for the second, on
+    /// <see cref="ConsoleAutologinResource.ActiveStateIn"/>'s precedent: an answer that did not
+    /// arrive is not evidence about the frame.
+    /// </remarks>
+    public static int? MainPidIn(string shown)
     {
-        ArgumentNullException.ThrowIfNull(pgrepOutput);
+        ArgumentNullException.ThrowIfNull(shown);
 
-        foreach (var line in pgrepOutput.Split('\n'))
+        const string Prefix = MainPidProperty + "=";
+
+        foreach (var line in shown.Split('\n'))
         {
-            if (line.Contains(ChromiumKioskUnitResource.Browser, StringComparison.Ordinal)
-                && !line.Contains("--type=", StringComparison.Ordinal))
+            if (line.StartsWith(Prefix, StringComparison.Ordinal)
+                && int.TryParse(
+                    line[Prefix.Length..].Trim(),
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var pid)
+                && pid >= 0)
             {
-                return line.Trim();
+                return pid;
             }
         }
 
@@ -436,17 +543,56 @@ public sealed class ChromiumKioskRunningResource : IResource
     }
 
     /// <summary>
+    /// The argument vector the kernel holds for <paramref name="pid"/>, or null when there is no
+    /// such process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>/proc/&lt;pid&gt;/cmdline</c> is the kernel's own record of what a process was
+    /// <c>execve</c>d with, so it is the one reading that cannot be stale and the one no wrapper
+    /// script can sit in front of. Same file family and same read as
+    /// <see cref="KioskChildEnvironment"/>, which takes the neighbouring <c>environ</c>.
+    /// </para>
+    /// <para>
+    /// <b>Split on NUL, never rendered to a line and split on spaces.</b> The separator is what
+    /// makes this the exact vector rather than an approximation of it: a Chromium child carries
+    /// <c>--enable-crash-reporter=,built on Debian GNU/Linux 13 (trixie)</c> on this build, and a
+    /// whitespace split turns that one argument into seven.
+    /// </para>
+    /// <para>
+    /// Absent and empty both answer null. A pid whose <c>cmdline</c> cannot be read is a pid with
+    /// no browser behind it — a zombie, a process that exited between the two reads, an unreadable
+    /// entry — and every one of those is "the process systemd named is not there to compare",
+    /// which is drift and is reported as such rather than being distinguished further.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string>? CommandLineOf(ISystemFiles files, int pid)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var raw = files.ReadText(string.Create(CultureInfo.InvariantCulture, $"/proc/{pid}/cmdline"));
+
+        return raw?.Split('\0', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    /// <summary>
     /// Which declared arguments the running command line does not carry — containment, not
     /// equality.
     /// </summary>
-    public static IReadOnlyList<string> MissingFrom(string runningCommandLine, IReadOnlyList<string> declared)
+    /// <remarks>
+    /// Both sides are argument vectors and neither carries the executable: the declared side has it
+    /// removed by <see cref="ChromiumKioskUnitResource.ExecStartArguments"/>, and the running side's
+    /// <c>argv[0]</c> is simply never asked for. Arguments the unit did not declare are ignored by
+    /// construction, which is the containment rule the class remarks measure.
+    /// </remarks>
+    public static IReadOnlyList<string> MissingFrom(
+        IReadOnlyList<string> runningCommandLine,
+        IReadOnlyList<string> declared)
     {
         ArgumentNullException.ThrowIfNull(runningCommandLine);
         ArgumentNullException.ThrowIfNull(declared);
 
-        var present = new HashSet<string>(
-            runningCommandLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
-            StringComparer.Ordinal);
+        var present = new HashSet<string>(runningCommandLine, StringComparer.Ordinal);
 
         var missing = new List<string>();
         foreach (var argument in declared)
@@ -459,4 +605,10 @@ public sealed class ChromiumKioskRunningResource : IResource
 
         return missing;
     }
+
+    /// <summary>What a refusing <c>systemctl</c> said, parenthesised, or nothing.</summary>
+    private static string Refusal(ProcessResult result) =>
+        result.Combined.Trim() is { Length: > 0 } text
+            ? $" ({text.Split('\n')[0].Trim()})"
+            : string.Empty;
 }
