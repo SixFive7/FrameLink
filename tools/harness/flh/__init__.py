@@ -22,6 +22,7 @@ Module map
 :mod:`flh.png`       dependency-free PNG writer for the framebuffer screenshot path
 :mod:`flh.ssh`       paramiko session handling and elevation; the only place a password is passed
 :mod:`flh.ui`        console output
+:mod:`flh.xvf`       the bench measurement of the XVF3800 amplifier pin (open question 13)
 
 Everything that touches the mule is Python with paramiko, per CLAUDE.md section 1.3. The
 non-mule parts are Python too, for one reason worth stating: the progress file is written
@@ -41,4 +42,5 @@ __all__ = [
     "ssh",
     "testrun",
     "ui",
+    "xvf",
 ]

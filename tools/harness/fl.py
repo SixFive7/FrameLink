@@ -18,6 +18,8 @@ has lost its context finds out where the build stands.
     parity    the first of milestone Mn+3's three bars: a state diff of a live frame against
               the frozen v1 reference, with every expected difference recorded and every
               gap in coverage named
+    array     the bench measurement of the XVF3800's amplifier pin: stop the agent, connect
+              the array, read X0D31 before anything writes to it, start the agent again
     status    what has been proven, what this session can do, what to do next
 
 Credentials
@@ -77,6 +79,7 @@ from flh import deploy as deploy_mod  # noqa: E402
 from flh import parity as parity_mod  # noqa: E402
 from flh import power as power_mod  # noqa: E402
 from flh import progress, status, testrun, ui  # noqa: E402
+from flh import xvf as xvf_mod  # noqa: E402
 from flh.config import AGENT_PROJECT, HA_ENTITY, RID, TEST_PROJECT, HarnessError  # noqa: E402
 
 
@@ -294,6 +297,50 @@ def _parser() -> argparse.ArgumentParser:
         help="print what a state diff can and cannot answer; needs no frame and no credential",
     )
 
+    # --- array --------------------------------------------------------------
+    p_array = subparsers.add_parser(
+        "array",
+        help="bench measurement of the XVF3800 amplifier pin",
+        description=(
+            "Answers resource-catalog open question 13 - is the speaker amplifier on or off "
+            "on the firmware a factory-fresh array ships with - by reading X0D31 before "
+            "anything writes to it. Three actions, and the whole procedure:\n\n"
+            "  1. fl.py array hold      stops fl-agent and proves it stopped\n"
+            "  2. unplug the frame's own array, plug in the array to be measured\n"
+            "  3. fl.py array read      the measurement\n"
+            "  4. unplug it, plug the frame's own array back in\n"
+            "  5. fl.py array read      optional: the same reading on the frame's own array,\n"
+            "                           now with the connect order proved\n"
+            "  6. fl.py array release   starts fl-agent, waits for the frame to say InSync\n\n"
+            "Never connect an array before step 1 has said SAFE TO CONNECT. One array at a\n"
+            "time, always.\n\n"
+            "The ordering matters and is proved rather than trusted: `read` compares the "
+            "kernel's enumeration timestamp for the array against systemd's stop timestamp "
+            "for the unit, and refuses to certify a reading taken on an array the agent could "
+            "have written to. It refuses outright if two arrays are attached, because "
+            "xvf_host has no device selector and could not say which one answered.\n\n"
+            "Only VERSION and GPO_READ_VALUES are ever sent. No GPO write, no dfu-util, no "
+            "flashing path of any kind. The only writes to the frame are the stop and the "
+            "start. Requires FL_PW.\n\n"
+            "Exit 0 when the step did what it says, 2 when the reading could not be certified "
+            "or the frame did not report InSync in time - never 0 for either of those."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_array.add_argument("action", choices=("hold", "read", "release"), help="what to do")
+    p_array.add_argument(
+        "--repeats",
+        type=int,
+        default=xvf_mod.DEFAULT_REPEATS,
+        help=f"GPO readbacks to take (default {xvf_mod.DEFAULT_REPEATS}); one cannot show a pin is stable",
+    )
+    p_array.add_argument(
+        "--timeout",
+        type=float,
+        default=xvf_mod.CONVERGE_TIMEOUT_S,
+        help=f"seconds `release` waits for InSync (default {xvf_mod.CONVERGE_TIMEOUT_S:.0f})",
+    )
+
     # --- status -------------------------------------------------------------
     p_status = subparsers.add_parser(
         "status",
@@ -423,6 +470,34 @@ def main(argv: list[str] | None = None) -> int:
                 f"{outcome.get('verdict', 'collected only')} - {outcome['directory']}",
             )
             return int(outcome["exitCode"])
+
+        if args.command == "array":
+            with progress.activity("array", action=args.action):
+                if args.action == "hold":
+                    outcome = xvf_mod.hold()
+                    summary = f"fl-agent {outcome['activeState']}, {outcome['arraysAttached']} array(s) attached"
+                    succeeded = outcome["activeState"] in ("inactive", "failed")
+                elif args.action == "read":
+                    outcome = xvf_mod.read(repeats=args.repeats)
+                    # The whole reading, in one line, in the file that is NOT gitignored.
+                    # tools/harness/runs/ holds the verbatim capture and is swept; this is the
+                    # record that survives, so it carries every value the question turns on.
+                    summary = (
+                        f"firmware {outcome['firmware']}, X0D31={outcome['amplifierPin']} "
+                        f"(mute {outcome['muteButton']}, LED {outcome['ledRing']}), "
+                        f"stable={outcome['stable']}, ordering {outcome['ordering']}, "
+                        f"serial {outcome['usb'].get('serial', '?')}"
+                    )
+                    succeeded = bool(outcome["certified"])
+                else:
+                    outcome = xvf_mod.release(timeout_s=args.timeout)
+                    summary = f"fl-agent {outcome['activeState']}, {outcome['selfReport'] or 'no self-report'}"
+                    succeeded = bool(outcome["converged"])
+            progress.log("array", succeeded, summary)
+            # A reading that could not be certified, or a frame that did not come back, is not
+            # a harness failure - it is a result the operator has to see and decide about - so
+            # it exits 2 rather than 0, and never masquerades as success.
+            return 0 if succeeded else 2
 
         if args.command == "status":
             status.show(json_output=args.json)
