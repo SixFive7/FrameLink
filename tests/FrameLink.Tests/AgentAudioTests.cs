@@ -304,12 +304,13 @@ public sealed class AgentAudioTests
     }
 
     [Fact]
-    public async Task Every_mixer_observation_records_what_wireplumber_is_doing()
+    public async Task Every_mixer_observation_records_what_wireplumber_is_doing_and_names_its_files()
     {
-        // The catalog's strongest untested suspicion: alsa-restore applies asound.state early in
-        // boot, then the session starts and WirePlumber applies its own stored per-device volume.
-        // Nobody has measured it, so the agent records both facts on every reading and lets the
-        // answer fall out of ordinary telemetry.
+        // The suspicion is confirmed — measured on the frame 2026-08-16 — but *which* WirePlumber
+        // mechanism is still open, and the file names are what separates "it restored a stored
+        // volume" from "it applied its own default to a route it has no stored volume for". The two
+        // have different fixes, nobody has been able to list that directory by hand, so the agent
+        // lists it on every reading and the answer arrives in ordinary telemetry.
         using var files = new TemporaryFiles();
         var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
         var session = new FakeUserSession();
@@ -320,16 +321,32 @@ public sealed class AgentAudioTests
         var observation = await Observe(block, AudioCatalog.Pcm1VolumeResourceName);
 
         Assert.Contains("wireplumber active", observation.Observed, StringComparison.Ordinal);
-        Assert.Contains("1 stored device files", observation.Observed, StringComparison.Ordinal);
+
+        // Singular, and named — "1 stored device files" was what the frame reported and it says
+        // nothing about which file it is.
+        Assert.Contains("1 stored device file (restore-stream)", observation.Observed, StringComparison.Ordinal);
+
+        files.Seed("/home/framelink/.local/state/wireplumber/default-profile", "{}");
+
+        var both = await Observe(Audio(files, processes, session: new FakeUserSession
+        {
+            Answers = { ["systemctl --user is-active wireplumber.service"] = new ProcessResult(0, "active", string.Empty) },
+        }), AudioCatalog.Pcm1VolumeResourceName);
+
+        Assert.Contains(
+            "2 stored device files (default-profile, restore-stream)",
+            both.Observed,
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task A_session_that_has_not_started_is_reported_but_does_not_itself_make_the_mixer_drift()
+    public async Task A_wireplumber_that_is_not_running_is_reported_but_does_not_itself_make_the_mixer_drift()
     {
-        // The predicate stays on the value this resource owns. A resource that refused to conclude
-        // until the session was up would act — and therefore reboot — on a frame whose session is
-        // broken, spending §2.5's ladder on a fault it cannot fix. The same choice
-        // DisplayPanelOverlayResource made about the display probe.
+        // Two different facts, and only one of them gates. *Is there a session to ask* decides
+        // whether the mixer can be answered for at all (decision 80, above). *Is WirePlumber
+        // running inside it* is evidence about the second owner and rides in the observed text —
+        // a frame whose session is up and whose WirePlumber is stopped has a mixer nobody is
+        // fighting over, and its value is exactly as true as any other.
         using var files = new TemporaryFiles();
         var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
         var session = new FakeUserSession();
@@ -1220,6 +1237,247 @@ public sealed class AgentAudioTests
             new RecordingLog());
 
     /// <summary>A card 0 that answers <c>amixer</c> with the two playback stages given.</summary>
+    [Fact]
+    public async Task The_mixer_cannot_be_answered_for_before_the_session_that_also_owns_it_exists()
+    {
+        // <b>The livelock's root, at resource scope.</b> The frame's post-boot verify runs at
+        // boot+10.0-10.6 s and the login user's manager comes up 0.03-0.7 s later (decision 65), so
+        // an ungated mixer verify was a coin flip on whether it read the agent's value or
+        // WirePlumber's — and a verify that won *passed*, cleared the ledger, and left a frame that
+        // was about to be wrong again looking entirely healthy. Section 2.4's rule is that
+        // "applied" is claimed only from an observation the setting had to survive a boot for, and
+        // a reading taken before the other owner of that value has started is not that observation.
+        //
+        // Before decision 80 every assertion below was the opposite: in sync, on a frame whose
+        // speaker was about to be turned down.
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession
+        {
+            Readiness = new SessionReadiness(
+                false,
+                "the login session has not started yet (/run/user/1000 does not exist)"),
+        };
+
+        var block = Audio(files, processes, session: session);
+
+        foreach (var name in new[]
+                 {
+                     AudioCatalog.Pcm0VolumeResourceName,
+                     AudioCatalog.Pcm1VolumeResourceName,
+                     AudioCatalog.HeadsetCaptureResourceName,
+                     AudioCatalog.Pcm0SwitchResourceName,
+                     AudioCatalog.Pcm1SwitchResourceName,
+                     WirePlumberVolumeResource.ResourceName,
+                 })
+        {
+            var observation = await Observe(block, name);
+
+            Assert.Equal(ObservationOutcome.Unevaluable, observation.Outcome);
+            Assert.Contains("has not started yet", observation.Observed, StringComparison.Ordinal);
+
+            // And it still says what it was hoping for, because "could not be determined" on its
+            // own tells an operator nothing.
+            Assert.NotEmpty(observation.Expected);
+        }
+    }
+
+    [Fact]
+    public async Task The_same_frame_reports_the_real_value_the_moment_the_session_is_up()
+    {
+        // The other half of the gate, and what stops it being a place a real fault goes to be
+        // quiet: once there is a session to ask, the mixer reports exactly what it finds — which on
+        // the frame 2026-08-16 was 37, twenty-three decibels down, with wireplumber running.
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession
+        {
+            Readiness = new SessionReadiness(false, "the login session has not started yet"),
+        };
+
+        session.Answers["systemctl --user is-active wireplumber.service"] =
+            new ProcessResult(0, "active", string.Empty);
+
+        var block = Audio(files, processes, session: session);
+
+        Assert.Equal(ObservationOutcome.Unevaluable, (await Observe(block, AudioCatalog.Pcm0VolumeResourceName)).Outcome);
+
+        // The session starts, and WirePlumber applies its own idea of how loud the frame is.
+        session.Readiness = SessionReadiness.Up;
+        processes.Answers["amixer -c 0 sget PCM,0"] = new ProcessResult(
+            0,
+            Pcm0Correct.Replace(
+                "Playback 60 [100%] [0.00dB]",
+                "Playback 37 [61%] [-23.00dB]",
+                StringComparison.Ordinal),
+            string.Empty);
+
+        var after = await Observe(block, AudioCatalog.Pcm0VolumeResourceName);
+
+        Assert.Equal(ObservationOutcome.Drifted, after.Outcome);
+        Assert.Contains("Front Left=37 -23.00dB", after.Observed, StringComparison.Ordinal);
+        Assert.Contains("wireplumber active", after.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_measured_step_scale_is_one_decibel_and_it_is_what_makes_37_a_number_rather_than_noise()
+    {
+        // Three independent readings agree on one step per decibel: 60 = 0.00 dB in the v1
+        // inventory, 40 = the -20 dB PCM,1 ships at, and 37 = -23.00 dB measured on the frame.
+        Assert.Equal(1.00, WirePlumberVolumeResource.VolumeForStep(AlsaMixer.Ceiling), 3);
+        Assert.Equal(-20.0, Decibels(WirePlumberVolumeResource.VolumeForStep(40)), 3);
+        Assert.Equal(-23.0, Decibels(WirePlumberVolumeResource.VolumeForStep(37)), 3);
+
+        // And here is the arithmetic the catalog records as a *hypothesis* and not as a
+        // measurement: WirePlumber 0.5's device.routes.default-sink-volume default is 0.064 linear,
+        // which is -23.88 dB, and the nearest step at or above that request is exactly the 37 the
+        // frame reported. It is kept executable so a future reader can re-derive it rather than
+        // take it on trust — and so that it is obvious this is a calculation on a documented
+        // constant, with no frame in it anywhere.
+        const double WirePlumberDefaultSinkVolume = 0.064;
+        var requested = Decibels(WirePlumberDefaultSinkVolume);
+
+        Assert.InRange(requested, -23.9, -23.8);
+        Assert.Equal(37, (int)Math.Ceiling(requested) + AlsaMixer.Ceiling);
+    }
+
+    [Fact]
+    public void Two_owners_of_one_value_agree_to_within_the_quantisation_they_share()
+    {
+        // An exact compare would report permanent false drift the moment either side rounded: the
+        // hardware control moves in whole decibels and WirePlumber's volume is a continuous
+        // fraction. Half a step is the tightest tolerance that cannot.
+        Assert.True(WirePlumberVolumeResource.Agree(1.00, 1.00));
+        Assert.True(WirePlumberVolumeResource.Agree(0.95, 1.00));
+        Assert.False(WirePlumberVolumeResource.Agree(0.89, 1.00));
+
+        // The measured gap is nowhere near it, which is the point.
+        Assert.False(WirePlumberVolumeResource.Agree(WirePlumberVolumeResource.VolumeForStep(37), 1.00));
+
+        // Silence and very quiet are different states, and 0 is not a decibel value.
+        Assert.True(WirePlumberVolumeResource.Agree(0d, 0d));
+        Assert.False(WirePlumberVolumeResource.Agree(0d, 1.00));
+    }
+
+    [Fact]
+    public async Task WirePlumbers_own_volume_is_owned_repaired_and_unmuted()
+    {
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] =
+            new ProcessResult(0, "Volume: 0.06\n", string.Empty);
+
+        var block = Audio(files, processes, session: session);
+        var observation = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("the sink is at 0.06", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("1.00", observation.Expected, StringComparison.Ordinal);
+
+        var action = await Find(block, WirePlumberVolumeResource.ResourceName)
+            .ActAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.00", action.Change, StringComparison.Ordinal);
+        Assert.Contains("wpctl set-mute @DEFAULT_AUDIO_SINK@ 0", action.Change, StringComparison.Ordinal);
+
+        // Through the session, not as root: wpctl needs the user's bus, and a root wpctl answers
+        // about a PipeWire that does not exist.
+        Assert.Contains("wpctl set-volume @DEFAULT_AUDIO_SINK@ 1.00", session.Commands, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_sink_at_the_right_level_and_muted_is_still_a_silent_frame()
+    {
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] =
+            new ProcessResult(0, "Volume: 1.00 [MUTED]\n", string.Empty);
+
+        var block = Audio(files, processes, session: session);
+        var observation = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("MUTED", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_wpctl_that_cannot_be_asked_is_drift_rather_than_silence()
+    {
+        // CameraNodeResource's rule, which this resource is exactly the kind of place to protect: a
+        // local read that failed has learned something real about this machine, so it escalates on
+        // the ordinary schedule instead of hiding behind "not settled yet".
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] =
+            new ProcessResult(1, string.Empty, "Object 'Audio/Sink' not found\n");
+
+        var block = Audio(files, processes, session: session);
+        var observation = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+        Assert.Contains("Object 'Audio/Sink' not found", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task One_fleet_setting_moves_both_owners_of_the_speaker_level_together()
+    {
+        // The whole reason this is a second resource rather than a second copy of a number. Two
+        // owners deriving from one setting cannot disagree about what the frame wants; two copies
+        // of a desired value are two things that can, and this resource exists because two owners
+        // did.
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] =
+            new ProcessResult(0, "Volume: 1.00\n", string.Empty);
+
+        var values = FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [AudioCatalog.PlaybackVolumeKey] = "40",
+        });
+
+        var block = Audio(files, processes, values, session);
+
+        Assert.Contains(
+            "PCM,0=40",
+            (await Observe(block, AudioCatalog.Pcm0VolumeResourceName)).Expected,
+            StringComparison.Ordinal);
+
+        // 40 steps is -20 dB, which is 0.10 linear. A sink still at full scale is now drift.
+        var wireplumber = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.False(wireplumber.InSync);
+        Assert.Contains("0.10", wireplumber.Expected, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_stored_state_file_is_written_after_both_owners_have_agreed()
+    {
+        // alsactl store records whatever is live at the instant it runs, and the mixer has an owner
+        // in the login session that writes it once that session is up. Ordering it explicitly is
+        // what stops the persisted file being a snapshot of whichever owner happened to go last.
+        using var files = new TemporaryFiles();
+        var block = Audio(files, Mixer(files, (Pcm0Correct, Pcm1Correct)));
+
+        Assert.Contains(
+            WirePlumberVolumeResource.ResourceName,
+            Find(block, AlsaStoredStateResource.ResourceName).DependsOn,
+            StringComparer.Ordinal);
+
+        // And it is behind the mixer values in the walk, not merely dependent on them.
+        var names = block.Select(resource => resource.Name).ToList();
+
+        Assert.True(
+            names.IndexOf(WirePlumberVolumeResource.ResourceName)
+                < names.IndexOf(AlsaStoredStateResource.ResourceName),
+            "the stored-state resource is ordered before the second owner it has to wait for");
+    }
+
+    private static double Decibels(double volume) => 20d * Math.Log10(volume);
+
     private static RecordingProcessRunner Mixer(TemporaryFiles files, (string Pcm0, string Pcm1) stages)
     {
         files.Seed(AlsaCards.CardsPath, ArrayIsCardZero);

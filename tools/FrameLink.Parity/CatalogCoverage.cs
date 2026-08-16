@@ -120,6 +120,14 @@ public static class CatalogEvidenceMap
         new("audio.mixer.", true, "alsa.mixer",
             "One key per control per channel, which is the granularity these five resources own."),
 
+        new("audio.wireplumber.playback-volume", false, null,
+            "The capture never read WirePlumber's session state — PIPEWIRE is one of the five sections "
+            + "the harness declares uncovered, and ~/.local/state/wireplumber is not in the reference "
+            + "at all. So v1's own answer to 'how loud does WirePlumber hold the sink' does not exist "
+            + "to diff against, which is itself the finding: this resource was added in 2026-08 after "
+            + "the frame was measured setting the ALSA control correctly and losing it to a second "
+            + "owner nobody had captured. Verified by its own wpctl Observe on every pass."),
+
         new("audio.modprobe.snd-usb-audio-index", false, "modprobe.d",
             "/etc/modprobe.d/alsa-base.conf, captured whole."),
 

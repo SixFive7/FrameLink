@@ -302,14 +302,24 @@ public sealed class AlsaMixer
 /// which is the thing the v1 inventory never captured.
 /// </para>
 /// <para>
-/// <b>Why it is not in the in-sync predicate.</b> A resource whose Observe refused to conclude
-/// until the session was up would act — and therefore reboot — on a frame whose session is
-/// broken, spending §2.5's ladder on a fault it cannot fix. <see cref="DisplayPanelOverlayResource"/>
-/// settled the same question the same way: the probe rides in the observed text, the predicate
-/// stays on the thing the resource owns. What makes the reading a post-session one in practice is
-/// the DAG — the audio block is ordered after the session and kiosk stack — and what makes a
-/// <i>revert</i> impossible to miss is that the loop keeps observing: a value WirePlumber changes
-/// after boot is drift on the very next pass, with this evidence attached to it.
+/// <b>The mixer <i>is</i> gated on the session, and that reverses what this remark used to say.</b>
+/// It argued that a resource refusing to conclude until the session was up would act, and therefore
+/// reboot, on a frame whose session is broken — which was wrong on its own terms, because
+/// <see cref="ResourceObservation.Unevaluable"/> returns before <c>ActAsync</c> is ever reached
+/// (decision 65 records exactly that). What the ungated version actually produced is worse than the
+/// risk it was avoiding: the post-boot verify runs at boot+10.0–10.6 s and the user manager comes up
+/// 0.03–0.7 s later, so the verify was a coin flip on whether it read the agent's value or
+/// WirePlumber's, and a verify that won <b>passed and cleared the ledger</b> on a frame that was
+/// about to be wrong again. §2.4's whole rule is that "applied" is claimed only from an observation
+/// the setting had to survive a boot for, and a reading taken before the other owner of that value
+/// has started is not that observation. So the gate is the mixer's too (decision 80).
+/// </para>
+/// <para>
+/// <b>The file names, not just the count.</b> Which files WirePlumber keeps under
+/// <c>~/.local/state/wireplumber/</c> is the one read-only fact that separates *it restored a stored
+/// volume* from *it applied its own default to a route it has no stored volume for*, and the two
+/// have different fixes. Nobody has been able to take that reading by hand, so the agent takes it on
+/// every mixer observation and it arrives in ordinary telemetry.
 /// </para>
 /// </remarks>
 public sealed class SessionAudio
@@ -319,6 +329,14 @@ public sealed class SessionAudio
 
     /// <summary>Where its <c>restore-device</c> policy keeps per-device state.</summary>
     public const string StateSubdirectory = ".local/state/wireplumber";
+
+    /// <summary>How many stored-state file names are listed before the evidence is truncated.</summary>
+    /// <remarks>
+    /// WirePlumber 0.5 keeps a handful — <c>default-nodes</c>, <c>default-profile</c>,
+    /// <c>restore-stream</c> and the route state — so six lists all of them on any frame anybody has
+    /// seen while bounding a string that reaches the screen and the wire.
+    /// </remarks>
+    public const int NamesShown = 6;
 
     /// <summary>How long one probe is reused for, so a pass does not spawn one per control.</summary>
     public static TimeSpan Freshness { get; } = TimeSpan.FromSeconds(10);
@@ -365,11 +383,7 @@ public sealed class SessionAudio
             : answer.Split('\n')[0].Trim();
 
         var directory = _session.HomeDirectory.TrimEnd('/') + "/" + StateSubdirectory;
-        var stored = _files.DirectoryExists(directory)
-            ? string.Create(CultureInfo.InvariantCulture, $"{_files.ListFiles(directory).Count} stored device files")
-            : "no stored device state";
-
-        var evidence = $"wireplumber {running}, {stored}";
+        var evidence = $"wireplumber {running}, {StoredState(_files, directory)}";
 
         lock (_gate)
         {
@@ -378,6 +392,55 @@ public sealed class SessionAudio
         }
 
         return evidence;
+    }
+
+    /// <summary>
+    /// The session gate (decision 65) in front of a mixer observation, or null to go ahead and look.
+    /// </summary>
+    /// <remarks>
+    /// Offered from here rather than by handing every mixer resource its own
+    /// <see cref="IUserSession"/>: the session is this class's business, and the reason the mixer
+    /// needs the gate is the same reason this class exists — the value has a second owner that lives
+    /// inside the session.
+    /// </remarks>
+    public ValueTask<ResourceObservation?> NotSettledAsync(string expected, CancellationToken cancellationToken) =>
+        UserSessionGate.NotSettledAsync(_session, expected, cancellationToken);
+
+    /// <summary>What WirePlumber is keeping under its state directory, named rather than counted.</summary>
+    public static string StoredState(ISystemFiles files, string directory)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+
+        if (!files.DirectoryExists(directory))
+        {
+            return "no stored device state";
+        }
+
+        var paths = files.ListFiles(directory);
+        if (paths.Count == 0)
+        {
+            return "0 stored device files";
+        }
+
+        var names = new List<string>(NamesShown);
+        foreach (var path in paths)
+        {
+            if (names.Count == NamesShown)
+            {
+                names.Add("…");
+                break;
+            }
+
+            var slash = path.LastIndexOfAny(['/', '\\']);
+            names.Add(slash < 0 ? path : path[(slash + 1)..]);
+        }
+
+        names.Sort(StringComparer.Ordinal);
+
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{paths.Count} stored device file{(paths.Count == 1 ? string.Empty : "s")} ({string.Join(", ", names)})");
     }
 }
 
@@ -497,12 +560,37 @@ public sealed class MixerVolumeResource : IResource
         return AlsaMixer.Clamp(desired, maximum);
     }
 
+    /// <summary>What this resource wants, before any reading — for the unevaluable case.</summary>
+    public string DesiredSummary()
+    {
+        var wanted = new List<string>(_specs.Count);
+        foreach (var spec in _specs)
+        {
+            wanted.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{spec.Selector}={DesiredFor(spec, maximum: null)}"));
+        }
+
+        return string.Join(", ", wanted) + (_requireOn ? ", every channel on" : string.Empty);
+    }
+
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
         if (!_mixer.HasSoundHardware)
         {
             return new ResourceObservation(true, "the validated level", "no sound hardware on this machine");
+        }
+
+        // Decision 80. The mixer's second owner lives in the login session, so a reading taken
+        // before that session exists is a reading of a value that has not finished being decided —
+        // and §2.4 forbids claiming a change survived a boot on the strength of one. An unevaluable
+        // observation spends no attempt, acts on nothing and reboots for nothing; it is re-read
+        // thirty seconds later, by which time WirePlumber has had its turn and the answer is real.
+        if (await _session.NotSettledAsync(DesiredSummary(), cancellationToken).ConfigureAwait(false)
+            is { } waiting)
+        {
+            return waiting;
         }
 
         var expected = new List<string>(_specs.Count);
@@ -647,6 +735,15 @@ public sealed class MixerSwitchResource : IResource
             return new ResourceObservation(true, $"{_spec.Selector} unmuted", "no sound hardware on this machine");
         }
 
+        // Decision 80, for the same reason as the level: mute is a route property WirePlumber
+        // restores alongside the volume, so the switch has the same second owner and the same
+        // race.
+        if (await _session.NotSettledAsync($"{_spec.Selector} unmuted on every channel", cancellationToken)
+                .ConfigureAwait(false) is { } waiting)
+        {
+            return waiting;
+        }
+
         var reading = await _mixer.ReadAsync(_spec.Selector, cancellationToken).ConfigureAwait(false);
         var evidence = await _session.EvidenceAsync(cancellationToken).ConfigureAwait(false);
 
@@ -673,6 +770,280 @@ public sealed class MixerSwitchResource : IResource
         return new ResourceAction(
             AlsaMixer.Command(_spec.Selector, "unmute")
                 + (result.Succeeded ? string.Empty : $" (refused: {result.Combined})"),
+            Gloss);
+    }
+}
+
+/// <summary>
+/// <c>audio.wireplumber.playback-volume</c> — <b>WirePlumber's own idea of how loud this frame is</b>.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>What was measured.</b> <c>audio.mixer.pcm0-playback-volume</c> set <c>PCM,0=60</c>, rebooted,
+/// verified — and the value observed afterwards was <c>Front Left=37 -23.00dB on, Front Right=37
+/// -23.00dB on</c> with <c>wireplumber active</c> beside it. The ALSA control was owned, correctly,
+/// by a resource that could not keep it, because something downstream of it was setting it too.
+/// </para>
+/// <para>
+/// <b>What the number says, and this is the strongest evidence in the file.</b> The control's scale
+/// is <b>one step per decibel</b> — three independent points agree: 60 is 0.00 dB in the v1
+/// inventory, 40 is the −20 dB <c>PCM,1</c> ships at, and 37 read −23.00 dB on the frame. So 37 is
+/// not noise, it is a *requested gain* of −23 dB. WirePlumber 0.5's own default sink volume,
+/// <c>device.routes.default-sink-volume</c>, is <c>0.064</c> linear, which is
+/// 20·log₁₀(0.064) = <b>−23.88 dB</b> — the nearest step at or above that request is exactly 37.
+/// <b>This is arithmetic on a documented constant, not a measurement</b>, and it is offered as the
+/// leading hypothesis rather than as an established mechanism: three of the catalog's suspected
+/// reverts have already been disproved by measurement and this one has not been measured either.
+/// What it does do is predict the observed value to within the control's own quantisation, which
+/// nothing else on offer does.
+/// </para>
+/// <para>
+/// <b>Why it changes the fix.</b> If 37 is WirePlumber's *default* rather than a *restored* value,
+/// then owning <c>~/.local/state/wireplumber/</c> — the catalog's suggestion — repairs nothing,
+/// because there is no stored route volume to correct. Setting the volume <i>through WirePlumber</i>
+/// is correct under both readings: it overrides a default, and it is what causes
+/// <c>restore-device</c> to persist a stored value, so whichever mechanism is really in play ends up
+/// agreeing with the frame. That is deliberately the property being aimed at, because the mechanism
+/// cannot be measured from this desk.
+/// </para>
+/// <para>
+/// <b>Why not a configuration fragment.</b> The obvious alternative is a
+/// <c>~/.config/wireplumber/wireplumber.conf.d/</c> file setting the default to unity, or taking the
+/// hardware mixer away from WirePlumber with <c>api.alsa.soft-mixer</c>. Both are plausible and
+/// neither can be tested here, and a malformed fragment stops WirePlumber from starting — which
+/// takes the camera fragment down with it and leaves the frame with no audio at all.
+/// <c>wpctl</c> is the supported interface, cannot break the daemon, and fails visibly: if the call
+/// is refused the resource reports drift with the tool's own words and escalates like anything else.
+/// </para>
+/// <para>
+/// <b>It does not replace the ALSA resources, and it cannot.</b> <c>PCM,1</c> is a second hardware
+/// gain stage that no PipeWire route volume reaches — it is the −20 dB stage guide 4's loudness fix
+/// found — so the hardware mixer stays agent-owned whatever WirePlumber does. This resource makes
+/// the two owners *want the same thing* rather than taking the value away from either: both derive
+/// from <c>audio.playbackVolume</c>, and the comparison is done in decibels with a half-step
+/// tolerance, which is the quantisation the two owners share.
+/// </para>
+/// <para>
+/// <b>A prediction worth checking on the next hardware run:</b> if the route volume is what moved,
+/// only <c>PCM,0</c> reverts and <c>PCM,1</c> stays where the agent put it. The delta measured on
+/// the frame names <c>PCM,0</c> and says nothing about <c>PCM,1</c>, which is consistent with that
+/// and does not establish it.
+/// </para>
+/// </remarks>
+public sealed class WirePlumberVolumeResource : IResource
+{
+    /// <summary>The catalog id.</summary>
+    public const string ResourceName = "audio.wireplumber.playback-volume";
+
+    /// <summary>WirePlumber's own control tool, shipped by the same package.</summary>
+    public const string Executable = "wpctl";
+
+    /// <summary>The sink wpctl resolves to whatever PipeWire is currently playing through.</summary>
+    /// <remarks>
+    /// Deliberately the default sink rather than a node named for the array. The frame has one
+    /// playback device and the browser plays through whichever one PipeWire has chosen, so the
+    /// default *is* the thing whose loudness the household hears — and a node name would be a second
+    /// spelling of the card pin that <see cref="SndUsbAudioIndexResource"/> already owns.
+    /// </remarks>
+    public const string Sink = "@DEFAULT_AUDIO_SINK@";
+
+    /// <summary>
+    /// How far the two owners may disagree before it is drift: half a step of the shared control.
+    /// </summary>
+    /// <remarks>
+    /// The hardware control is quantised at 1 dB per step (measured: 60 = 0.00 dB, 40 = −20 dB,
+    /// 37 = −23.00 dB), and WirePlumber's volume is a continuous fraction, so an exact comparison
+    /// would report permanent false drift the moment either side rounded. Half a step is the
+    /// tightest tolerance that cannot.
+    /// </remarks>
+    public const double ToleranceDecibels = 0.5;
+
+    private readonly SessionAudio _session;
+    private readonly IUserSession _shell;
+    private readonly AlsaMixer _mixer;
+    private readonly MixerVolumeResource _stage;
+
+    /// <summary>Creates the resource over the playback stage whose level it must agree with.</summary>
+    /// <param name="session">The second owner's state, for the observed text and the gate.</param>
+    /// <param name="shell">How <c>wpctl</c> is run inside the login user's session.</param>
+    /// <param name="mixer">The card, for "is there any sound hardware here at all".</param>
+    /// <param name="stage">
+    /// The stereo playback resource. Taken as the resource rather than as a copy of its number so
+    /// that a fleet override arriving mid-life moves both owners together — two copies of a desired
+    /// value are two things that can disagree, and this resource exists because two owners did.
+    /// </param>
+    public WirePlumberVolumeResource(
+        SessionAudio session,
+        IUserSession shell,
+        AlsaMixer mixer,
+        MixerVolumeResource stage)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(shell);
+        ArgumentNullException.ThrowIfNull(mixer);
+        ArgumentNullException.ThrowIfNull(stage);
+
+        _session = session;
+        _shell = shell;
+        _mixer = mixer;
+        _stage = stage;
+    }
+
+    /// <inheritdoc/>
+    public string Name => ResourceName;
+
+    /// <inheritdoc/>
+    public IReadOnlyList<string> DependsOn =>
+    [
+        PackageResource.Prefix + "wireplumber",
+        ConsoleAutologinResource.ResourceName,
+        AudioCatalog.Pcm0VolumeResourceName,
+        AudioCatalog.Pcm1VolumeResourceName,
+    ];
+
+    /// <inheritdoc/>
+    public string Detected =>
+        "The part of this frame that routes sound is holding the speaker quieter than the frame is set to.";
+
+    /// <inheritdoc/>
+    public string WhyItMatters =>
+        "It turns the speaker down again every time the frame starts, so the frame looks right and sounds faint.";
+
+    /// <summary>Plain-language gloss on this resource's change (§2.7 item 3).</summary>
+    public static string Gloss =>
+        "Telling the part of this frame that routes sound to leave the speaker at the level it was tested at.";
+
+    /// <summary>The linear volume one mixer step corresponds to, on the measured 1 dB-per-step scale.</summary>
+    /// <remarks>
+    /// <paramref name="step"/> 60 is 0.00 dB and therefore 1.00; step 0 is silence and is returned as
+    /// exactly zero rather than as 10^−3, because "off" and "very quiet" are different states and
+    /// <c>wpctl</c> spells the first one <c>0.00</c>.
+    /// </remarks>
+    public static double VolumeForStep(int step) =>
+        step <= 0 ? 0d : Math.Pow(10d, (step - AlsaMixer.Ceiling) / 20d);
+
+    /// <summary>That volume as <c>wpctl</c> is asked for it, and as it prints it back.</summary>
+    public static string Format(double volume) =>
+        volume.ToString("0.00", CultureInfo.InvariantCulture);
+
+    /// <summary>Whether two volumes agree to within half a step of the shared control.</summary>
+    public static bool Agree(double observed, double desired)
+    {
+        if (observed <= 0d || desired <= 0d)
+        {
+            return Math.Abs(observed - desired) < 0.005d;
+        }
+
+        return Math.Abs(20d * Math.Log10(observed / desired)) <= ToleranceDecibels;
+    }
+
+    /// <summary>
+    /// The volume and mute state in one line of <c>wpctl get-volume</c>, or null if it said neither.
+    /// </summary>
+    /// <remarks>
+    /// The output is one line — <c>Volume: 1.00</c>, or <c>Volume: 0.06 [MUTED]</c> — and it is
+    /// parsed by finding the label rather than by splitting on position, so a future wpctl that
+    /// prints a node name in front of it still reads.
+    /// </remarks>
+    public static (double Volume, bool Muted)? Parse(string output)
+    {
+        ArgumentNullException.ThrowIfNull(output);
+
+        const string Label = "Volume:";
+
+        var at = output.IndexOf(Label, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            return null;
+        }
+
+        var rest = output[(at + Label.Length)..];
+        var muted = rest.Contains("[MUTED]", StringComparison.OrdinalIgnoreCase);
+
+        foreach (var token in rest.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (double.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var volume))
+            {
+                return (volume, muted);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The volume this resource converges on, from the same fleet setting as the mixer.</summary>
+    public double Desired() => VolumeForStep(_stage.DesiredFor(AudioCatalog.Pcm0, maximum: null));
+
+    /// <inheritdoc/>
+    public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
+    {
+        var desired = Desired();
+        var expected = $"wireplumber holding the sink at {Format(desired)}, unmuted";
+
+        if (!_mixer.HasSoundHardware)
+        {
+            return new ResourceObservation(true, expected, "no sound hardware on this machine");
+        }
+
+        // wpctl needs the session's bus, so without a session there is nothing to ask rather than
+        // something wrong (decision 65).
+        if (await _session.NotSettledAsync(expected, cancellationToken).ConfigureAwait(false) is { } waiting)
+        {
+            return waiting;
+        }
+
+        var result = await _shell
+            .RunAsync(Executable, ["get-volume", Sink], cancellationToken)
+            .ConfigureAwait(false);
+
+        var evidence = await _session.EvidenceAsync(cancellationToken).ConfigureAwait(false);
+
+        if (!result.Succeeded)
+        {
+            // A local read that failed has learned something real about this machine, so it is
+            // drift rather than unevaluable — CameraNodeResource's rule, and this resource is
+            // exactly the kind of place it exists to protect.
+            return new ResourceObservation(
+                false,
+                expected,
+                $"{Executable} could not be asked: {(result.Combined.Length == 0 ? "no output" : result.Combined.Trim())} [{evidence}]");
+        }
+
+        if (Parse(result.StandardOutput) is not { } reading)
+        {
+            return new ResourceObservation(
+                false,
+                expected,
+                $"{Executable} answered '{result.StandardOutput.Trim()}', which carries no volume [{evidence}]");
+        }
+
+        return new ResourceObservation(
+            Agree(reading.Volume, desired) && !reading.Muted,
+            expected,
+            $"the sink is at {Format(reading.Volume)}{(reading.Muted ? " MUTED" : string.Empty)} [{evidence}]");
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
+    {
+        var desired = Format(Desired());
+
+        var volume = await _shell
+            .RunAsync(Executable, ["set-volume", Sink, desired], cancellationToken)
+            .ConfigureAwait(false);
+
+        // Unmuted in the same Act rather than as a resource of its own: unlike the hardware
+        // switches, this is one route property set through one tool, and splitting it would give
+        // the two halves of a single write two independent escalation ladders.
+        var unmute = await _shell
+            .RunAsync(Executable, ["set-mute", Sink, "0"], cancellationToken)
+            .ConfigureAwait(false);
+
+        return new ResourceAction(
+            $"{Executable} set-volume {Sink} {desired}"
+                + (volume.Succeeded ? string.Empty : $" (refused: {volume.Combined.Trim()})")
+                + $" && {Executable} set-mute {Sink} 0"
+                + (unmute.Succeeded ? string.Empty : $" (refused: {unmute.Combined.Trim()})"),
             Gloss);
     }
 }
@@ -871,6 +1242,16 @@ public sealed class AlsaStoredStateResource : IResource
         _volumes = volumes;
     }
 
+    /// <summary>Whether the Act waits for WirePlumber's own volume to be settled first.</summary>
+    /// <remarks>
+    /// <c>alsactl store</c> captures whatever is live at the instant it runs, so on a frame where
+    /// WirePlumber also writes the hardware mixer the file would otherwise record whichever owner
+    /// happened to write last. Declaring the dependency makes the ordering explicit rather than
+    /// lucky. It is an option only because a machine with no sound hardware builds this block
+    /// without the WirePlumber resource at all.
+    /// </remarks>
+    public bool AfterWirePlumber { get; init; } = true;
+
     /// <inheritdoc/>
     public string Name => ResourceName;
 
@@ -879,7 +1260,7 @@ public sealed class AlsaStoredStateResource : IResource
     {
         get
         {
-            var names = new List<string>(_volumes.Count + 2);
+            var names = new List<string>(_volumes.Count + 3);
             foreach (var volume in _volumes)
             {
                 names.Add(volume.Name);
@@ -887,6 +1268,12 @@ public sealed class AlsaStoredStateResource : IResource
 
             names.Add(AudioCatalog.Pcm0SwitchResourceName);
             names.Add(AudioCatalog.Pcm1SwitchResourceName);
+
+            if (AfterWirePlumber)
+            {
+                names.Add(WirePlumberVolumeResource.ResourceName);
+            }
+
             return names;
         }
     }
@@ -1202,6 +1589,14 @@ public static class AudioCatalog
             pcm0Volume,
             pcm1Volume,
             capture,
+
+            // Position 61a, and it is deliberately between the hardware values and the file that
+            // persists them. The hardware mixer has a second owner living in the login session
+            // (see WirePlumberVolumeResource), and `alsactl store` records whatever is live — so
+            // the store has to happen after both owners agree, not after only one of them has
+            // written.
+            new WirePlumberVolumeResource(session, context.Session, mixer, pcm0Volume),
+
             new AlsaStoredStateResource(context.Processes, context.Files, [pcm0Volume, pcm1Volume, capture]),
         ];
     }

@@ -74,7 +74,7 @@ are listed in their own section. Total **79**.
 | Guide | Resources |
 | --- | ---: |
 | 3 — Hardware configuration | 2 |
-| 4 — Audio configuration | 13 |
+| 4 — Audio configuration | 14 |
 | 5 — Kiosk base | 14 |
 | 6 — Camera | 16 |
 | 7 — LiveKit server | 0 |
@@ -83,9 +83,9 @@ are listed in their own section. Total **79**.
 | 10 — SPA | 6 |
 | 11 — GPIO button | 2 |
 | 12 — systemd & reliability | 9 |
-| **Subtotal (guides 3–12)** | **71** |
+| **Subtotal (guides 3–12)** | **72** |
 | Cross-guide and v2-mandated | 8 |
-| **Total** | **79** |
+| **Total** | **80** |
 
 ---
 
@@ -256,7 +256,7 @@ attached to them:
 - **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `firmware.xvf3800.version`, `audio.mixer.pcm0-playback-switch`
 - **Value source** — fleet setting `audio.playbackVolume` ([§3.4](../version2.md) names audio volume explicitly), catalog default `60` = 0.00 dB. Do not permit values above 0 dB anywhere in the chain. The default is correct on an unadopted frame, so this resource does **not** declare `agent.adoption` — a fleet override arriving later is ordinary drift, per the `dependsOn` rule at the head of this document. Its two siblings below read the same way.
 - **Risk** — —
-- **Notes** — See the WirePlumber revert warning under `audio.alsa.stored-state`.
+- **Notes** — **The suspected WirePlumber revert is no longer suspected; this resource is where it was measured.** On the frame 2026-08-16 the resource set `60`, rebooted, verified — and the value observed afterwards was `Front Left=37 -23.00dB on, Front Right=37 -23.00dB on [wireplumber active, 1 stored device files]`. `37` is not noise: this control is **one step per decibel**, which three independent readings agree on (60 = 0.00 dB in the v1 inventory, 40 = the −20 dB `PCM,1` ships at, 37 = −23.00 dB here), so 37 is a *requested gain of −23 dB* by something that is not this resource. Two consequences the entry now carries. First, **Observe is gated on the login session** — the second owner lives inside it, and a reading taken before it starts is a reading of a value still being decided (see the suspected-revert list and [§2.4](../version2.md)). Second, the value is additionally owned at the layer that sets it, by `audio.wireplumber.playback-volume` below. Owning the ALSA control alone is measured to be insufficient.
 
 **`audio.mixer.pcm1-playback-volume`**
 
@@ -267,7 +267,7 @@ attached to them:
 - **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `firmware.xvf3800.version`, `audio.mixer.pcm1-playback-switch`
 - **Value source** — fleet setting `audio.playbackVolume` (same setting, applied to both stages).
 - **Risk** — —
-- **Notes** — **The highest-value resource in this guide.** Ships at `40/60` = −20 dB; measured at roughly **+18 dB at the speaker** when corrected. A frame with `PCM,0` correct and `PCM,1` at default is fully functional and merely quiet — the class of fault nobody reports and nobody finds. Separate resource from `PCM,0` because it is a genuinely separate gain stage with its own default, not a second view of the same control.
+- **Notes** — **The highest-value resource in this guide.** Ships at `40/60` = −20 dB; measured at roughly **+18 dB at the speaker** when corrected. A frame with `PCM,0` correct and `PCM,1` at default is fully functional and merely quiet — the class of fault nobody reports and nobody finds. Separate resource from `PCM,0` because it is a genuinely separate gain stage with its own default, not a second view of the same control. **And it is the reason the mixer cannot simply be handed to WirePlumber**: a PipeWire route volume reaches one mixer element, so whatever happens to `PCM,0` this stage stays the agent's to own. Session-gated like its sibling. **Untested prediction worth checking on the next hardware run:** if the `PCM,0` revert is a route volume, this stage does *not* move with it — the measured delta names `PCM,0` only, which is consistent with that and does not establish it.
 
 **`audio.mixer.pcm0-playback-switch`**
 
@@ -301,16 +301,27 @@ attached to them:
 - **Risk** — —
 - **Notes** — Not set by any guide command; recorded here because it is persisted by `alsactl store` and is the mic-side twin of the `PCM,1` trap — a frame that cannot be heard while everything reports healthy. Kept as one resource pending open question 8: whether `Headset,0`/`Headset,1` are two real gain stages (as `PCM,0`/`PCM,1` turned out to be) or two views of one. If two, split it.
 
+**`audio.wireplumber.playback-volume`**
+
+- **From** — no guide; added 2026-08-16 after the `audio.mixer.pcm0-playback-volume` revert was measured on the frame
+- **Sets** — WirePlumber's own volume for the default audio sink, at the linear equivalent of the mixer step, unmuted.
+- **Observe** — `wpctl get-volume @DEFAULT_AUDIO_SINK@` inside the login user's session → `Volume: 1.00`. Compared in **decibels** with a half-step (0.5 dB) tolerance, because the hardware control is quantised at 1 dB per step and WirePlumber's volume is a continuous fraction — an exact compare would report permanent false drift the moment either side rounded.
+- **Verify** — identical, after a reboot, and behind the session gate.
+- **dependsOn** — `pkg.wireplumber`, `boot.autologin.getty-tty1`, `audio.mixer.pcm0-playback-volume`, `audio.mixer.pcm1-playback-volume`
+- **Value source** — fleet setting `audio.playbackVolume`, the same one the mixer resources read, converted with the measured 1 dB-per-step scale. Two owners deriving from one setting is the point: they cannot disagree about what the frame wants.
+- **Risk** — —
+- **Notes** — **What is measured and what is arithmetic, kept apart.** *Measured:* the ALSA control was set to 60, verified across a reboot, and observed at 37 (−23.00 dB) with WirePlumber running. *Arithmetic:* WirePlumber 0.5's `device.routes.default-sink-volume` default is `0.064` linear = **−23.88 dB**, and the nearest step at or above that request on a 1 dB scale is exactly **37**. That predicts the observed value to within the control's own quantisation and nothing else on offer does — but it is a calculation on a documented constant, **not an observation**, and three of this document's suspected reverts have already been disproved by measurement. It is the leading hypothesis, not the mechanism. **Why it changes the fix:** if 37 is WirePlumber's *default* rather than a *restored* value, then owning `~/.local/state/wireplumber/` — this document's original suggestion — repairs nothing, because there is no stored route volume to correct. Setting the volume *through* WirePlumber is correct under both readings: it overrides a default, and it is what makes `restore-device` persist a stored value. That is deliberate, because the mechanism cannot be settled without hardware. **Why `wpctl` and not a config fragment:** a `~/.config/wireplumber/wireplumber.conf.d/` file setting the default to unity, or `api.alsa.soft-mixer` taking the hardware mixer away from WirePlumber, are both plausible and neither is testable from a workstation — and a malformed fragment stops WirePlumber starting, which takes `wireplumber.conf.camera-monitors-disabled` down with it and leaves the frame with no audio at all. `wpctl` is the supported interface, cannot break the daemon, and a refused call is ordinary visible drift. **The mute is folded in** rather than split out, unlike the hardware switches: it is one route property set through one tool, and splitting it would give two halves of a single write two independent escalation ladders. **Nothing here has run on hardware.**
+
 **`audio.alsa.stored-state`**
 
 - **From** — [guide 4 step 5](../docs/4-audio-configuration.md#5-persist-the-alsa-mixer-state-across-reboots)
 - **Sets** — `/var/lib/alsa/asound.state` containing the desired values for every mixer resource above.
 - **Observe** — parse `/var/lib/alsa/asound.state` for card `Array` and compare each control against desired.
 - **Verify** — identical. Deliberately **not** the same as reading the live mixer: the running value can be correct while the stored value is wrong (nothing has rebooted yet), and the stored value can be correct while the running value is wrong (something changed it after boot). Those are two different faults and the catalog keeps both observable.
-- **dependsOn** — every `audio.mixer.*` resource
+- **dependsOn** — every `audio.mixer.*` resource, **and `audio.wireplumber.playback-volume`**
 - **Value source** — derived (it is the persisted form of the mixer settings).
 - **Risk** — —
-- **Notes** — `alsa-restore.service` is a **static** unit shipped with `alsa-utils`; it is not enabled or installed and has no enablement resource — its post-boot state (`active (exited)`, `status=0/SUCCESS`) is a checkpoint assertion, not a setting. Rewriting the file wholesale is idempotent by construction. **Revert risk:** WirePlumber's `restore-device` policy keeps its own per-device volume/route state under `~/.local/state/wireplumber/` and applies it when the session starts — after `alsa-restore` has run. See the suspected-revert list.
+- **Notes** — `alsa-restore.service` is a **static** unit shipped with `alsa-utils`; it is not enabled or installed and has no enablement resource — its post-boot state (`active (exited)`, `status=0/SUCCESS`) is a checkpoint assertion, not a setting. Rewriting the file wholesale is idempotent by construction. **The WirePlumber edge is new and it is load-bearing:** `alsactl store` records whatever is live at the instant it runs, and the mixer has a second owner that writes it once the session is up — so the store has to happen after both owners agree, not after only one of them has written. Ordering it explicitly is what stops this file being a snapshot of whichever owner happened to go last.
 
 ---
 
@@ -1081,7 +1092,7 @@ dependency: guide 4 states the mixer levels are validated against firmware 2.0.1
 | 38–47 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
 | 48–53 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
 | 54 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
-| 55–61 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
+| 55–62 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.wireplumber.playback-volume` · `audio.alsa.stored-state` |
 | 62–75 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
 | 76–79 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
 
@@ -1202,6 +1213,13 @@ silently demoted or dropped: every original entry is still here, at its original
    disproof and is now the list's only measured archetype.** The oneshot unit is the only route that
    works, and the governor value must be read separately from the unit's state.
 
+**Item 4 belongs in this tier now, and is deliberately left at its own number.** `audio.mixer.*` was
+confirmed on the frame 2026-08-16: the mixer really does have a second owner in the login session,
+and it really does win. It is the list's second confirmed revert and the first entry whose own
+reasoning turned out to be right about *that* there is one — though not about *which* mechanism, and
+the difference changes the fix. The tiers are not re-cut around it, because the numbers are what
+everything else in this document cites and item 1's whole lesson is that renumbering hides history.
+
 **Inferred from the hostname case — the reasoning that supported these is now much weaker**
 
 3. **`system.timezone` and `system.locale` — cloud-init.** ⚠ **This entry was pure analogy** —
@@ -1216,19 +1234,35 @@ silently demoted or dropped: every original entry is still here, at its original
 **Reasoned from an owner evidenced independently of the hostname — untouched by the disproof, but
 none has been tested either**
 
-4. **`audio.mixer.*` — WirePlumber's device-state restore.** `alsa-restore.service` applies
-   `/var/lib/alsa/asound.state` early in boot, then the user session starts and WirePlumber's
-   `restore-device` policy applies **its own** stored per-device volume and route from
-   `~/.local/state/wireplumber/`. Later writer wins. The mixer resources therefore have two owners,
-   only one of which the guides configure — and the symptom (a quiet frame) is the same one the
-   hidden `PCM,1` stage already produces, so it will be misattributed. **What the evidence actually
-   is:** documented upstream WirePlumber behaviour plus a boot ordering, not an observation.
-   [Guide 4](../docs/4-audio-configuration.md) never mentions WirePlumber at all, and the v1
-   inventory does not capture `~/.local/state/wireplumber/`, so even the presence of the stored
-   state on this frame is unconfirmed. Cheap to settle: list that directory on the mule.
-   **Recommendation unchanged:** observe the mixer *after the user session is up*, and treat
-   WirePlumber's stored device state as either a resource in its own right or something the agent
-   explicitly clears.
+4. **`audio.mixer.*` — CONFIRMED 2026-08-16. Two owners, and the second one wins.** ~~What the
+   evidence actually is: documented upstream WirePlumber behaviour plus a boot ordering, not an
+   observation.~~ It is an observation now. `audio.mixer.pcm0-playback-volume` set `PCM,0=60`,
+   rebooted, verified, and the value read afterwards was `Front Left=37 -23.00dB on, Front Right=37
+   -23.00dB on [wireplumber active, 1 stored device files]`. The frame then repaired it and lost it
+   again, repeatedly — see [§2.6](../version2.md)'s conflict drift and decision 78.
+
+   **What the entry got right:** there are two owners, the guides configure only one, the second one
+   is WirePlumber, it acts once the login session is up, and the symptom is the same quiet frame the
+   hidden `PCM,1` stage produces. **What it got wrong is the part that decides the fix.** The entry
+   assumed a *restore* from `~/.local/state/wireplumber/` and recommended owning or clearing that
+   state. The observed number argues against it: this control is one step per decibel (60 = 0.00 dB
+   in the v1 inventory, 40 = the −20 dB `PCM,1` ships at, 37 = −23.00 dB here), so 37 is a requested
+   gain of −23 dB — and WirePlumber 0.5's *default* sink volume, `device.routes.default-sink-volume`
+   = `0.064` linear, is −23.88 dB, whose nearest step at or above is exactly 37. **That is arithmetic
+   on a documented constant, not a measurement**, and it is offered as the leading hypothesis only.
+   If it is right, the value was never stored and writing the state file would have repaired
+   nothing. The frame's own report of "1 stored device file" is consistent with a directory holding
+   a profile or default-node record and no route volume, and it is now reported **by name** in every
+   mixer observation, which is the one read-only reading that settles it and which nobody has been
+   able to take by hand.
+
+   **What was done about it, both halves.** *Ownership:* `audio.wireplumber.playback-volume` sets the
+   volume through `wpctl`, which is correct whether the mechanism is a default or a restore — it
+   overrides the first and causes the second to be written. *Timing:* every `audio.mixer.*` Observe is
+   now behind the session gate, because the frame's post-boot verify runs at boot+10.0–10.6 s and the
+   user manager comes up 0.03–0.7 s later (decision 65), so an ungated verify was a coin flip that
+   passed on a value about to be wrong. **The original recommendation — "observe the mixer after the
+   user session is up" — was right and is now implemented.**
 5. **Network configuration — cloud-init plus NetworkManager plus netplan.** The v1 image carries
    `cloud-init`, `rpi-cloud-init-mods`, `netplan.io`, `netplan-generator`, `python3-netplan` and
    NetworkManager, with `NetworkManager.service`, `NetworkManager-wait-online.service` and
