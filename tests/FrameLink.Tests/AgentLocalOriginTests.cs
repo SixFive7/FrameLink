@@ -64,6 +64,28 @@ public sealed class AgentLocalOriginTests : IAsyncLifetime
     }
 
     [Fact]
+    public void The_call_address_and_the_call_token_are_one_credential_from_one_document()
+    {
+        var app = AgentButtonTests.Asset("frame-app.js");
+        var livekit = AgentButtonTests.Asset("livekit.js");
+
+        // §3.7 made the URL and the secret internal details of the Fleet Manager, which mints the
+        // token and supplies call.livekitUrl together. A compiled-in address is a second source
+        // for one half of that pair, and the failure it produces is the expensive kind: a frame
+        // holding a token this server really did sign, dialling a server that has never heard of
+        // it. The rejection reads as a call fault and the cause is a configuration one.
+        Assert.DoesNotContain("10.20.30.250", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("ws://", app, StringComparison.Ordinal);
+        Assert.DoesNotContain("wss://", app, StringComparison.Ordinal);
+
+        // And nothing dials half a pair. The check lives beside the connect call rather than in
+        // the view, so the rule survives a second caller.
+        Assert.Contains("export function callable(", livekit, StringComparison.Ordinal);
+        Assert.Contains("config.livekitUrl && config.token", livekit, StringComparison.Ordinal);
+        Assert.Contains("callable(this.config)", app, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Slash_answers_200_which_is_what_the_resource_and_the_kiosk_guard_both_check()
     {
         var status = await LoopbackProbe.StatusAsync(_origin.Port, "/", None);
@@ -114,6 +136,10 @@ public sealed class AgentLocalOriginTests : IAsyncLifetime
         Assert.Equal("framelink-douwe", document.Identity);
         Assert.Equal("family", document.Room);
         Assert.Equal("a.b.c", document.Token);
+
+        // The address travels in the same document as the token, which is what lets the page
+        // refuse to dial on half a pair. The app carries no address of its own to fall back to.
+        Assert.Equal("ws://10.20.30.250:7880", document.LivekitUrl);
     }
 
     [Fact]

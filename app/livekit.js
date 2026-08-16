@@ -23,6 +23,27 @@ function publishLayers(fps) {
   ];
 }
 
+/**
+ * Whether a configuration document can place a call at all.
+ *
+ * The address and the token are **one credential with two fields**, and this is the function that
+ * says so. Since the Fleet Manager took ownership of the call server it mints the token *and*
+ * supplies `call.livekitUrl`, and the agent serves both out of the values its reconciler recorded
+ * — one document, one writer, one moment in time. Treating them as two independent settings is
+ * what lets a frame hold a perfectly valid token and dial a server that will never see it; the
+ * token is signed by a secret only one server holds, so an address that disagrees with it is not
+ * a degraded call, it is no call at all, forever, with a rejection that reads like a network
+ * fault.
+ *
+ * So there is no dialling without both, and no defaulting of either. A missing address is not an
+ * error state either — `app.config.livekit-url` treats a value the Fleet Manager never issued as
+ * "nothing to converge on", and the honest rendering of that on the frame is a working slideshow
+ * that does not mention calls.
+ */
+export function callable(config) {
+  return !!(config && config.livekitUrl && config.token);
+}
+
 export class CallClient extends EventTarget {
   // `reloadConfig` is optional and returns a fresh config object (or null). The Fleet Manager
   // mints call tokens and re-mints them when they age or when a room, identity or API secret
@@ -98,7 +119,10 @@ export class CallClient extends EventTarget {
         if (authFailure && this.reloadConfig) {
           try {
             const fresh = await this.reloadConfig();
-            if (fresh && fresh.token) this.config = { ...this.config, ...fresh };
+            // Adopted as a pair or not at all. A document carrying a re-minted token but no
+            // address would otherwise merge its empty address over the working one and turn a
+            // rotation into a frame that has forgotten where its calls go.
+            if (callable(fresh)) this.config = { ...this.config, ...fresh };
           } catch (_) { /* the agent is busy; the next retry asks again */ }
         }
       }

@@ -1,14 +1,22 @@
 import { LitElement, html, css } from './vendor/lit-all.min.js';
-import { CallClient } from './livekit.js';
+import { CallClient, callable } from './livekit.js';
 import './frame-grid.js';
 import './frame-setup.js';
 
+// No livekitUrl here, deliberately. The Fleet Manager owns the call server and mints the token,
+// and both values reach this page as fields of the one document the agent serves from what its
+// reconciler has recorded — so the address and the credential are always the same frame's answer
+// to the same question. A default address would be a second source for one half of that pair: a
+// page that failed to fetch the document, or was issued a token before anyone set call.livekitUrl,
+// would hold a real credential and dial somewhere nobody chose. That fails as "the call does not
+// work" rather than as "this frame has not been told where to call", which is the wrong sentence
+// to put in front of somebody at 20:00 on a Sunday.
 const DEFAULT_CONFIG = {
   identity: 'framelink-dev',
   room: 'family',
-  livekitUrl: 'ws://10.20.30.250:7880',
+  livekitUrl: '',       // issued as call.livekitUrl; never guessed — see callable() in livekit.js
   immichKioskUrl: '',   // set in config.json to the local Immich Kiosk slideshow URL (guide 9)
-  token: '',            // local long-lived LiveKit token
+  token: '',            // issued as call.token, minted by the Fleet Manager
 };
 
 // If the slideshow iframe hasn't reported a load within this window after a
@@ -100,8 +108,7 @@ class FrameApp extends LitElement {
     // is inside the agent now, so a press arrives on the same channel frame-stage.js already
     // holds and is re-broadcast as this event. The dev keyboard 'c' remains a fallback.
     window.addEventListener('framelink-command', this._onControl);
-    if (!this.config.token) { this.needsToken = true; return; }
-    this._startCall();
+    this._reviewCall();
   }
 
   disconnectedCallback() {
@@ -121,6 +128,12 @@ class FrameApp extends LitElement {
     if (!cfg.token) {
       // Session fallback for a token entered via the setup screen.
       // (Persistent on-disk storage is wired in Phase D; tmpfs wipes localStorage on reboot.)
+      //
+      // It restores the credential only. There is deliberately no stored address beside it: a
+      // remembered token paired with a remembered address is exactly the pair that can outlive
+      // the document that issued it, and _reviewCall refuses to dial without an address that came
+      // back in this fetch. So a document that did not arrive means no call, never a call
+      // somewhere stale.
       const t = localStorage.getItem('framelink_token');
       if (t) cfg.token = t;
     }
@@ -128,6 +141,20 @@ class FrameApp extends LitElement {
   }
 
   // ---- LiveKit wiring -------------------------------------------------------
+
+  // The one place that decides whether this frame calls at all, so the address and the credential
+  // are checked together or not at all.
+  //
+  // Three outcomes, and the middle one is the one worth naming. A complete pair connects. A pair
+  // with an address and no token is the frame that has somewhere to call and nothing to call
+  // with, which is the only case a person can fix by typing, so it gets the setup screen. Anything
+  // else — no address issued, or neither — runs the slideshow and says nothing about calls, which
+  // is what LiveKitOptions.PublicUrl already specifies for a fleet nobody has set call.livekitUrl
+  // on: "the frame stays green and silent about calls instead of retrying a URL nobody chose".
+  _reviewCall() {
+    if (callable(this.config)) { this.needsToken = false; this._startCall(); return; }
+    this.needsToken = !!this.config.livekitUrl;
+  }
 
   _startCall() {
     // The reload hook returns the freshly fetched document rather than mutating this.config, so
@@ -208,8 +235,7 @@ class FrameApp extends LitElement {
     const token = e.detail.token;
     localStorage.setItem('framelink_token', token);
     this.config = { ...this.config, token };
-    this.needsToken = false;
-    this._startCall();
+    this._reviewCall();
   }
 
   // ---- Control channel (GPIO button) ----------------------------------------
