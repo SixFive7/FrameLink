@@ -1,9 +1,25 @@
 # FrameLink Fleet Manager — production stack (version2.md §3.8, milestone Mn+2).
 #
-# Authored to the PortainerCompose rules §3.8 names: an own /24 bridge taken from that repo's
-# config/networks.yaml, a pinned IPv4 and MAC, single-homed, a dfw.rules label, and cross-stack
-# reach only through declared pinholes. Every site-specific value is an environment variable with
-# no default, so this file carries no address, no secret and nothing that is true only here.
+# Authored against the operator's PortainerCompose repository as it actually stands: an own /24
+# bridge from that repo's config/networks.yaml, a pinned IPv4 and MAC on its formula, a .254
+# gateway, single-homed, a dfw.rules label in that repo's §4 schema, and cross-stack reach only
+# through declared pinholes. Secrets are never defaulted here; the estate's own naming (the
+# certificate resolver, the entrypoints, Traefik's address) now carries a default, because those
+# are facts about that estate rather than guesses.
+#
+# ── WHAT THE OPERATOR'S REPO SETTLES, AND WHAT IT DOES NOT ───────────────────────────────────
+# Settled, and applied below: entrypoints are `http` (:80) and `https` (:443, asDefault); the
+# certificate resolver is `letsencrypt`; Authelia is `authelia@file` bound to the HTTPS
+# ENTRYPOINT, so every HTTPS router inherits it and the opt-out idiom is an empty middlewares
+# label; Traefik is single-homed at 172.16.23.253 and reaches apps by routing to their pinned IP;
+# the MAC formula is `02:42:` + the four IPv4 bytes in hex; `.100` is the main service and `.254`
+# is the gateway; `traefik.docker.network` is forbidden fleet-wide (validator F23).
+#
+# NOT settled, and left as variables on purpose: which /24 this stack gets. That registry is
+# alphabetical-sequential, and `framelink` sorts between `fossflow` and `frigate` — so the
+# by-the-book slot is 172.16.8.0/24 and taking it renumbers 24 downstream stacks, Traefik's own
+# among them. The alternative is appending at 172.16.32.0/24 and accepting the alphabetical
+# break. That is the operator's call, not this file's. See stack.env.example.
 #
 # ── HOW TO DEPLOY ────────────────────────────────────────────────────────────────────────────
 #   1. docker volume create framelink-data          (once, on the Docker host)
@@ -12,6 +28,14 @@
 #      "Environment variables" panel. THE SECRETS ARE TYPED THERE AND NOWHERE ELSE.
 #   4. Deploy.
 # Full walkthrough, with what to check after each step: docs/14-fleet-manager-deployment.md
+#
+# ── IF THIS STACK IS ADOPTED INTO THE PortainerCompose REPO ──────────────────────────────────
+# The firewall generator there (scripts/dfw-gen.py) walks `stacks/*.yml` STATICALLY with
+# yaml.safe_load — it never expands a `${VAR}`, and it finds a stack's own bridge by looking for
+# a network key literally named `default`. So the dfw.rules label below is inert until a copy of
+# this file lives at `stacks/framelink.yml` in that repo with the addresses written out as
+# literals. The network key is already `default` here so that copy is a substitution, not a
+# rewrite.
 #
 # ── WHY THE VOLUME IS `external` ─────────────────────────────────────────────────────────────
 # It holds the SQLite database, and that database holds every adopted frame's identity, settings
@@ -42,6 +66,22 @@
 #      connectivity is established from LiveKit outwards and depends on the source port a frame
 #      observes being a port the host will deliver back. Remap 50000-50199 to anything else and
 #      calls connect for nobody, with no error anywhere.
+#
+# ── A HOST PORT COLLISION THE OPERATOR MUST RESOLVE FIRST ────────────────────────────────────
+# The operator's estate already runs a standalone `livekit` stack (172.16.14.0/24) publishing
+# 7880/tcp, 7881/tcp and 50000-50060/udp on this same Docker host, and its inline config already
+# carries an API key named `framelink`. Those are the exact host ports this stack publishes, so
+# deploying both is a bind failure, not a degradation — Docker refuses to start the second
+# claimant of 7880. There are two clean resolutions and they are the operator's to choose:
+#
+#   a. RETIRE the standalone livekit stack and let this one supervise its own call server. That
+#      is what guide 14 assumes and what makes the bundled binary worth having.
+#   b. KEEP the standalone stack and point this one at it with §3.7's escape hatch — set
+#      FRAMELINK_LIVEKIT_URL, FRAMELINK_LIVEKIT_API_KEY and FRAMELINK_LIVEKIT_API_SECRET, and
+#      delete the three `ports:` entries below, since nothing in this container then listens on
+#      them. The existing `framelink` key in that stack suggests this was the original intent.
+#
+# Nothing here picks for them, and the ports stay declared because (a) is the documented path.
 #
 # Signalling (7880) is the one piece that could go either way. It is published directly here,
 # which is what makes the LAN case work with no certificate and no name, exactly as guide 7 did.
@@ -93,8 +133,15 @@ services:
       # the only thing standing between it and unbounded noise. Behind Traefik every request
       # arrives from Traefik, so without this the whole internet shares one budget — and with it
       # set to anything other than Traefik's real address, an attacker forges X-Forwarded-For and
-      # presents a fresh source per request. It is therefore deliberately not defaulted.
-      FRAMELINK_TRUSTED_PROXIES: ${FRAMELINK_TRUSTED_PROXIES}
+      # presents a fresh source per request.
+      #
+      # It now defaults, because the operator's repo settles it: Traefik is single-homed at
+      # 172.16.23.253 on the reverseproxy bridge and reaches every other stack by ROUTING to its
+      # pinned IP, with the source address preserved across the bridge — the whole cross-stack
+      # policy layer is IP-pair accepts, and the estate hardened it with strict reverse-path
+      # filtering precisely because that source address functions as a credential. So the address
+      # this container observes for a proxied request is Traefik's own.
+      FRAMELINK_TRUSTED_PROXIES: ${FRAMELINK_TRUSTED_PROXIES:-172.16.23.253}
 
       # ── Calling (§3.7) ───────────────────────────────────────────────────────────────────
       # The address frames dial. Not derivable by the container: it knows the addresses it is
@@ -120,20 +167,26 @@ services:
       - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
 
     networks:
-      framelink:
+      default:
         ipv4_address: ${FRAMELINK_IPV4}
         mac_address: ${FRAMELINK_MAC}
 
     labels:
       # ── Traefik: the GUI ─────────────────────────────────────────────────────────────────
+      # No `traefik.docker.network` label. It is not merely unnecessary here, it is forbidden
+      # fleet-wide: every container in this estate is single-homed, so Traefik's backend pick is
+      # never ambiguous, and the operator's validator fails the label outright (rule F23).
       traefik.enable: "true"
-      traefik.docker.network: ${FRAMELINK_NETWORK_NAME}
 
+      # NO `middlewares` LABEL ON THIS ROUTER, AND ITS ABSENCE IS THE AUTHELIA WIRING.
+      # In this estate Authelia is not a per-router middleware — it is `authelia@file`, a
+      # forwardAuth bound to the HTTPS ENTRYPOINT in Traefik's static config, which every HTTPS
+      # router inherits automatically. Naming a middleware here would REPLACE that inherited set
+      # rather than add to it, which is how a router loses Authelia by trying to ask for it.
       traefik.http.routers.framelink-gui.rule: Host(`${FRAMELINK_DOMAIN}`)
-      traefik.http.routers.framelink-gui.entrypoints: ${FRAMELINK_ENTRYPOINT:-websecure}
+      traefik.http.routers.framelink-gui.entrypoints: ${FRAMELINK_ENTRYPOINT:-https}
       traefik.http.routers.framelink-gui.tls: "true"
-      traefik.http.routers.framelink-gui.tls.certresolver: ${FRAMELINK_CERT_RESOLVER}
-      traefik.http.routers.framelink-gui.middlewares: ${FRAMELINK_GUI_MIDDLEWARES}
+      traefik.http.routers.framelink-gui.tls.certresolver: ${FRAMELINK_CERT_RESOLVER:-letsencrypt}
       traefik.http.routers.framelink-gui.service: framelink
       traefik.http.routers.framelink-gui.priority: "10"
 
@@ -141,10 +194,17 @@ services:
       # A frame authenticates with its keypair over the frozen handshake (§4.2). There is no
       # browser here to complete an interactive SSO flow, so an SSO middleware on this router
       # would not make it more secure — it would make the fleet unable to connect at all.
+      #
+      # Because Authelia hangs off the entrypoint, "carries no middleware" is NOT the absence of
+      # a label — an unlabelled router inherits Authelia and every frame in the fleet gets a 302
+      # to authentication.huisman.io that it cannot follow. The opt-out is an EXPLICIT EMPTY
+      # middlewares list, which is the same idiom the estate's one other self-authenticating
+      # service uses. The empty string is load-bearing; deleting this line breaks the fleet.
       traefik.http.routers.framelink-agent.rule: Host(`${FRAMELINK_DOMAIN}`) && PathPrefix(`/agent`)
-      traefik.http.routers.framelink-agent.entrypoints: ${FRAMELINK_ENTRYPOINT:-websecure}
+      traefik.http.routers.framelink-agent.entrypoints: ${FRAMELINK_ENTRYPOINT:-https}
       traefik.http.routers.framelink-agent.tls: "true"
-      traefik.http.routers.framelink-agent.tls.certresolver: ${FRAMELINK_CERT_RESOLVER}
+      traefik.http.routers.framelink-agent.tls.certresolver: ${FRAMELINK_CERT_RESOLVER:-letsencrypt}
+      traefik.http.routers.framelink-agent.middlewares: ""
       traefik.http.routers.framelink-agent.service: framelink
       traefik.http.routers.framelink-agent.priority: "100"
 
@@ -157,10 +217,49 @@ services:
       # a fleet-wide disconnect nobody attributes to it.
       framelink.socket.keepalive: "ping every 25s, dead after 60s (FRAMELINK PingInterval/PongDeadline)"
 
-      # ── The stack's own firewall rules, per §3.8 ──────────────────────────────────────────
-      # Cross-stack reach is by declared pinhole only. This stack needs exactly one inbound
-      # pinhole — Traefik to 8080 — and no outbound reach into any other stack's /24.
-      dfw.rules: ${FRAMELINK_DFW_RULES}
+      # ── The stack's own firewall rules ────────────────────────────────────────────────────
+      # This is the operator's dfw schema verbatim, not a string of this project's invention: a
+      # YAML block scalar, egress scoped as internet/lan/host/intra_stack/cross_stack, ingress as
+      # published_ports/cross_stack/intra_stack, and an `audit-tier` / `audit-reason` trailer that
+      # is a YAML comment to the parser and the justification column in the generated report.
+      #
+      # The three published ports are NOT restated here, and that is deliberate: the generator
+      # auto-derives a DNAT and an ingress accept from every compose `ports:` directive, because
+      # the directive IS the intent. An `ingress.published_ports` entry only ever NARROWS one
+      # (via allowed_sources), and narrowing the media range would break calling.
+      #
+      # egress.internet is scoped to 443 for one reason: the first start fetches the pinned
+      # livekit-server release from GitHub. It is the estate's documented one-time-internet-need
+      # shape — deny it and the container still serves, adopts and shows photos, and only calling
+      # never comes up. egress.host reaches Home Assistant, which runs network_mode: host on this
+      # server, so the alert webhook is a host destination and not a cross-stack pinhole.
+      #
+      # PINHOLES ARE SYMMETRIC AND THIS IS ONLY ONE HALF. The ingress entries below have no
+      # effect until the matching `egress.cross_stack` entries naming this stack are added to
+      # reverseproxy-traefik and reverseproxy-homepage in the operator's own repo; their
+      # validator fails an asymmetric declaration. That edit is theirs to make.
+      dfw.rules: |
+        egress:
+          internet: { ports: [443] }
+          lan: deny
+          host: { ports: [8123] }
+          intra_stack: allow
+          cross_stack: []
+        ingress:
+          cross_stack:
+            - source: { stack: reverseproxy, container: reverseproxy-traefik }
+              proto: tcp
+              port: 8080
+              comment: "Traefik ingress routing (console + the /agent websocket)"
+            - source: { stack: reverseproxy, container: reverseproxy-homepage }
+              proto: tcp
+              port: 8080
+              comment: "Homepage monitor"
+            - source: { stack: reverseproxy, container: reverseproxy-homepage }
+              proto: icmp
+              comment: "Homepage ping tile"
+        # audit-tier: 2
+        # audit-reason: "One-time HTTPS fetch of the pinned livekit-server release, and the Home Assistant webhook on the host for fleet alerts; denying either leaves the console and photos working and degrades only calling and alerting (access.md Tier 2)."
 
     healthcheck:
       # Repeated from the image so that an operator reading only the stack can see what "healthy"
@@ -182,12 +281,19 @@ services:
         max-file: "3"
 
 networks:
-  framelink:
-    name: ${FRAMELINK_NETWORK_NAME}
+  # The key is `default` because the operator's firewall generator identifies a stack's own
+  # bridge by that literal key and falls back to the filename otherwise; `name:` is what Docker
+  # actually calls the network, so the visible name is unchanged.
+  default:
+    name: ${FRAMELINK_NETWORK_NAME:-framelink}
     driver: bridge
     ipam:
       config:
+        # The gateway is pinned at .254 rather than left to Docker. This estate reserves .1 and
+        # keeps it clear of Docker's historical default-gateway slot, so an unpinned gateway
+        # would silently take an address the reservation table says is unallocated.
         - subnet: ${FRAMELINK_SUBNET}
+          gateway: ${FRAMELINK_GATEWAY}
 
 volumes:
   framelink-data:
