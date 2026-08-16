@@ -471,6 +471,97 @@ public sealed record ImageStatusResponse
     public required bool ArtifactAvailable { get; init; }
 }
 
+/// <summary>Everything the console renders about the call server (§3.7).</summary>
+/// <remarks>
+/// <b>The API secret is deliberately absent and must stay absent.</b> §3.7 makes the Fleet
+/// Manager the owner of that secret precisely so nothing else holds it, and a browser is
+/// something else. The <i>key</i> is here because it is an identifier rather than a credential —
+/// it travels in the clear in every token's <c>iss</c> claim — and showing it is what lets an
+/// operator confirm at a glance that a rotation happened.
+/// </remarks>
+public sealed record LiveKitStatusResponse
+{
+    /// <summary>One of <c>bundled</c>, <c>external</c>, <c>disabled</c>.</summary>
+    public required string Mode { get; init; }
+
+    /// <summary>The pinned LiveKit version this Fleet Manager carries.</summary>
+    public required string Version { get; init; }
+
+    /// <summary>Whether a frame issued a token right now could actually place a call.</summary>
+    public required bool Ready { get; init; }
+
+    /// <summary>What the bundled path is doing, or the last thing it did.</summary>
+    public required string Step { get; init; }
+
+    /// <summary>Everything an operator has to fix, in plain sentences. Empty means nothing.</summary>
+    public required IReadOnlyList<string> Problems { get; init; }
+
+    /// <summary>The signalling address frames are issued, or empty when none is configured.</summary>
+    public required string Url { get; init; }
+
+    /// <summary>The HTTP and WebSocket signalling port. The half that can ride a reverse proxy.</summary>
+    public required int SignalPort { get; init; }
+
+    /// <summary>The TCP media fallback port. Published directly; a proxy cannot carry it.</summary>
+    public required int TcpMediaPort { get; init; }
+
+    /// <summary>First UDP port of the media range.</summary>
+    public required int UdpPortStart { get; init; }
+
+    /// <summary>Last UDP port of the media range.</summary>
+    public required int UdpPortEnd { get; init; }
+
+    /// <summary>How long a freshly minted token lasts, in days.</summary>
+    public required int TokenLifetimeDays { get; init; }
+
+    /// <summary>When a human last reviewed the pinned LiveKit version against upstream (§7.1).</summary>
+    public required DateTimeOffset ReviewedUtc { get; init; }
+
+    /// <summary>The API key. An identifier, never the secret.</summary>
+    public string? ApiKey { get; init; }
+
+    /// <summary>When the signing secret was generated, which is what a rotation moves.</summary>
+    public DateTimeOffset? SecretIssuedUtc { get; init; }
+
+    /// <summary>The supervised child, when this deployment has one.</summary>
+    public LiveKit.LiveKitProcessState? Process { get; init; }
+}
+
+/// <summary>What happened to one frame's call token.</summary>
+public sealed record CallTokenResponse
+{
+    /// <summary>The frame.</summary>
+    public required string DeviceId { get; init; }
+
+    /// <summary>One of <c>issued</c>, <c>already-current</c>, <c>not-configured</c>, <c>not-adopted</c>.</summary>
+    public required string Outcome { get; init; }
+
+    /// <summary>The participant identity the frame is issued.</summary>
+    public string? Identity { get; init; }
+
+    /// <summary>The room the token is good for.</summary>
+    public string? Room { get; init; }
+
+    /// <summary>When the token the frame now holds stops working.</summary>
+    public DateTimeOffset? ExpiresUtc { get; init; }
+
+    /// <summary>Why a token was minted, or why one was not.</summary>
+    public required string Reason { get; init; }
+}
+
+/// <summary>What a secret rotation did.</summary>
+public sealed record LiveKitRotateResponse
+{
+    /// <summary>How many frames were issued a token signed with the new secret.</summary>
+    public required int Issued { get; init; }
+
+    /// <summary>The API key the new secret belongs to.</summary>
+    public string? ApiKey { get; init; }
+
+    /// <summary>When the new secret was generated.</summary>
+    public required DateTimeOffset RotatedUtc { get; init; }
+}
+
 /// <summary>A refused request, in a shape the GUI can render.</summary>
 public sealed record ApiError
 {

@@ -213,4 +213,117 @@ internal static partial class ControlLog
         Level = LogLevel.Error,
         Message = "An image build faulted. Nothing was published.")]
     public static partial void ImageBuildFaulted(this ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1800,
+        Level = LogLevel.Warning,
+        Message = "Fetching {Url} answered {Status}.")]
+    public static partial void LiveKitFetchRefused(this ILogger logger, string url, int status);
+
+    [LoggerMessage(
+        EventId = 1801,
+        Level = LogLevel.Warning,
+        Message = "Fetching {Url} failed.")]
+    public static partial void LiveKitFetchFailed(this ILogger logger, Exception exception, string url);
+
+    [LoggerMessage(
+        EventId = 1802,
+        Level = LogLevel.Warning,
+        Message = "The LiveKit server binary at {Path} could not be read.")]
+    public static partial void LiveKitBinaryUnreadable(this ILogger logger, Exception exception, string path);
+
+    [LoggerMessage(
+        EventId = 1803,
+        Level = LogLevel.Error,
+        Message = "The LiveKit {Version} release could not be written to this server's data directory.")]
+    public static partial void LiveKitInstallFailed(this ILogger logger, Exception exception, string version);
+
+    [LoggerMessage(
+        EventId = 1804,
+        Level = LogLevel.Error,
+        Message = "LiveKit {Version} rejected: {Fetched} bytes fetched, {Expected} expected.")]
+    public static partial void LiveKitArchiveWrongLength(
+        this ILogger logger,
+        string version,
+        long fetched,
+        long expected);
+
+    [LoggerMessage(
+        EventId = 1805,
+        Level = LogLevel.Error,
+        Message = "LiveKit {Version} rejected: {FileName} does not match the checksum upstream published.")]
+    public static partial void LiveKitArchiveRejected(this ILogger logger, string version, string fileName);
+
+    [LoggerMessage(
+        EventId = 1806,
+        Level = LogLevel.Error,
+        Message = "LiveKit {Version} rejected: the archive does not hold a {Expected}-byte '{Member}'.")]
+    public static partial void LiveKitArchiveMalformed(
+        this ILogger logger,
+        string version,
+        string member,
+        long expected);
+
+    [LoggerMessage(
+        EventId = 1807,
+        Level = LogLevel.Error,
+        Message = "LiveKit {Version} rejected: the unpacked executable does not match the pinned digest.")]
+    public static partial void LiveKitBinaryRejected(this ILogger logger, string version);
+
+    [LoggerMessage(
+        EventId = 1808,
+        Level = LogLevel.Error,
+        Message = "LiveKit {Version} rejected: the archive could not be read — {Problem}")]
+    public static partial void LiveKitArchiveUnreadable(this ILogger logger, string version, string problem);
+
+    [LoggerMessage(
+        EventId = 1809,
+        Level = LogLevel.Information,
+        Message = "LiveKit {Version} installed at {Path}.")]
+    public static partial void LiveKitInstalled(this ILogger logger, string version, string path);
+
+    [LoggerMessage(
+        EventId = 1810,
+        Level = LogLevel.Information,
+        Message = "LiveKit {Version} started as pid {Pid}, signalling on port {Port}.")]
+    public static partial void LiveKitStarted(this ILogger logger, int pid, int port, string version);
+
+    [LoggerMessage(
+        EventId = 1811,
+        Level = LogLevel.Warning,
+        Message = "The LiveKit server could not be started: {Problem}")]
+    public static partial void LiveKitStartRefused(this ILogger logger, string problem);
+
+    [LoggerMessage(
+        EventId = 1812,
+        Level = LogLevel.Warning,
+        Message = "The LiveKit server exited ({ExitCode}). Starting it again; calls do not connect "
+            + "until it answers. Photos and everything else are unaffected.")]
+    public static partial void LiveKitExited(this ILogger logger, int exitCode);
+
+    [LoggerMessage(
+        EventId = 1813,
+        Level = LogLevel.Warning,
+        Message = "Supervising the LiveKit server failed and was retried.")]
+    public static partial void LiveKitSuperviseFailed(this ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 1814,
+        Level = LogLevel.Information,
+        Message = "The LiveKit API secret was rotated and {Issued} frames were issued a new call "
+            + "token. Every token signed with the old secret is now refused.")]
+    public static partial void LiveKitSecretRotated(this ILogger logger, int issued);
+
+    [LoggerMessage(
+        EventId = 1815,
+        Level = LogLevel.Information,
+        Message = "Issued {DeviceId} a call token as '{Identity}' in room '{Room}', expiring "
+            + "{Expires}, because {Reason}.")]
+    public static partial void CallTokenIssued(
+        this ILogger logger,
+        string deviceId,
+        string identity,
+        string room,
+        DateTimeOffset expires,
+        string reason);
 }

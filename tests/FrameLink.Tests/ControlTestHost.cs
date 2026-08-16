@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using FrameLink.Control;
 using FrameLink.Control.Authentication;
+using FrameLink.Control.LiveKit;
 using FrameLink.Control.Storage;
 using FrameLink.Protocol;
 using Microsoft.AspNetCore.Builder;
@@ -207,10 +208,16 @@ public sealed class ControlServer : IAsyncDisposable
     /// runs with no <c>wwwroot</c> at all, which is the shape of an image built before the
     /// Svelte output existed — and the shape every other test in the suite wants.
     /// </param>
+    /// <param name="livekit">
+    /// Adjusts §3.7's call-server options. The default is a bundled deployment with a public URL
+    /// and an upstream that never answers, so every test gets working token minting and nothing
+    /// in the suite ever downloads fifty megabytes or starts a child process.
+    /// </param>
     public static async Task<ControlServer> StartAsync(
         string? operatorPassword,
         Func<ControlOptions, ControlOptions>? configure = null,
-        string? webRoot = null)
+        string? webRoot = null,
+        Func<LiveKitOptions, LiveKitOptions>? livekit = null)
     {
         var workspace = new TempWorkspace();
 
@@ -238,6 +245,20 @@ public sealed class ControlServer : IAsyncDisposable
             options = configure(options);
         }
 
+        // Never LiveKitOptions.FromEnvironment here: that would read the developer's own
+        // environment, so the suite's behaviour would depend on whose machine it ran on.
+        var callOptions = new LiveKitOptions
+        {
+            Directory = Path.Combine(workspace.Root, "livekit"),
+            Mode = LiveKitMode.Bundled,
+            PublicUrl = "ws://livekit.invalid:7880",
+        };
+
+        if (livekit is not null)
+        {
+            callOptions = livekit(callOptions);
+        }
+
         string[] args =
         [
             "--urls",
@@ -258,7 +279,9 @@ public sealed class ControlServer : IAsyncDisposable
             args,
             options,
             OperatorCredential.FromValue(operatorPassword),
-            TimeProvider.System);
+            TimeProvider.System,
+            callOptions,
+            UnreachableLiveKitDownload.Instance);
 
         await app.StartAsync(TestContext.Current.CancellationToken);
 
@@ -448,6 +471,48 @@ public sealed class ControlServer : IAsyncDisposable
 
         return latest;
     }
+
+    /// <summary>Reads the call server's standing (§3.7).</summary>
+    public async Task<LiveKitStatusResponse> GetLiveKitAsync()
+    {
+        var response = await Client.GetAsync("/api/livekit", TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.LiveKitStatusResponse);
+    }
+
+    /// <summary>Reads a device's fleet defaults, overrides and effective values side by side.</summary>
+    public async Task<DeviceSettingsResponse> GetDeviceSettingsAsync(string deviceId)
+    {
+        var response = await Client.GetAsync(
+            $"/api/devices/{deviceId}/settings",
+            TestContext.Current.CancellationToken);
+
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.DeviceSettingsResponse);
+    }
+
+    /// <summary>The effective value of one setting for one device, or null.</summary>
+    public async Task<string?> EffectiveAsync(string deviceId, string key)
+    {
+        var settings = await GetDeviceSettingsAsync(deviceId);
+        return settings.Effective.GetValueOrDefault(key);
+    }
+
+    /// <summary>Writes a fleet default over the operator route.</summary>
+    public async Task<HttpResponseMessage> SetFleetSettingAsync(string key, string value) =>
+        await Client.PutAsJsonAsync(
+            $"/api/settings/{key}",
+            new SettingValueRequest { Value = value },
+            ControlJson.Default.SettingValueRequest,
+            TestContext.Current.CancellationToken);
+
+    /// <summary>Writes a per-device override over the operator route.</summary>
+    public async Task<HttpResponseMessage> SetDeviceSettingAsync(string deviceId, string key, string value) =>
+        await Client.PutAsJsonAsync(
+            $"/api/devices/{deviceId}/settings/{key}",
+            new SettingValueRequest { Value = value },
+            ControlJson.Default.SettingValueRequest,
+            TestContext.Current.CancellationToken);
 
     /// <summary>Reads a device's recent events.</summary>
     public async Task<DeviceEventsResponse> GetEventsAsync(string deviceId, int limit = 50)

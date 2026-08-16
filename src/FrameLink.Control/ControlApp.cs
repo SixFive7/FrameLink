@@ -3,6 +3,7 @@ using FrameLink.Control.Agent;
 using FrameLink.Control.Endpoints;
 using FrameLink.Control.Authentication;
 using FrameLink.Control.Imaging;
+using FrameLink.Control.LiveKit;
 using FrameLink.Control.Storage;
 using FrameLink.Control.Updates;
 using FrameLink.Protocol;
@@ -26,11 +27,18 @@ public static class ControlApp
     /// <param name="options">Paths and budgets. Read from the environment when omitted.</param>
     /// <param name="credential">The operator password. Read from the environment when omitted.</param>
     /// <param name="clock">Time source. The system clock when omitted.</param>
+    /// <param name="livekit">The call server's configuration (§3.7). From the environment when omitted.</param>
+    /// <param name="download">
+    /// Where the pinned LiveKit release is fetched from. Real HTTPS when omitted; a test supplies
+    /// its own so that the suite never reaches GitHub and never writes fifty megabytes.
+    /// </param>
     public static WebApplication Build(
         string[] args,
         ControlOptions? options = null,
         OperatorCredential? credential = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        LiveKitOptions? livekit = null,
+        ILiveKitDownload? download = null)
     {
         options ??= ControlOptions.FromEnvironment();
         credential ??= OperatorCredential.FromEnvironment();
@@ -82,6 +90,32 @@ public static class ControlApp
         builder.Services.AddSingleton<TelemetryIngest>();
         builder.Services.AddSingleton<AgentSocketHandler>();
         builder.Services.AddHostedService<PendingDeviceReaper>();
+
+        // §3.7. Registered in dependency order rather than alphabetically, because the order is
+        // the argument: the store owns the secret, the deployment decides whether that secret or
+        // an operator's own is in force, the provisioner turns it into per-device tokens, and
+        // only the last of the four is the thing that fetches and supervises a child process.
+        // Everything except that last one works identically on a workstation with no LiveKit
+        // anywhere, which is what lets adoption be tested without one.
+        builder.Services.AddSingleton(livekit ?? LiveKitOptions.FromEnvironment(options.DataDirectory));
+        builder.Services.AddSingleton<ILiveKitStore, SqliteLiveKitStore>();
+        builder.Services.AddSingleton<LiveKitDeployment>();
+        builder.Services.AddSingleton<CallProvisioning>();
+
+        if (download is null)
+        {
+            builder.Services.AddSingleton<ILiveKitDownload, HttpLiveKitDownload>();
+        }
+        else
+        {
+            // A supplied download is the caller's, so it is registered as an instance — the
+            // container disposes what it constructs and leaves alone what it is handed, which is
+            // the behaviour a test wants for a double it may assert against afterwards.
+            builder.Services.AddSingleton(download);
+        }
+
+        builder.Services.AddSingleton<LiveKitService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveKitService>());
 
         if (options.TrustedProxies.Count > 0)
         {

@@ -1,6 +1,7 @@
 using System.Net;
 using FrameLink.Control.Agent;
 using FrameLink.Control.Authentication;
+using FrameLink.Control.LiveKit;
 using FrameLink.Control.Storage;
 using FrameLink.Protocol;
 
@@ -41,6 +42,10 @@ public static class OperatorEndpoints
         app.MapGet("/api/devices/{deviceId}/settings", GetDeviceSettingsAsync);
         app.MapPut("/api/devices/{deviceId}/settings/{key}", SetDeviceSettingAsync);
         app.MapDelete("/api/devices/{deviceId}/settings/{key}", RemoveDeviceSettingAsync);
+
+        app.MapGet("/api/livekit", GetLiveKitAsync);
+        app.MapPost("/api/livekit/rotate", RotateLiveKitAsync);
+        app.MapPost("/api/devices/{deviceId}/call-token", IssueCallTokenAsync);
     }
 
     /// <summary>Turns a stored row into what the GUI renders.</summary>
@@ -340,6 +345,7 @@ public static class OperatorEndpoints
         IDeviceStore devices,
         AgentConnectionRegistry registry,
         SettingsPublisher publisher,
+        CallProvisioning calls,
         FleetEvents events,
         CancellationToken cancellationToken)
     {
@@ -367,6 +373,15 @@ public static class OperatorEndpoints
                     statusCode: StatusCodes.Status409Conflict);
 
             default:
+                // §3.3: "Adoption binds that key to a record and issues identity, room, LiveKit
+                // token and desired values." This is that moment, and it has to be here rather
+                // than at the frame's next connect — the settings store refuses a per-device
+                // write until the row is adopted, so a second earlier there was structurally
+                // nowhere to put a token, and a second later is when the frame comes to collect
+                // it. A rename lands here too, which re-mints: the display name is the token's
+                // `name` claim, so it is what the rest of the household sees on screen.
+                await calls.ReviewAsync(deviceId, force: false, cancellationToken).ConfigureAwait(false);
+
                 // The device learns it was adopted on its next connect — its handshake was
                 // answered and closed while it was pending. This push only matters for the case
                 // where the row was already adopted and the operator is renaming it.
@@ -607,6 +622,7 @@ public static class OperatorEndpoints
         SettingValueRequest request,
         ISettingsStore settings,
         SettingsPublisher publisher,
+        CallProvisioning calls,
         CancellationToken cancellationToken)
     {
         if (request is null)
@@ -615,6 +631,14 @@ public static class OperatorEndpoints
         }
 
         await settings.SetFleetDefaultAsync(key, request.Value, cancellationToken).ConfigureAwait(false);
+
+        // Unconditionally, and never keyed on which setting moved. A call token is bound to a
+        // room, so changing the fleet's `call.room` invalidates every token in the fleet — but
+        // §3.4 makes settings "not a fixed list but a generic mechanism", and a route that knew
+        // one key by name would be exactly the hard-coding that rules out. Reviewing every device
+        // is a token decode and a handful of string comparisons each, and re-mints nothing when
+        // nothing needs it.
+        await calls.ReviewFleetAsync(force: false, cancellationToken).ConfigureAwait(false);
 
         // A fleet default can move any device's effective value, so every online device is
         // told — except those where an override still wins, which resolve to the same value
@@ -627,6 +651,7 @@ public static class OperatorEndpoints
         string key,
         ISettingsStore settings,
         SettingsPublisher publisher,
+        CallProvisioning calls,
         CancellationToken cancellationToken)
     {
         var removed = await settings.RemoveFleetDefaultAsync(key, cancellationToken).ConfigureAwait(false);
@@ -634,6 +659,10 @@ public static class OperatorEndpoints
         {
             return NotFoundKey(key);
         }
+
+        // Removing a default moves effective values exactly as setting one does — deleting
+        // `call.room` drops every frame back to the catalog fallback, which is a different room.
+        await calls.ReviewFleetAsync(force: false, cancellationToken).ConfigureAwait(false);
 
         await publisher.PushAllAsync(cancellationToken).ConfigureAwait(false);
         return Results.NoContent();
@@ -668,6 +697,7 @@ public static class OperatorEndpoints
         SettingValueRequest request,
         ISettingsStore settings,
         SettingsPublisher publisher,
+        CallProvisioning calls,
         CancellationToken cancellationToken)
     {
         if (request is null)
@@ -691,6 +721,7 @@ public static class OperatorEndpoints
                 statusCode: StatusCodes.Status409Conflict);
         }
 
+        await calls.ReviewAsync(deviceId, force: false, cancellationToken).ConfigureAwait(false);
         await publisher.PushAsync(deviceId, cancellationToken).ConfigureAwait(false);
         return Results.NoContent();
     }
@@ -700,6 +731,7 @@ public static class OperatorEndpoints
         string key,
         ISettingsStore settings,
         SettingsPublisher publisher,
+        CallProvisioning calls,
         CancellationToken cancellationToken)
     {
         var removed = await settings
@@ -711,8 +743,140 @@ public static class OperatorEndpoints
             return NotFoundKey(key);
         }
 
+        // Deleting an override is how an operator undoes a per-device room, and it is also how
+        // somebody deletes `call.token` itself. Both leave the frame needing a token, and both
+        // are answered here rather than at that frame's next call attempt.
+        await calls.ReviewAsync(deviceId, force: false, cancellationToken).ConfigureAwait(false);
         await publisher.PushAsync(deviceId, cancellationToken).ConfigureAwait(false);
         return Results.NoContent();
+    }
+
+    /// <summary>The call server's standing (§3.7).</summary>
+    private static async Task<IResult> GetLiveKitAsync(
+        LiveKitService livekit,
+        LiveKitDeployment deployment,
+        LiveKitOptions options,
+        CancellationToken cancellationToken)
+    {
+        var state = livekit.State;
+
+        // The key, never the secret. Reading it costs a database round trip on the bundled path
+        // and generates the pair if this is the first thing that has ever asked for it, which is
+        // exactly §3.2's "generated automatically" happening at the first moment it can be seen.
+        var credential = await deployment.CredentialAsync(cancellationToken).ConfigureAwait(false);
+
+        return Results.Json(
+            new LiveKitStatusResponse
+            {
+                Mode = state.Mode switch
+                {
+                    LiveKitMode.Bundled => "bundled",
+                    LiveKitMode.External => "external",
+                    _ => "disabled",
+                },
+                Version = state.Version,
+                Ready = state.Ready,
+                Step = state.Step,
+                Problems = state.Problems,
+                Url = options.EffectiveUrl,
+                SignalPort = options.SignalPort,
+                TcpMediaPort = options.TcpMediaPort,
+                UdpPortStart = options.UdpPortStart,
+                UdpPortEnd = options.UdpPortEnd,
+                TokenLifetimeDays = (int)options.TokenLifetime.TotalDays,
+                ReviewedUtc = livekit.Pin.ReviewedUtc,
+                ApiKey = credential?.Key,
+                SecretIssuedUtc = credential is { IssuedUtc.Ticks: > 0 } ? credential.IssuedUtc : null,
+                Process = state.Process,
+            },
+            ControlJson.Default.LiveKitStatusResponse);
+    }
+
+    /// <summary>Rotates the API secret and re-mints the whole fleet (§3.7).</summary>
+    /// <remarks>
+    /// The revocation button. Everything signed with the old secret stops verifying the moment
+    /// LiveKit reloads, which is what makes a leaked frame token a bounded problem rather than a
+    /// permanent one — v1's answer to the same question was "rotate the secret and re-mint every
+    /// frame's token by hand at a workstation", and this is that, performed.
+    /// </remarks>
+    private static async Task<IResult> RotateLiveKitAsync(
+        LiveKitService livekit,
+        LiveKitDeployment deployment,
+        TimeProvider clock,
+        CancellationToken cancellationToken)
+    {
+        var issued = await livekit.RotateAsync(cancellationToken).ConfigureAwait(false);
+
+        if (issued is null)
+        {
+            return Results.Json(
+                new ApiError
+                {
+                    Error = "not-rotatable",
+                    Detail = "This Fleet Manager does not own the LiveKit API secret, so it "
+                        + "cannot rotate it. Rotate it where that server is configured, then "
+                        + $"update {LiveKitOptions.ExternalSecretVariable} and restart.",
+                },
+                ControlJson.Default.ApiError,
+                statusCode: StatusCodes.Status409Conflict);
+        }
+
+        var credential = await deployment.CredentialAsync(cancellationToken).ConfigureAwait(false);
+
+        return Results.Json(
+            new LiveKitRotateResponse
+            {
+                Issued = issued.Value,
+                ApiKey = credential?.Key,
+                RotatedUtc = credential is { IssuedUtc.Ticks: > 0 } ? credential.IssuedUtc : clock.GetUtcNow(),
+            },
+            ControlJson.Default.LiveKitRotateResponse);
+    }
+
+    /// <summary>Mints one frame a new call token, unconditionally.</summary>
+    private static async Task<IResult> IssueCallTokenAsync(
+        string deviceId,
+        IDeviceStore devices,
+        CallProvisioning calls,
+        SettingsPublisher publisher,
+        CancellationToken cancellationToken)
+    {
+        if (await devices.FindAsync(deviceId, cancellationToken).ConfigureAwait(false) is null)
+        {
+            return NotFound(deviceId);
+        }
+
+        var result = await calls.ReviewAsync(deviceId, force: true, cancellationToken).ConfigureAwait(false);
+
+        if (result.Outcome is CallIssueOutcome.Issued)
+        {
+            await publisher.PushAsync(deviceId, cancellationToken).ConfigureAwait(false);
+        }
+
+        var response = new CallTokenResponse
+        {
+            DeviceId = deviceId,
+            Outcome = result.Outcome switch
+            {
+                CallIssueOutcome.Issued => "issued",
+                CallIssueOutcome.AlreadyCurrent => "already-current",
+                CallIssueOutcome.NotAdopted => "not-adopted",
+                _ => "not-configured",
+            },
+            Identity = result.Identity,
+            Room = result.Room,
+            ExpiresUtc = result.ExpiresUtc,
+            Reason = result.Reason,
+        };
+
+        // A refusal is a 409 rather than a 200 with a sad field, so a script that checks the
+        // status code is not quietly told a token exists when none does.
+        return result.Outcome is CallIssueOutcome.Issued
+            ? Results.Json(response, ControlJson.Default.CallTokenResponse)
+            : Results.Json(
+                response,
+                ControlJson.Default.CallTokenResponse,
+                statusCode: StatusCodes.Status409Conflict);
     }
 
     private static IResult NotFound(string deviceId) =>

@@ -24,9 +24,15 @@ function publishLayers(fps) {
 }
 
 export class CallClient extends EventTarget {
-  constructor(config) {
+  // `reloadConfig` is optional and returns a fresh config object (or null). The Fleet Manager
+  // mints call tokens and re-mints them when they age or when a room, identity or API secret
+  // changes, so the token this client started with can be superseded while the page is up.
+  // Without this the page would hold a dead credential until the next reboot; with it, a
+  // rotation is picked up on the retry that follows the rejection.
+  constructor(config, reloadConfig) {
     super();
     this.config = config;
+    this.reloadConfig = reloadConfig || null;
     this.fps = config.captureFps || 30;
     this.room = null;
     this.inCall = false;
@@ -84,6 +90,17 @@ export class CallClient extends EventTarget {
                             msg.includes('expired') || msg.includes('401') || msg.includes('403');
         this._emit('status', { state: 'connecting', error: e && e.message, authFailure });
         await sleep(authFailure ? 600000 : Math.min(1000 * 2 ** attempt, 60000));
+        // Only after an auth failure, and only after the wait. A rejected token is the one
+        // failure a retry cannot fix by itself, and it is also the one the Fleet Manager repairs
+        // on its own — so re-read config.json before trying again and the repair lands
+        // unattended. A network outage re-reads nothing: the config is not what is wrong, and a
+        // loopback fetch per retry would be noise.
+        if (authFailure && this.reloadConfig) {
+          try {
+            const fresh = await this.reloadConfig();
+            if (fresh && fresh.token) this.config = { ...this.config, ...fresh };
+          } catch (_) { /* the agent is busy; the next retry asks again */ }
+        }
       }
     }
   }

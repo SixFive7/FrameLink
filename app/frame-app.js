@@ -130,7 +130,14 @@ class FrameApp extends LitElement {
   // ---- LiveKit wiring -------------------------------------------------------
 
   _startCall() {
-    this.call = new CallClient(this.config);
+    // The reload hook returns the freshly fetched document rather than mutating this.config, so
+    // the client owns when it adopts a rotated token. The agent serves /config.json from the
+    // values its reconciler has recorded, so what comes back is a value that has been converged
+    // on — not whatever the Fleet Manager said most recently.
+    this.call = new CallClient(this.config, async () => {
+      await this._loadConfig();
+      return this.config;
+    });
     this.call.addEventListener('status', (e) => { this.callState = e.detail.state; });
     this.call.addEventListener('tracks', (e) => this._onTracks(e.detail));
     this.call.addEventListener('participant', (e) => this._onParticipant(e.detail));

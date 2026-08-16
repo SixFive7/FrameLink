@@ -17,6 +17,7 @@ public sealed class AgentSocketHandler(
     DeviceHandshake handshake,
     ISettingsStore settings,
     SettingsPublisher publisher,
+    LiveKit.CallProvisioning calls,
     AgentConnectionRegistry registry,
     TelemetryIngest telemetry,
     ControlOptions options,
@@ -63,6 +64,17 @@ public sealed class AgentSocketHandler(
         try
         {
             logger.DeviceOnline(deviceId, remoteAddress);
+
+            // Before the settings are resolved, so that a frame whose call token has aged into
+            // its last third collects the replacement in the same frame that carries everything
+            // else — no second push, no window, and nothing for the frame to ask for. This is
+            // where §3.7's "rotate at will" stops being a button an operator has to remember and
+            // becomes a property of reconnecting, which is the difference between the July-23
+            // expiry being survivable and it being invisible.
+            //
+            // A no-op for a frame whose token is fine, which is nearly every connect: a base64
+            // decode, four string comparisons and no write.
+            await calls.ReviewAsync(deviceId, force: false, cancellationToken).ConfigureAwait(false);
 
             // The first thing an adopted device receives, and the whole of the difference
             // between adopted and pending on this route.
