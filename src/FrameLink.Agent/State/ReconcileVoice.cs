@@ -1,4 +1,5 @@
 using System.Globalization;
+using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Protocol;
 
@@ -169,6 +170,33 @@ public static class ReconcileVoice
                 $"{name} attempt {status.Reconcile.Attempt} of {status.Reconcile.AttemptBudget}")
             : string.Create(CultureInfo.InvariantCulture, $"{name} attempt {status.Reconcile.Attempt}");
     }
+
+    /// <summary>
+    /// §2.7 item 9 — how to retry at the frame, or where the button is instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>What this replaces was false</b> (decision 77). The console stage printed <i>"This screen
+    /// has no buttons — the Try again button is in the Fleet Manager"</i>, which decision 72 shipped
+    /// honestly: nothing in this repository had ever captured an input device from a frame, so
+    /// whether the panel exposed one was genuinely unknown and the sentence was written for the
+    /// answer that needed no evdev reader. It has since been measured, and the panel does: a Goodix
+    /// digitiser on its own evdev node, tagged <c>ID_INPUT_TOUCHSCREEN</c>, emitting
+    /// <c>BTN_TOUCH</c>. A frame that says it cannot be touched, in front of a person touching it,
+    /// is the specific harm §2.7 exists to prevent, pointing the other way.
+    /// </para>
+    /// <para>
+    /// <b>Both sentences are still needed and both are now true of the frame that prints them.</b>
+    /// A frame whose panel is not up yet — the overlay is 2nd in the catalog and takes a reboot —
+    /// genuinely has no touchscreen, and on that frame the Fleet Manager really is where the button
+    /// is. The sentence is chosen from what the agent found rather than from what was assumed.
+    /// </para>
+    /// </remarks>
+    public static string RetryLine(TouchRetryState touch) => touch.Available
+        ? string.Create(
+            CultureInfo.InvariantCulture,
+            $"Touch the screen and hold for {(int)touch.Hold.TotalSeconds} seconds to try again.")
+        : "This frame has no touchscreen — the Try again button is in the Fleet Manager.";
 
     /// <summary>
     /// §2.7 item 8 — who to contact, in one sentence a non-technical reader can act on.

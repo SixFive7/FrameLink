@@ -425,6 +425,21 @@ public sealed class AgentHost
                 : "Somebody at the frame asked it to try again; nothing had given up.");
         };
 
+        // §2.7 item 9 on the console stage (decision 77). The browser stage's retry is a button on
+        // a page and arrives over the local channel; this one is the same reset reached by holding
+        // the panel, for the hour of a frame's life when there is no browser to put a button in.
+        // Offered exactly when the screen says it is, from the same predicate the screen renders,
+        // so a hold can never do nothing while the frame invites one.
+        var touch = new TouchRetry(new TouchRetryServices
+        {
+            Input = new EvdevTouchInput(HostTextFileReader.Instance, _log),
+            Hub = hub,
+            Clock = _clock,
+            Log = _log,
+            Offered = () => ReconcileVoice.HasStopped(hub.Current),
+            Retry = () => retryFromFrame(),
+        });
+
         var link = new ControlLink(
             new WebSocketControlTransportFactory(),
             hub,
@@ -551,6 +566,12 @@ public sealed class AgentHost
             screen.RunAsync(shutdown.Token),
             packages.RunAsync(shutdown.Token),
             button.RunAsync(shutdown.Token),
+
+            // §2.7 item 9's console half. It polls a character device twenty times a second and
+            // does nothing else, and it keeps running through an outage for the same reason the
+            // button does: holding the screen is how somebody standing in front of a stopped frame
+            // asks it to try again, and that is exactly the moment no help is coming.
+            touch.RunAsync(shutdown.Token),
 
             // Guide 9's `restart: always`, without Docker underneath it. It is not one of §2.10's
             // four behaviours and deliberately not a fifth: the agent is this child's *parent*, so

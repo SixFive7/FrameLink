@@ -158,6 +158,19 @@ public sealed record AgentStatus
     public DisplayVisibility? ConsoleVisibility { get; init; }
 
     /// <summary>
+    /// What the frame's own screen can do about a resource that has given up (§2.7 item 9,
+    /// decision 77).
+    /// </summary>
+    /// <remarks>
+    /// Two facts, and the screen needs both: whether there is a touchscreen at all — which decides
+    /// whether the console offers a retry or names the Fleet Manager instead — and when the finger
+    /// currently on the screen went down, which is what the hold indicator is drawn from. The
+    /// default is a frame with no touchscreen, because that is the honest answer everywhere except
+    /// a frame with a panel attached, including every machine the test suite runs on.
+    /// </remarks>
+    public TouchRetryState Touch { get; init; } = TouchRetryState.None;
+
+    /// <summary>
     /// Whether the reconciler currently sees drift that §2.6 says must stop the product.
     /// </summary>
     /// <remarks>

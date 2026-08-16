@@ -295,16 +295,11 @@ public static class StageRenderer
 
             AddField(lines, string.Empty, ReconcileVoice.ContactLine(status.Contact), inner, colour);
 
-            // §2.7 item 9. The console stage has no touch input — ITerminal has no read of any
-            // kind — so it says where the button is instead of drawing one that cannot be
-            // pressed. An affordance that does nothing is worse than an honest instruction
-            // (decision 72).
-            AddField(
-                lines,
-                string.Empty,
-                "This screen has no buttons — the Try again button is in the Fleet Manager.",
-                inner,
-                colour);
+            // §2.7 item 9, and the sentence is chosen from what the agent found rather than from
+            // what was assumed (decision 77). A frame with a touchscreen says how to use it; a
+            // frame without one — every frame whose panel overlay has not been applied yet — names
+            // the Fleet Manager, which is then true rather than a hedge.
+            AddField(lines, string.Empty, ReconcileVoice.RetryLine(status.Touch), inner, colour);
         }
 
         return lines;
@@ -355,6 +350,32 @@ public static class StageRenderer
         bool colour)
     {
         var barWidth = Math.Max(8, inner - 34);
+
+        // §2.7 item 9. A finger is on the screen right now, so this outranks even the stopped line
+        // below it: the person doing it has to be able to see that it is being counted, or they let
+        // go at two seconds and conclude the screen is dead.
+        //
+        // It is not an exception to decision 70. That rule forbids animating work that is not
+        // happening, and what moves here is the person's own hold — determinate, measured against
+        // the instant being rendered rather than against a tick counter, and gone the moment they
+        // lift. Nothing about it claims the reconciler is doing anything.
+        if (status.Touch.HoldingSince is not null)
+        {
+            var left = Math.Max(0, (int)Math.Ceiling(status.Touch.Remaining(now).TotalSeconds));
+
+            return Compose(
+                [
+                    new Run(Pad("Try again", LabelWidth), StagePalette.Label),
+                    new Run(Bar(status.Touch.Progress(now), barWidth) + "  ", StagePalette.Blue),
+                    new Run(
+                        left <= 0
+                            ? "keep holding"
+                            : string.Create(CultureInfo.InvariantCulture, $"keep holding — {left}s"),
+                        StagePalette.Body),
+                ],
+                inner,
+                colour);
+        }
 
         // §2.7 item 7, and the single most consequential branch in this method: it comes first,
         // and it does not animate.

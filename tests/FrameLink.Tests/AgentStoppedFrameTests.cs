@@ -212,15 +212,18 @@ public sealed class AgentStoppedFrameTests
     }
 
     [Fact]
-    public void The_console_stage_names_the_fleet_manager_instead_of_offering_a_button()
+    public void The_console_stage_names_the_fleet_manager_when_this_frame_has_no_touchscreen()
     {
-        // Decision 72, and the honest half of it. The console stage has no input path — ITerminal
-        // has no read of any kind — and nothing in this repository has ever captured an input
-        // device from a frame, so it says where the button is rather than drawing one it cannot
-        // implement.
+        // Decision 72's honest half, kept and now true of the frame that prints it. The sentence it
+        // used to print — "This screen has no buttons" — was a claim about the hardware, made when
+        // nothing in this repository had ever captured an input device from a frame. It has since
+        // been measured and the panel does expose one, so the claim is now conditional on what the
+        // agent found rather than on what was assumed (decision 77). This status carries the
+        // default, which is a frame with no touchscreen: every workstation, and every frame whose
+        // panel overlay has not been applied yet.
         var frame = StageRenderer.Render(Stopped, DateTimeOffset.UnixEpoch, tick: 0, 160, 30, colour: false);
 
         Assert.Contains("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
-        Assert.DoesNotContain("touch", frame, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("hold for", frame, StringComparison.Ordinal);
     }
 }
