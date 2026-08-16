@@ -92,9 +92,11 @@ Docker runs inside a small virtual machine, and Windows puts a second, separate 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-This workstation's `C:\Users\jori\.wslconfig` sets `networkingMode=mirrored`, which makes the Linux virtual machine share this PC's network interfaces rather than sit behind a private one. A consequence of that sharing is that ports Docker publishes are bound *inside* the virtual machine, so they are governed by the Hyper-V firewall — a separate rule set from the Windows Firewall you see in the control panel, with its own default action per virtual machine.
+`networkingMode=mirrored` in `C:\Users\jori\.wslconfig` makes the Linux virtual machine share this PC's network interfaces rather than sit behind a private one. A consequence of that sharing is that ports Docker publishes are bound *inside* the virtual machine, so they are governed by the Hyper-V firewall — a separate rule set from the Windows Firewall you see in the control panel, with its own default action per virtual machine. **Whether that line is in your `.wslconfig` is the whole of whether this step applies to you**, and it is worth opening the file and looking before you run anything: this workstation had it when the effect below was measured and does not have it now, so the same PC has been on both sides of this.
 
-The effect was measured rather than guessed, from a network namespace that is not this PC's own network stack, which is the closest thing available to standing where the frame stands. Against `10.20.30.200:5199`, the Fleet Manager started by hand as an ordinary Windows program: `200` in three milliseconds. Against `10.20.30.200:5299` and `10.20.30.200:7880`, both published by Docker: both timed out after five seconds. Same address, same host, same moment; the difference is which side of the virtual machine boundary the listener is on.
+The effect was measured rather than guessed, from a network namespace that is not this PC's own network stack, which is the closest thing available to standing where the frame stands. With mirrored networking on, against `10.20.30.200:5199`, the Fleet Manager started by hand as an ordinary Windows program: `200` in three milliseconds. Against `10.20.30.200:5299` and `10.20.30.200:7880`, both published by Docker: both timed out after five seconds. Same address, same host, same moment; the difference is which side of the virtual machine boundary the listener is on.
+
+The other half was measured too, on the same PC after the line was removed from `.wslconfig` and Windows was restarted. `C:\Users\jori\.wslconfig` then read `[wsl2]`, `dnsTunneling=true`, `autoProxy=true` and nothing else, `Get-NetFirewallHyperVRule` listed no FrameLink rule at all, and the frame at `10.20.30.53` reached the container on `5199` and was adopted within seconds of the stack starting. So with ordinary NAT publishing the rules below are not needed, and the way you tell which case you are in is the file, not the symptom.
 
 The RUN block's first two lines say why in one screen. The virtual machine's default inbound action is `Block` and its loopback is enabled — which is precisely the observed behaviour, because `127.0.0.1` is loopback and the LAN address is not — and the only inbound rules that allow anything are ICMP and mDNS. There is no rule permitting TCP or UDP from anywhere, so the frames' traffic is dropped before it reaches Docker at all.
 
@@ -243,6 +245,8 @@ Skip this step entirely if you have no existing database — step 6 will create 
 
 **It refuses rather than risks.** A `framelink.db-wal` file beside the database means SQLite did not close cleanly, which on a live folder means a Fleet Manager still has it open; copying a database and its write-ahead log while a writer is mid-transaction produces a set of files that do not agree with each other, and the symptom arrives days later as a fleet that has forgotten a frame. So the script stops and says so. A volume that already holds a database is left alone and the script exits successfully, because a second run is far more likely to be somebody repeating a procedure than somebody asking to overwrite a live fleet with an older copy.
 
+**A `-wal` left behind by a Fleet Manager that was killed is a different problem, and it is the one that silently loses data.** Stopping a server cleanly folds the write-ahead log back into `framelink.db` and deletes it; killing one — a reboot, a closed terminal window, a power cut — leaves the log sitting there holding every transaction committed since the last checkpoint, and `framelink.db` alone is the fleet as it was some hours ago. The script copies `framelink.db` and nothing else, so importing in that state produces a volume that is internally consistent, verifies by hash, and is quietly out of date. Measured here on the real fleet database: the file alone said the frame last checked in at 10:35 UTC running agent `0.0.0+fe61154.dirty`, while the same file with its 667 kB log replayed said 11:38 UTC and `0.0.0+0384c01.dirty` — an hour of the fleet's history, sitting in a file the import does not read. Both looked perfectly healthy. What makes the difference recoverable is that a log is only ever *ahead* of the database, so replaying it is a repair rather than a guess.
+
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
@@ -252,21 +256,21 @@ bash deploy/fleet-manager/import-database.sh /c/Users/jori/framelink-control-dat
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
-[import] source /c/Users/jori/framelink-scratch/devstack/src-clean
+[import] source /c/Users/jori/framelink-scratch/cutover-20260816T183153Z/import-src
 [import] volume framelink-data
 [import] volume framelink-data exists
-[import] source sha256 e2a7ba018def2e991a297a971d3e59d0b57ae5668d37f01b0441f721162175ed
-[import] imported sha256 e2a7ba018def2e991a297a971d3e59d0b57ae5668d37f01b0441f721162175ed — byte for byte identical
-total 628
-drwxr-xr-x 2 10001 10001   4096 Aug 16 03:15 .
-drwxr-xr-x 1 root  root    4096 Aug 16 03:15 ..
--rw-r----- 1 10001 10001 634880 Aug 16 03:03 framelink.db
+[import] source sha256 ab42c16a56917364b01bd2b04d57e7a307897e0bede6ea30d591206fb03f6d93
+[import] imported sha256 ab42c16a56917364b01bd2b04d57e7a307897e0bede6ea30d591206fb03f6d93 — byte for byte identical
+total 804
+drwxr-xr-x 2 10001 10001   4096 Aug 16 18:41 .
+drwxr-xr-x 1 root  root    4096 Aug 16 18:41 ..
+-rw-r----- 1 10001 10001 815104 Aug 16 18:32 framelink.db
 [import] done. The source directory was not modified.
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The two `sha256` lines must be the same string, and the line that says so is the whole point of the step. One `framelink.db` in the listing, owned by `10001 10001` — that is the unprivileged user inside the image, and a file owned by anyone else is one the Fleet Manager cannot write. **The capture above names a scratch folder as its source rather than the folder in the command, because it was taken against a copy of the live database while the live one was still in use; the source path is the only line that differs.** Two refusals are normal rather than faults. `ERROR: ...framelink.db-wal exists, so a Fleet Manager still has this database open` means exactly what it says: stop whatever is running, wait for the `-wal` and `-shm` files to disappear from the folder, and run it again — this was captured verbatim from a real run against the live folder while the Fleet Manager was up, and the folder was untouched afterwards. `the volume already holds framelink.db (sha256 ...)` followed by `nothing to do` is the idempotent path, and on a second run it is the correct answer.
+The two `sha256` lines must be the same string, and the line that says so is the whole point of the step. One `framelink.db` in the listing, owned by `10001 10001` — that is the unprivileged user inside the image, and a file owned by anyone else is one the Fleet Manager cannot write. **The capture above names a folder under `framelink-scratch` rather than the one in the command, because the Fleet Manager it came from had been killed rather than stopped and its log had to be replayed first; the source path is the only line that differs.** That recovery is three steps and it never writes to the folder you are recovering: copy `framelink.db`, `framelink.db-wal` and `framelink.db-shm` into an empty folder, open the copy once with any SQLite that understands write-ahead logging — `python -c "import sqlite3; c=sqlite3.connect('framelink.db'); print(c.execute('PRAGMA integrity_check').fetchone()); c.execute('PRAGMA wal_checkpoint(TRUNCATE)'); c.close()"` in that folder does it — and confirm the `-wal` and `-shm` are gone and `integrity_check` said `ok`. Point the import at that folder. Note that *reading* a write-ahead-logging database creates an empty `-wal` and `-shm` again, so if you inspect the recovered copy before importing, copy the single file into a fresh folder rather than deleting anything. Two refusals are normal rather than faults. `ERROR: ...framelink.db-wal exists, so a Fleet Manager still has this database open` means exactly what it says: stop whatever is running, wait for the `-wal` and `-shm` files to disappear from the folder, and run it again — this was captured verbatim from a real run against the live folder while the Fleet Manager was up, and the folder was untouched afterwards. `the volume already holds framelink.db (sha256 ...)` followed by `nothing to do` is the idempotent path, and on a second run it is the correct answer.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -351,7 +355,7 @@ curl -fsS http://127.0.0.1:5299/healthz
 curl -fsS http://127.0.0.1:5299/api/status
 curl -fsS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:7880/
 docker port framelink-dev | grep -c udp
-docker logs framelink-dev 2>&1 | head -8
+docker logs framelink-dev 2>&1 | head -12
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
@@ -360,20 +364,24 @@ docker logs framelink-dev 2>&1 | head -8
 ok
 {"configured":true,"variable":"FRAMELINK_OPERATOR_PASSWORD"}
 200
-198
+60
 info: fl-control[1000]
       FrameLink Fleet Manager starting with an operator password configured.
 info: FrameLink.Control.Alerting.FleetWatch[1901]
       ALERT call-server-down cleared [call-server-down]: No frame in this fleet can place a call
+warn: FrameLink.Control.Alerting.FleetWatch[1900]
+      ALERT device-offline opened [device-offline:T1RJ-6JCQ-9HN8-3920]: "Mule" has gone quiet — The frame has not been in contact with this Fleet Manager since 2026-08-16 11:38 UTC, which is 7 hours ago. It may be switched off, off the network, or stuck. Its photos keep playing if it was green when contact dropped.
 info: FrameLink.Control.LiveKit.LiveKitService[1809]
       LiveKit 1.13.5 installed at /var/lib/fl-control/livekit/livekit-server.
 info: FrameLink.Control.LiveKit.LiveKitService[1810]
-      LiveKit 1.13.5 started as pid 22, signalling on port 7880.
+      LiveKit 1.13.5 started as pid 23, signalling on port 7880.
+2026-08-16T18:43:19.872Z	INFO	livekit	routing/interfaces.go:181	using single-node routing
+2026-08-16T18:43:19.881Z	INFO	livekit	service/server.go:292	starting LiveKit server	{"portHttp": 7880, "nodeID": "ND_GAfbZ4MZFGti", "nodeIP": "172.18.0.2", "version": "1.13.5", "bindAddresses": ["0.0.0.0"], "rtc.portTCP": 7881, "rtc.portICERange": [50000, 50059]}
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-`ok`, then `"configured":true`, then `200` from the call server, then a count, then `started as pid`. The count is `198` here and not `200` for the reason step 1 gives — two media ports were on loan to other programs at the moment the container started — and after step 1's reservation it should read `200`. A count in the single digits means the range did not publish at all. The `ALERT ... cleared` line appears only when the database you imported carried an open alert that this instance has just resolved, which is a good sign rather than a warning: the state came across. On any start after the first, the `installed at` line is **absent**, and that is the correct idempotent behaviour. `refused: the download does not match the checksum upstream published` means the release was tampered with or the pin is stale, and the Fleet Manager will not run it — everything except calling keeps working. **The off-host reachability check is not in the captured block above, and its result on this workstation was a failure rather than a success:** run `docker run --rm --network host --entrypoint sh framelink/fleet-manager:latest -c "curl -sS -m 5 -o /dev/null -w '%{http_code}\n' http://10.20.30.200:5299/healthz"` and compare it against the same request to the Fleet Manager you start by hand. Before step 2's firewall rules exist, the hand-started one answered `200` in three milliseconds and the container timed out after five seconds. Anything other than a prompt `200` from the container means step 2 is unfinished, and no frame will be able to connect in step 8.
+`ok`, then `"configured":true`, then `200` from the call server, then `60`, then `started as pid` and LiveKit's own two lines with `rtc.portICERange: [50000, 50059]` — which is step 1's reservation and the stack's published range agreeing, read off the running server rather than assumed. **The block was captured with the stack on `5199` rather than `5299`, because on that run nothing held `5199` and the rehearsal was skipped; the port in the first two commands is the only difference.** A count below `60` means something borrowed a media port before the container started and step 1's reservation is not in place; a count in the single digits means the range did not publish at all. The `ALERT call-server-down cleared` line appears only when the database you imported carried an open alert that this instance has just resolved, which is a good sign rather than a warning: the state came across, and the call server that was missing is now running. The `ALERT device-offline opened` line beside it is the same mechanism reading the other half of an imported database — the frame's last contact is hours old because the server it was talking to has been down, and it clears on its own within five minutes of the frame reconnecting in step 8. On any start after the first, the `installed at` line is **absent**, and that is the correct idempotent behaviour. `refused: the download does not match the checksum upstream published` means the release was tampered with or the pin is stale, and the Fleet Manager will not run it — everything except calling keeps working. **The off-host reachability check is not in the captured block above**: run `docker run --rm --network host --entrypoint sh framelink/fleet-manager:latest -c "curl -sS -m 5 -o /dev/null -w '%{http_code}\n' http://10.20.30.200:5199/healthz"`, substituting your own LAN address, and anything other than a prompt `200` means step 2 is unfinished and no frame will be able to connect in step 8. On the run captured above that question was answered by the frame itself half a minute later, which is the only version of it that counts.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -422,11 +430,25 @@ docker compose -p framelink -f deploy/fleet-manager/framelink.dev.yml ps --forma
  Network framelink-dev Removed
 DRIVER    VOLUME NAME
 local     framelink-data
+ Network framelink-dev Creating 
+ Network framelink-dev Created 
+ Container framelink-dev Creating 
+ Container framelink-dev Created 
+ Container framelink-dev Starting 
+ Container framelink-dev Started 
+NAME            IMAGE                                   STATUS
+framelink-dev   framelink/fleet-manager:0.0.0-fac2694   Up 3 seconds (health: starting)
+info: FrameLink.Control.Agent.AgentSocketHandler[1301]
+      Device T1RJ-6JCQ-9HN8-3920 is online from 172.18.0.1.
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-Line 1 must **fail** with a `curl: (7)` connection refusal naming port 5199 before you go any further — the exact wording of the rest of that line varies between curl builds and does not matter. If it answers `ok`, the hand-started Fleet Manager is still running: stop it in the window you started it in, and check the folder until `framelink.db` is the only file left in it. The captured block above is lines 2 and a `docker volume ls` run straight afterwards, included together because the pair is the thing worth seeing — Compose removed the container and the network and did not touch the volume. **Lines 4 and 5 were not captured, because running them would have taken port 5199 from the Fleet Manager a live frame was using at the time.** Their output is line for line what step 6 showed, with `5199` in place of `5299`; if Docker instead answers `address already in use` for 5199, line 1 was not really failing. Line 3's output is step 5's. The real acceptance test is not in this block at all: run `docker logs -f framelink-dev` and wait for a frame to reconnect, which takes under a minute, then open `http://127.0.0.1:5199` in a browser, sign in, and confirm the frame is listed under the name you gave it rather than sitting in the adoption queue as a stranger. A frame in the queue means the volume holds the wrong database — go back, and step 9's archive is what you restore.
+Line 1 must **fail** with a `curl: (7)` connection refusal naming port 5199 before you go any further — the exact wording of the rest of that line varies between curl builds and does not matter. If it answers `ok`, the hand-started Fleet Manager is still running: stop it in the window you started it in, and check the folder until `framelink.db` is the only file left in it. **The captured block above is three runs joined:** lines 2 and a `docker volume ls` straight afterwards, from a session where a step-6 container existed — the pair is worth seeing together, because Compose removed the container and the network and did not touch the volume — then lines 4 and 5 from the cutover itself, then the one line from `docker logs framelink-dev` that decides whether any of this worked. Line 3's output is step 5's. If Docker answers `address already in use` for 5199, line 1 was not really failing.
+
+`Device ... is online from ...` is the frame arriving — run `docker logs -f framelink-dev` and wait for it, which takes under a minute. On the run captured above it appeared thirty seconds after the container started, with nothing done to the frame at all. The address beside it is the container network's gateway rather than the frame's own address, because Docker's published port rewrites the source address — the frame's real address still appears in its own journal and in nothing else. Then open `http://127.0.0.1:5199` in a browser, sign in, and confirm the frame is listed under the name you gave it rather than sitting in the adoption queue as a stranger. A frame in the queue means the volume holds the wrong database — go back, and step 9's archive is what you restore.
+
+**Expect each frame to reboot once, shortly after it reconnects, and expect it to be the calling settings that cause it.** This is the first Fleet Manager in the fleet's life that has a call server, so `call.livekitUrl` and `call.token` reach the frame as settings it has never held; the agent records the URL, and its rule is that a change is not believed until it has survived a restart, so it reboots to prove it. The frame's own journal says so in those words — `app.config.livekit-url: drifted` with `observed 'nothing recorded on this frame'`, then `rebooting to prove ... stuck (attempt 1)`. On the run captured above the frame rebooted, came back, and reported `converged` with all 81 of its resources in sync about a minute later. A frame that reboots repeatedly for the *same* resource, with the attempt number climbing to 3, is the fault this looks like and is not: check that `FRAMELINK_LIVEKIT_PUBLIC_URL` names an address the frame can actually reach before assuming the frame is broken.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
