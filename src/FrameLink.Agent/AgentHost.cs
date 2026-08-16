@@ -596,7 +596,7 @@ public sealed class AgentHost
 
         try
         {
-            await Task.WhenAll(running).ConfigureAwait(false);
+            await WhenAllOrFirstFaultAsync(running, shutdown).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -612,6 +612,66 @@ public sealed class AgentHost
         }
 
         return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+    }
+
+    /// <summary>
+    /// Awaits every loop, but stops waiting the moment one of them <i>throws</i>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A plain <see cref="Task.WhenAll(IEnumerable{Task})"/> here is a silence, and it cost a
+    /// frame twenty-nine minutes.</b> Measured 2026-08-16: the reconcile loop threw on its first
+    /// reboot request after an upgrade, its task went to Faulted — and <c>WhenAll</c> does not
+    /// surface an exception until <i>every</i> task has finished. The other nine loops run for the
+    /// life of the frame, so the exception sat inside a completed task with nothing waiting to read
+    /// it. The process stayed up, the uplink stayed connected, the Fleet Manager went on reporting
+    /// the device online, the console stage went on painting, and the one loop that converges
+    /// anything was gone. The exception was finally printed thirty minutes later, by the shutdown
+    /// that a person triggered by hand.
+    /// </para>
+    /// <para>
+    /// <b>Ending is not faulting, which is why this cannot simply be
+    /// <see cref="Task.WhenAny(IEnumerable{Task})"/>.</b> <c>screen</c> returns by design the moment
+    /// it learns this machine has no consoles to switch between, which is every run off a frame, and
+    /// a first-completion wait would read that as a crash and take the agent down on every boot. So
+    /// the trigger is a fault and only a fault: a loop that returns is left alone, a loop that
+    /// throws cancels the other nine so they unwind, and the original exception is then rethrown by
+    /// the <c>WhenAll</c> it was always going to come out of.
+    /// </para>
+    /// <para>
+    /// Cancelling rather than abandoning matters: the caller's next act is
+    /// <see cref="ExitCodes.Unrecoverable"/> and a systemd restart, and the loops each own something
+    /// — a browser session, a child process, a socket — that should be given its ordinary shutdown
+    /// path rather than being left to process death.
+    /// </para>
+    /// </remarks>
+    public static async Task WhenAllOrFirstFaultAsync(IReadOnlyList<Task> running, CancellationTokenSource shutdown)
+    {
+        ArgumentNullException.ThrowIfNull(running);
+        ArgumentNullException.ThrowIfNull(shutdown);
+
+        foreach (var task in running)
+        {
+            _ = task.ContinueWith(
+                static (_, state) =>
+                {
+                    try
+                    {
+                        ((CancellationTokenSource)state!).Cancel();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        // The wait already finished and the source is gone; there is nothing left
+                        // to stop, and a fault racing the shutdown must not become a second fault.
+                    }
+                },
+                shutdown,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.DenyChildAttach,
+                TaskScheduler.Default);
+        }
+
+        await Task.WhenAll(running).ConfigureAwait(false);
     }
 
     /// <summary>

@@ -829,6 +829,20 @@ public sealed class MixerSwitchResource : IResource
 /// the frame names <c>PCM,0</c> and says nothing about <c>PCM,1</c>, which is consistent with that
 /// and does not establish it.
 /// </para>
+/// <para>
+/// <b>And it runs before the resource it rescues, not after — which is the opposite of how it was
+/// first written.</b> It was declared depending on both mixer volumes, so it could not be acted on
+/// until <c>audio.mixer.pcm0-playback-volume</c> was <c>InSync</c> — a state that resource cannot
+/// reach while WirePlumber is holding the sink at its default, which is the entire fault this one
+/// exists for. Measured on the frame 2026-08-16: <c>PCM,0</c> exhausted its budget and escalated,
+/// the escalation stopped the pass, and the rescue never executed once. Applying the catalog's own
+/// dependency test — <i>would this resource have to guess?</i> — the two edges were never warranted
+/// anyway: <c>wpctl get-volume</c> reads WirePlumber's sink and touches no ALSA control, and the
+/// desired value comes from the <i>same fleet setting</i> through the sibling resource object, which
+/// answers whatever state that sibling is in. What is real is the edge in the other direction, and
+/// it now exists: <c>PCM,0</c> cannot hold 60 until WirePlumber has been told to stop asking for
+/// −23 dB, so the mixer stage depends on this one.
+/// </para>
 /// </remarks>
 public sealed class WirePlumberVolumeResource : IResource
 {
@@ -892,13 +906,19 @@ public sealed class WirePlumberVolumeResource : IResource
     /// <inheritdoc/>
     public string Name => ResourceName;
 
-    /// <inheritdoc/>
+    /// <summary>The daemon that has to be installed, and the session <c>wpctl</c> has to run in.</summary>
+    /// <remarks>
+    /// Exactly what Observe and Act need and nothing else. The two mixer-volume edges that used to
+    /// be here inverted the ordering against the resource this one rescues — see the type's remarks
+    /// — and neither survived the catalog's dependency test: nothing in <c>wpctl get-volume</c> or
+    /// <c>wpctl set-volume</c> reads or writes an ALSA control, and the desired level is read from
+    /// the shared fleet setting rather than from the sibling's converged state, so this resource
+    /// never has to guess.
+    /// </remarks>
     public IReadOnlyList<string> DependsOn =>
     [
         PackageResource.Prefix + "wireplumber",
         ConsoleAutologinResource.ResourceName,
-        AudioCatalog.Pcm0VolumeResourceName,
-        AudioCatalog.Pcm1VolumeResourceName,
     ];
 
     /// <inheritdoc/>
@@ -1541,6 +1561,15 @@ public static class AudioCatalog
                 SndUsbAudioIndexResource.ResourceName,
                 XvfFirmwareResource.ResourceName,
                 Pcm0SwitchResourceName,
+
+                // The measured edge, and the one the catalog had backwards. This control has a
+                // second owner in the login session, and while that owner is asking for -23 dB no
+                // amount of `amixer sset` keeps 60 across a boot — measured on the frame, three
+                // attempts and an escalation. So WirePlumber is told first and this stage is
+                // asserted afterwards, which is the only order in which it can hold. `PCM,1` takes
+                // no such edge: it is a second hardware stage no route volume reaches, and it was
+                // never observed away from 60.
+                WirePlumberVolumeResource.ResourceName,
             ]);
 
         var pcm1Volume = new MixerVolumeResource(
@@ -1586,17 +1615,21 @@ public static class AudioCatalog
             new XvfAmplifierResource(tool, context.Files),
             pcm0Switch,
             pcm1Switch,
+
+            // Ahead of the mixer levels, not between them and the file that persists them. The
+            // hardware mixer has a second owner living in the login session, and that owner has to
+            // be brought to the frame's number *before* the stage it holds down is asserted —
+            // otherwise the stage spends its whole budget losing an argument nobody has had yet.
+            // The declaration order is only the reading order; the DAG edge on pcm0Volume is what
+            // actually enforces it.
+            new WirePlumberVolumeResource(session, context.Session, mixer, pcm0Volume),
+
             pcm0Volume,
             pcm1Volume,
             capture,
 
-            // Position 61a, and it is deliberately between the hardware values and the file that
-            // persists them. The hardware mixer has a second owner living in the login session
-            // (see WirePlumberVolumeResource), and `alsactl store` records whatever is live — so
-            // the store has to happen after both owners agree, not after only one of them has
-            // written.
-            new WirePlumberVolumeResource(session, context.Session, mixer, pcm0Volume),
-
+            // Last of the audio block, because `alsactl store` records whatever is live and must
+            // therefore run after every owner of every stage has written.
             new AlsaStoredStateResource(context.Processes, context.Files, [pcm0Volume, pcm1Volume, capture]),
         ];
     }

@@ -314,6 +314,71 @@ public sealed class AgentConflictDriftTests
     }
 
     [Fact]
+    public async Task A_journal_written_before_the_floor_existed_does_not_kill_the_loop()
+    {
+        // Measured on the frame 2026-08-16. The frame carried a journal written by a build that
+        // predates decision 79, so it had no `reboots` key at all. `WhenWritingNull` then keeps it
+        // absent on every rewrite, so the omission is self-perpetuating rather than repaired by the
+        // first write of the new build — and the first reboot request after the upgrade threw
+        // `ArgumentNullException (Parameter 'reboots')` out of Within, inside the reconcile loop's
+        // task. Nothing announced it: the process stayed up, the uplink stayed connected, the Fleet
+        // Manager went on reporting the device online, and the frame sat in `awaiting-reboot` for
+        // twenty-nine minutes until it was restarted by hand. The upgrade path was the one path the
+        // floor's own tests could not reach, because they all start from a journal this build wrote.
+        using var store = new TemporaryStore();
+        var log = new RecordingLog();
+        var clock = new ManualClock();
+
+        store.Store.WriteText(
+            ReconcileJournal.FileName,
+            """
+            {
+              "ledger": [],
+              "lastBootId": "d6ab25f9",
+              "telemetrySequence": 1112
+            }
+            """);
+
+        var journal = new ReconcileJournal(store.Store, log);
+
+        Assert.NotNull(journal.Read().Reboots);
+        Assert.Empty(journal.Read().Reboots);
+
+        var floor = new RebootFloor(
+            new InProcessRebootBoundary(new MutableBootIdentity()),
+            journal,
+            clock,
+            log,
+            limit: 5,
+            window: TimeSpan.FromHours(6));
+
+        var crossing = await floor.CrossAsync(Request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(RebootCrossing.Crossed, crossing.Crossing);
+        Assert.Equal(1, floor.Recent());
+    }
+
+    [Fact]
+    public void A_journal_missing_its_lists_reads_as_empty_rather_than_null()
+    {
+        // The same normalisation, asserted on the journal itself rather than through the floor,
+        // because `Reboots` is not the only list here and the next one added would inherit the
+        // identical defect. An absent key and an explicit null are both "this build wrote nothing
+        // here", and neither may reach a caller as a null list.
+        using var store = new TemporaryStore();
+        var log = new RecordingLog();
+
+        store.Store.WriteText(ReconcileJournal.FileName, """{ "reboots": null, "ledger": null }""");
+
+        var state = new ReconcileJournal(store.Store, log).Read();
+
+        Assert.NotNull(state.Reboots);
+        Assert.NotNull(state.Ledger);
+        Assert.Empty(state.Reboots);
+        Assert.Empty(state.Ledger);
+    }
+
+    [Fact]
     public async Task The_floor_refuses_past_its_count_and_says_so_in_a_sentence()
     {
         using var store = new TemporaryStore();

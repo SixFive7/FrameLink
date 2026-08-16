@@ -322,6 +322,42 @@ public sealed class ReconcileJournal
         return state with { Ledger = ledger };
     }
 
+    /// <summary>
+    /// Every list on the state non-null, whatever the file on disk did or did not contain.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is an upgrade seam, and it cost a frame twenty-nine silent minutes.</b> A property's
+    /// initialiser only runs for a property the deserialiser does not touch <i>and</i> does not have
+    /// to construct — an absent <c>reboots</c> key and an explicit <c>"reboots": null</c> both arrive
+    /// here as a null list, not as the empty one the declaration appears to promise. So a frame
+    /// carrying a journal written before <see cref="ReconcileJournalState.Reboots"/> existed read it
+    /// back as null, and <see cref="RebootFloor.Within"/> threw <c>ArgumentNullException</c> on the
+    /// first reboot request after the upgrade — inside the reconcile loop's task, where nothing was
+    /// waiting to hear about it.
+    /// </para>
+    /// <para>
+    /// <b>Self-perpetuating, which is why it could not heal.</b> <c>WhenWritingNull</c> means a null
+    /// list is omitted again on every rewrite, so the missing key survived every subsequent write of
+    /// the new build. Only a read that repairs the shape ends it.
+    /// </para>
+    /// <para>
+    /// Applied to every list rather than to the one that broke: the next field added to this record
+    /// would inherit the identical defect, and an empty list is the correct reading of "this build
+    /// wrote nothing here" for all of them.
+    /// </para>
+    /// </remarks>
+    public static ReconcileJournalState Normalise(ReconcileJournalState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        return state with
+        {
+            Ledger = state.Ledger ?? [],
+            Reboots = state.Reboots ?? [],
+        };
+    }
+
     private ReconcileJournalState Load()
     {
         var text = _store.ReadText(FileName);
@@ -332,8 +368,9 @@ public sealed class ReconcileJournal
 
         try
         {
-            return JsonSerializer.Deserialize(text, AgentJson.Default.ReconcileJournalState)
-                ?? new ReconcileJournalState();
+            return Normalise(
+                JsonSerializer.Deserialize(text, AgentJson.Default.ReconcileJournalState)
+                    ?? new ReconcileJournalState());
         }
         catch (JsonException exception)
         {

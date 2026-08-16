@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-16T07:12:00Z",
+  "updatedUtc": "2026-08-16T08:47:40Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -11,7 +11,12 @@
     "Credentials are supplied inline per session and never stored, logged or defaulted (CLAUDE.md section 1.2). The environment block names which variable unlocks what; it holds no values and must never be made to."
   ],
   "currentMilestone": "M2.5",
-  "inFlight": null,
+  "inFlight": {
+    "command": "build",
+    "startedUtc": "2026-08-16T08:47:40Z",
+    "project": "src/FrameLink.Agent",
+    "rid": "linux-arm64"
+  },
   "nextActions": [
     "FIRST - a previous session died during `fl.py build` (started 2026-08-16T06:48:01Z). Whatever it was changing is unverified; re-run that subcommand before trusting anything downstream of it.",
     "Orient before touching anything: version2.md section 5.1 is the milestone ladder, reference/resource-catalog.md is the resource spec M3 is migrating, reference/v1-state-inventory.txt is the parity target, `git log --oneline -40` is the reasoning record. The 'orientation' block in this file says what each one is for.",
@@ -114,7 +119,7 @@
       "stateFrom": "resources",
       "evidence": {
         "how": "derived-from-the-repository",
-        "what": "All 79 catalog resources are implemented in the agent, plus 1 the catalog does not describe; 36 of 80 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
+        "what": "All 80 catalog resources are implemented in the agent, plus 1 the catalog does not describe; 36 of 81 have ever converged on real hardware. Both numbers are measured on every write, not recorded.",
         "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. The state-diff harness now exists (`fl.py parity`, judged by tools/FrameLink.Parity) and is tested against fixtures, but it has never been run against a frame: no observation has ever been collected and no parity verdict has ever been issued. The other two bars have no harness."
       }
     },
@@ -148,9 +153,9 @@
       "title": "Native AOT linux-arm64 binary built in an emulated container",
       "state": "proven",
       "provenBy": "fl.py build",
-      "provenUtc": "2026-08-16T06:54:11Z",
+      "provenUtc": "2026-08-16T08:03:15Z",
       "provenCommand": "fl.py build",
-      "detail": "0.0.0+c3116bc.dirty linux-arm64 10464144 bytes in framelink-build:arm64"
+      "detail": "0.0.0+1ce597d.dirty linux-arm64 10530360 bytes in framelink-build:arm64"
     },
     "test-runner": {
       "title": "Test suite runs and propagates its exit code",
@@ -172,9 +177,9 @@
       "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
       "state": "proven",
       "provenBy": "fl.py deploy",
-      "provenUtc": "2026-08-16T06:54:36Z",
+      "provenUtc": "2026-08-16T08:47:11Z",
       "provenCommand": "fl.py deploy",
-      "detail": "0.0.0+c3116bc.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
+      "detail": "0.0.0+1ce597d.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
     },
     "power-cycle": {
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
@@ -188,23 +193,23 @@
       "title": "Screenshot and journal tail come back from the mule",
       "state": "proven",
       "provenBy": "fl.py collect",
-      "provenUtc": "2026-08-16T07:12:00Z",
+      "provenUtc": "2026-08-16T08:20:03Z",
       "provenCommand": "fl.py collect",
-      "detail": "screenshot via framebuffer, journal 204 lines"
+      "detail": "screenshot via grim, journal 200 lines"
     },
     "closed-loop": {
       "title": "A code change reaches the mule and is verified with no human help (M0 done)",
       "state": "proven",
       "provenBy": "fl.py build + fl.py deploy",
-      "provenUtc": "2026-08-16T06:54:36Z",
+      "provenUtc": "2026-08-16T08:03:45Z",
       "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
-      "detail": "fl-agent 0.0.0+c3116bc.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
+      "detail": "fl-agent 0.0.0+1ce597d.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
     }
   },
   "resources": {
-    "catalogTotal": 79,
+    "catalogTotal": 80,
     "catalogTotalReadFrom": "reference/resource-catalog.md",
-    "implemented": 80,
+    "implemented": 81,
     "implementedReadFrom": "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
     "remaining": 0,
     "beyondCatalog": 1,
@@ -312,49 +317,45 @@
   "artifacts": {
     "agentBinary": {
       "path": "build/out/fl-agent",
-      "version": "0.0.0+c3116bc.dirty",
+      "version": "0.0.0+1ce597d.dirty",
       "runtimeIdentifier": "linux-arm64",
-      "sha256": "2480788798595f94144be2f8b78a9fd38425333e8ec373843abd527e557afc36",
-      "sizeBytes": 10464144,
+      "sha256": "2980f3e78fe007550ea4a179909b3fbd7ddf70a3dbe8cb53f8dbac854caff786",
+      "sizeBytes": 10530360,
       "image": "framelink-build:arm64",
-      "builtUtc": "2026-08-16T06:54:11Z"
+      "builtUtc": "2026-08-16T08:03:15Z"
     },
     "deployed": {
       "host": "10.20.30.53",
       "binary": "/usr/local/bin/fl-agent",
-      "version": "0.0.0+c3116bc.dirty",
-      "sha256": "2480788798595f94144be2f8b78a9fd38425333e8ec373843abd527e557afc36",
+      "version": "0.0.0+1ce597d.dirty",
+      "sha256": "2980f3e78fe007550ea4a179909b3fbd7ddf70a3dbe8cb53f8dbac854caff786",
       "isActive": "active",
       "isEnabled": "enabled",
       "sudoMode": "sudo -S (password on stdin)",
-      "deployedUtc": "2026-08-16T06:54:36Z"
+      "deployedUtc": "2026-08-16T08:47:11Z"
     },
     "lastCollection": {
-      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T071158Z-collect",
-      "capturedUtc": "2026-08-16T07:12:00Z",
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T082002Z-collect",
+      "capturedUtc": "2026-08-16T08:20:03Z",
       "screenshot": {
-        "method": "framebuffer",
-        "bytes": 18394,
-        "geometry": "800x1280",
-        "bitsPerPixel": 32,
-        "stride": 3200,
-        "pixelFormat": "bgrx",
-        "rotate": 0,
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T071158Z-collect\\screenshot.png"
+        "method": "grim",
+        "bytes": 94829,
+        "waylandDisplay": "wayland-0",
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T082002Z-collect\\screenshot.png"
       },
       "journal": {
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T071158Z-collect\\journal-fl-agent.service.txt",
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T082002Z-collect\\journal-fl-agent.service.txt",
         "unit": "fl-agent.service",
-        "lines": 204
+        "lines": 200
       }
     },
     "lastParityRun": null
   },
   "counters": {
-    "builds": 13,
-    "deploys": 8,
+    "builds": 14,
+    "deploys": 10,
     "testRuns": 13,
-    "collections": 9,
+    "collections": 11,
     "relayOperations": 2
   },
   "log": [
@@ -718,6 +719,36 @@
       "command": "collect",
       "ok": true,
       "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T071158Z-collect"
+    },
+    {
+      "utc": "2026-08-16T07:40:52Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T074051Z-collect"
+    },
+    {
+      "utc": "2026-08-16T08:03:15Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+1ce597d.dirty 10530360B 2980f3e78fe0"
+    },
+    {
+      "utc": "2026-08-16T08:03:45Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+1ce597d.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-16T08:20:03Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T082002Z-collect"
+    },
+    {
+      "utc": "2026-08-16T08:47:11Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+1ce597d.dirty -> 10.20.30.53 (already current)"
     }
   ]
 }

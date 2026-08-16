@@ -1,3 +1,4 @@
+using FrameLink.Agent;
 using FrameLink.Agent.Reconcile;
 
 namespace FrameLink.Tests;
@@ -36,6 +37,52 @@ public sealed class AgentLoopLifetimeTests
         InitialBackoff = TimeSpan.FromSeconds(30),
         BackoffCap = TimeSpan.FromMinutes(30),
     };
+
+    [Fact]
+    public async Task A_loop_that_throws_stops_the_agent_instead_of_waiting_for_the_other_nine()
+    {
+        // The measured stall of 2026-08-16, at the level that hid it. The reconcile loop threw; the
+        // other loops ran on for the life of the frame; `Task.WhenAll` had nothing to say until all
+        // ten finished, so the frame sat online, connected and inert for twenty-nine minutes with
+        // the exception held inside a completed task. The forever-loop below is the whole point: it
+        // is what the other nine are, and a wait that only reports when it ends is a wait that never
+        // reports.
+        using var shutdown = new CancellationTokenSource();
+        var boom = new InvalidOperationException("the reconcile loop died");
+
+        var running = new List<Task>
+        {
+            Task.Delay(Timeout.Infinite, shutdown.Token),
+            Task.FromException(boom),
+            Task.Delay(Timeout.Infinite, shutdown.Token),
+        };
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => AgentHost.WhenAllOrFirstFaultAsync(running, shutdown));
+
+        Assert.Same(boom, thrown);
+        Assert.True(shutdown.IsCancellationRequested, "the surviving loops were never asked to stop");
+    }
+
+    [Fact]
+    public async Task A_loop_that_simply_ends_does_not_take_the_agent_with_it()
+    {
+        // `screen` returns on its own the moment it learns this machine has no consoles to switch
+        // between, which is every run off a frame. A first-completion wait would read that as a
+        // crash and stand the agent down on every boot, so the trigger has to be a fault and only a
+        // fault.
+        using var shutdown = new CancellationTokenSource();
+
+        var running = new List<Task>
+        {
+            Task.CompletedTask,
+            Task.Delay(TimeSpan.FromMilliseconds(20), TestContext.Current.CancellationToken),
+        };
+
+        await AgentHost.WhenAllOrFirstFaultAsync(running, shutdown);
+
+        Assert.False(shutdown.IsCancellationRequested, "a loop returning normally stood the agent down");
+    }
 
     [Fact]
     public void Only_the_two_results_that_mean_this_process_is_going_away_end_the_loop()

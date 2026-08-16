@@ -95,7 +95,8 @@ _READ_ME_FIRST = [
     "tools/harness/fl.py and is the authoritative answer to 'where does the build stand' "
     "for a session that remembers nothing. Read it top to bottom: nextActions and blockers "
     "are what to do, milestones is where the build is, capabilities is what this harness "
-    "has been proven able to do, resources is the M3 ledger, orientation names the other "
+    "has been proven able to do, resources is the M3 ledger, findings holds the measured "
+    "answers to questions the catalog was carrying open, orientation names the other "
     "durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, "
     "dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites "
@@ -108,9 +109,11 @@ _READ_ME_FIRST = [
     "can perform an adoption or read a physical panel. Nothing here is ever true because "
     "somebody typed it into the JSON: save() rewrites every derived section, so a hand-edit "
     "lasts until the next fl.py invocation and no longer.",
-    "To record a new hardware observation, add it to _MILESTONES or "
-    "_HARDWARE_VERIFIED_RESOURCES in tools/harness/flh/progress.py with what was seen, when, "
-    "on which host and where the evidence lives. That is a reviewable commit, which is the "
+    "To record a new hardware observation, add it to _MILESTONES, "
+    "_HARDWARE_VERIFIED_RESOURCES or _HARDWARE_FINDINGS in tools/harness/flh/progress.py "
+    "with what was seen, when, on which host and where the evidence lives. Use "
+    "_HARDWARE_FINDINGS when the reading settles a question rather than converging a "
+    "resource, and say what it rules out. That is a reviewable commit, which is the "
     "point. Do not write it into this file.",
     "If inFlight is not null a previous session died in the middle of that command and "
     "whatever it was changing is unverified - which matters most for `deploy` and `power`, "
@@ -453,6 +456,101 @@ _HARDWARE_VERIFIED_RESOURCES: list[str] = [
     "tool.xvf-host.installed",
 ]
 
+#: Measured facts that are neither a proven capability nor a converged resource: readings taken
+#: off a real frame that **answer a question the catalog was carrying open**. They live here
+#: rather than only in a commit message because a resuming session reads this file first, and a
+#: question that has already been settled must not be investigated a third time.
+#:
+#: Each entry says what was read, on what, when, and - the part that earns the space - **what it
+#: rules out**. A finding that only confirms a suspicion is worth a commit; a finding that closes
+#: a branch of the search is worth the whole file.
+_HARDWARE_FINDINGS: list[dict[str, str]] = [
+    {
+        "id": "wireplumber-applies-a-default-not-a-restore",
+        "question": (
+            "audio.mixer.pcm0-playback-volume is set to 60, survives a reboot, and is then put "
+            "back to 37 (-23.00 dB) with wireplumber running. Is 37 a value WirePlumber has "
+            "STORED for this device and is restoring, or is it WirePlumber's own compiled-in "
+            "DEFAULT being applied to a device it has no stored opinion about? The catalog has "
+            "carried this as blocked since it was written, and the two readings need opposite "
+            "fixes."
+        ),
+        "measured": (
+            "~/.local/state/wireplumber/ on the mule holds exactly ONE file, and it is "
+            "`stream-properties`. There is no `restore-stream`, no `default-routes` and no "
+            "`default-nodes` - which are the three files WirePlumber 0.5 writes when it has a "
+            "stored per-device route volume to restore. The agent now names the files it finds "
+            "rather than counting them, so this reading is in the frame's own drift text: "
+            "`[wireplumber active, 1 stored device file (stream-properties)]`."
+        ),
+        "answer": (
+            "It is a DEFAULT, not a restore. WirePlumber holds no stored route volume for this "
+            "sink, so there is nothing stored to correct."
+        ),
+        "rulesOut": (
+            "The catalog's original proposed fix - owning or clearing ~/.local/state/wireplumber/ "
+            "- repairs nothing and must not be implemented. There is no file there to own. The "
+            "correct fix is to set the volume THROUGH WirePlumber (audio.wireplumber."
+            "playback-volume, wpctl), which overrides a default and is also what would make "
+            "restore-device persist a stored one, so it is right under both readings."
+        ),
+        "consistentWith": (
+            "The arithmetic, which remains arithmetic and not a measurement: WirePlumber 0.5's "
+            "device.routes.default-sink-volume is 0.064 linear = -23.88 dB, and on this control's "
+            "measured 1-step-per-decibel scale the nearest step at or above that is exactly 37. "
+            "The file listing is the observation; the constant is the explanation it fits."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}",
+        "recordedIn": "reference/resource-catalog.md audio.wireplumber.playback-volume; commit 1ce597d",
+    },
+    {
+        "id": "reconcile-loop-death-was-invisible-for-29-minutes",
+        "question": (
+            "The frame sat in loop_state=awaiting-reboot at report sequence 1112 and did not "
+            "advance for 29 minutes, online and connected the whole time. Was the reboot floor "
+            "(decision 79) declining a reboot and stranding the loop in a state only a reboot can "
+            "leave?"
+        ),
+        "measured": (
+            "No. The floor's own ledger read `reboots: []` and the journal file's mtime was "
+            "identical to the pending-apply write that preceded the reboot request, so the "
+            "floor's record-the-reboot write had never executed and its refusal branch had never "
+            "been taken. The actual cause was captured by restarting the service and reading what "
+            "the dying process printed: `System.ArgumentNullException: Value cannot be null. "
+            "(Parameter 'reboots') at RebootFloor.Within(...) at RebootFloor.CrossAsync(...)`. "
+            "The frame carried a journal written before decision 79 existed, so it had no "
+            "`reboots` key; an absent key deserialises to null rather than to the empty list the "
+            "property's initialiser appears to promise, and WhenWritingNull then omitted it again "
+            "on every rewrite, so the omission could not heal."
+        ),
+        "answer": (
+            "An upgrade-path crash inside the reconcile loop's task, plus a host that could not "
+            "see it: AgentHost awaited its ten loops with Task.WhenAll, which surfaces nothing "
+            "until every task finishes, and the other nine run for the life of the frame. The "
+            "exception sat inside a completed task for 29 minutes and was finally printed by a "
+            "shutdown a person triggered by hand."
+        ),
+        "rulesOut": (
+            "The reboot floor as the cause of this class of stall, and the reboot floor's "
+            "refusal path as a silent one - it logs and it was never reached. Do not design "
+            "around a broken retry either: the retry path was measured working (budget reset "
+            "3 -> 0, a fresh drift took it to 1)."
+        ),
+        "consistentWith": (
+            "The same shape as the earlier escalation defect this session (a completed RunAsync, "
+            "a live process, a live socket, a server still reporting the device online). That one "
+            "was fixed in the loop; this one was the host-level half of the identical hole."
+        ),
+        "whenUtc": "2026-08-16",
+        "where": f"mule {MULE_USER}@{MULE_HOST}, agent pid 4342",
+        "recordedIn": (
+            "ReconcileJournal.Normalise and AgentHost.WhenAllOrFirstFaultAsync, each with the "
+            "test that reproduces the pre-fix behaviour"
+        ),
+    },
+]
+
 #: The durable artifacts a session starting from nothing needs, and what each one is *for*.
 #: The progress file is deliberately not the specification; it is the pointer to it.
 _ORIENTATION: dict[str, str] = {
@@ -763,6 +861,7 @@ _KEY_ORDER = [
     "milestones",
     "capabilities",
     "resources",
+    "findings",
     "orientation",
     "environment",
     "artifacts",
@@ -1060,6 +1159,7 @@ def _refresh(data: dict[str, Any]) -> None:
     data["schema"] = SCHEMA
     data["generatedBy"] = "tools/harness/fl.py"
     data["readMeFirst"] = list(_READ_ME_FIRST)
+    data["findings"] = [dict(finding) for finding in _HARDWARE_FINDINGS]
     data["orientation"] = dict(_ORIENTATION)
     data["environment"] = _environment()
 
