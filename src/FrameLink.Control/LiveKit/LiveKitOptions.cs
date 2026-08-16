@@ -105,14 +105,28 @@ public sealed record LiveKitOptions
     /// Last UDP port of that range.
     /// </summary>
     /// <remarks>
-    /// 50000–50199, where guide 7 published 50000–50100. Widened deliberately rather than copied:
-    /// LiveKit takes ports from this range per participant connection, guide 13 already
-    /// contemplates several frames per household, and a range that runs out presents as calls
-    /// that connect for some participants and not others — the least diagnosable failure in the
-    /// whole call path. Two hundred UDP ports cost nothing on a machine that is already
-    /// publishing a hundred.
+    /// <para>
+    /// 50000–50059, sixty ports. LiveKit takes a port from this range per participant connection
+    /// and a range that runs out presents as calls that connect for some participants and not
+    /// others — the least diagnosable failure in the whole call path — so the number is chosen
+    /// with headroom rather than trimmed to fit: guide 13 contemplates several frames per
+    /// household and sixty simultaneous participant connections is an order of magnitude past
+    /// what a household reaches.
+    /// </para>
+    /// <para>
+    /// <b>Sixty rather than two hundred because a host has to be able to publish them.</b> The
+    /// range is published one-to-one — remap it and calls connect for nobody with no error
+    /// anywhere — and on Windows the whole of it sits inside the ephemeral range the operating
+    /// system lends out (49152 upward, 16384 wide), so any port in it can already be held by
+    /// another program when the stack starts. The fix is a persistent reservation, and a
+    /// reservation is a fixed, host-wide grant: this workstation's is `50000-50059`, applied at
+    /// boot, and Compose refuses to start the whole stack when a single mapping cannot bind. So
+    /// the default matches what a host can realistically hold rather than what a call path could
+    /// theoretically want, and <c>FRAMELINK_LIVEKIT_UDP_END</c> widens it for a deployment whose
+    /// reservation is wider.
+    /// </para>
     /// </remarks>
-    public int UdpPortEnd { get; init; } = 50_199;
+    public int UdpPortEnd { get; init; } = 50_059;
 
     /// <summary>
     /// How long a minted call token is valid for.

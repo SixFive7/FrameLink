@@ -23,7 +23,7 @@ namespace FrameLink.Control.LiveKit;
 /// refused with <c>field … not found in type config.Config</c> and the server does not start.
 /// This exact document was fed to <c>livekit-server 1.13.5</c>, which accepted it and answered
 /// <c>ports</c> with precisely the ports it asks for: <c>7880 - HTTP service</c>,
-/// <c>7881 - ICE/TCP</c>, <c>50000-50199 - ICE/UDP range</c>. A typo here is therefore a dead
+/// <c>7881 - ICE/TCP</c>, <c>50000-50059 - ICE/UDP range</c>. A typo here is therefore a dead
 /// call server rather than a silently ignored line, which is why it is a rendered constant
 /// rather than an operator-supplied template.
 /// </para>

@@ -215,7 +215,7 @@ public sealed class LiveKitConfigurationTests
     public void The_rendered_configuration_is_the_document_livekit_accepted()
     {
         // Byte-for-byte the file that livekit-server 1.13.5 was started with, which answered
-        // `ports` with 7880 HTTP, 7881 ICE/TCP and 50000-50199 ICE/UDP. LiveKit parses its
+        // `ports` with 7880 HTTP, 7881 ICE/TCP and 50000-50059 ICE/UDP. LiveKit parses its
         // configuration with unknown fields treated as errors — a file with one extra key is
         // refused outright and the server does not start — so this is not a formatting
         // preference, it is the contract.
@@ -227,7 +227,7 @@ public sealed class LiveKitConfigurationTests
         Assert.Contains("bind_addresses:\n  - 0.0.0.0\n", rendered, StringComparison.Ordinal);
         Assert.Contains("  tcp_port: 7881\n", rendered, StringComparison.Ordinal);
         Assert.Contains("  port_range_start: 50000\n", rendered, StringComparison.Ordinal);
-        Assert.Contains("  port_range_end: 50199\n", rendered, StringComparison.Ordinal);
+        Assert.Contains("  port_range_end: 50059\n", rendered, StringComparison.Ordinal);
         Assert.Contains("  APIkey: secret-value\n", rendered, StringComparison.Ordinal);
         Assert.Contains("  auto_create: true\n", rendered, StringComparison.Ordinal);
     }
@@ -406,7 +406,7 @@ public sealed class LiveKitOptionsTests
         Assert.Equal(7880, options.SignalPort);
         Assert.Equal(7881, options.TcpMediaPort);
         Assert.Equal(50_000, options.UdpPortStart);
-        Assert.Equal(50_199, options.UdpPortEnd);
+        Assert.Equal(50_059, options.UdpPortEnd);
     }
 
     [Fact]

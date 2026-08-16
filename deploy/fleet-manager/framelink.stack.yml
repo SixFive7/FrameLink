@@ -87,11 +87,11 @@
 #      validated end to end. One-to-one matters: LiveKit runs with `use_external_ip: false` and
 #      therefore advertises its own container address, which no frame on the LAN can route to, so
 #      connectivity is established from LiveKit outwards and depends on the source port a frame
-#      observes being a port the host will deliver back. Remap 50000-50199 to anything else and
+#      observes being a port the host will deliver back. Remap 50000-50059 to anything else and
 #      calls connect for nobody, with no error anywhere.
 #
 # ── WHAT ELSE MAY BE HOLDING THESE HOST PORTS, ON DEPLOYMENT DAY ─────────────────────────────
-# 7880, 7881 and 50000-50199 are published on the host directly, so anything else already bound
+# 7880, 7881 and 50000-50059 are published on the host directly, so anything else already bound
 # to them is a bind failure rather than a degradation — Docker refuses to start the second
 # claimant and says which port. That is a good failure: loud, immediate, and answered before
 # anything else is attempted. What is holding them, if anything, is a fact about that host on the
@@ -186,8 +186,9 @@ services:
       - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:7880:7880/tcp"
       # LiveKit TCP media fallback, for a network that blocks UDP.
       - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:7881:7881/tcp"
-      # Where call media actually flows. One-to-one, for the reason in the header.
-      - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
+      # Where call media actually flows. One-to-one, and the same sixty ports the server writes
+      # into livekit.yaml, for the reason in the header.
+      - "${FRAMELINK_LIVEKIT_BIND:-0.0.0.0}:50000-50059:50000-50059/udp"
 
     networks:
       # Both variables are unset and are meant to be. They are not blanks waiting to be filled in

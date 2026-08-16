@@ -51,8 +51,8 @@ public sealed class LiveKitMediaProbeTests
         Assert.True(check.Checked);
         Assert.True(check.SignalPortListening);
         Assert.True(check.TcpMediaPortListening);
-        Assert.Equal(200, check.UdpRangeSize);
-        Assert.Equal(200, check.UdpRangeFree);
+        Assert.Equal(60, check.UdpRangeSize);
+        Assert.Equal(60, check.UdpRangeFree);
         Assert.Empty(check.Findings);
     }
 
@@ -100,7 +100,7 @@ public sealed class LiveKitMediaProbeTests
             Addresses = { Lan },
         };
 
-        for (var port = 50_000; port <= 50_199; port++)
+        for (var port = 50_000; port <= 50_059; port++)
         {
             host.Udp.Add(port);
         }
@@ -126,7 +126,7 @@ public sealed class LiveKitMediaProbeTests
 
         var check = LiveKitMediaProbe.Inspect(Bundled(), serverRunning: true, host);
 
-        Assert.Equal(197, check.UdpRangeFree);
+        Assert.Equal(57, check.UdpRangeFree);
         Assert.Empty(check.Findings);
     }
 

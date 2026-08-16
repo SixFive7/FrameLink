@@ -38,15 +38,21 @@
 # ── THE MEDIA PORTS ARE PUBLISHED ONE-TO-ONE, AND ON WINDOWS THAT NEEDS A RESERVATION ────────
 # LiveKit runs with use_external_ip: false and advertises its own container address, so a call
 # completes only because the source port a frame observes is a port this host will deliver back.
-# Remap 50000-50199 and calls connect for nobody with no error anywhere.
+# Remap 50000-50059 and calls connect for nobody with no error anywhere.
 #
 # On this Windows host the range sits inside the ephemeral port range (netsh reports UDP dynamic
 # ports starting at 49152, 16384 wide), so any process can be holding a port in it when the
-# container starts. Measured: 198 of the 200 mappings bound, with 50005 taken by an svchost
-# socket on 127.0.0.1 and 50082 by Microsoft Teams — an ordinary ephemeral allocation, not a
-# fixed service, so WHICH two are missing changes. docs/15 step 3 reserves the range so the
-# allocator stops handing those ports out; that reservation is the fix, and narrowing the range
-# would not be one.
+# container starts. Measured with the range two hundred wide: 198 of the 200 mappings bound, with
+# 50005 taken by an svchost socket on 127.0.0.1 and 50082 by Microsoft Teams — ordinary ephemeral
+# allocations, not fixed services, so WHICH two are missing changes, and one attempt refused
+# outright rather than degrading. The fix is docs/15 step 1's persistent netsh reservation, which
+# takes the range out of the allocator's hands entirely.
+#
+# The range is sixty ports because the reservation on this host is sixty ports, and the two must
+# agree: a mapping outside the reservation is a mapping that can fail to bind on a Tuesday and
+# take the whole stack down with it. LiveKit uses one port per participant connection, so sixty
+# is an order of magnitude past what a household reaches; FRAMELINK_LIVEKIT_UDP_END and this
+# range widen together for a host whose reservation is wider.
 #
 # ── PUBLISHING A PORT AND BEING REACHABLE ON IT ARE NOT THE SAME THING HERE ──────────────────
 # Nothing in this file can make the frames able to reach it, and on this workstation they cannot
@@ -117,8 +123,9 @@ services:
       - "${FRAMELINK_BIND:-0.0.0.0}:7880:7880/tcp"
       # LiveKit TCP media fallback, for a network that blocks UDP.
       - "${FRAMELINK_BIND:-0.0.0.0}:7881:7881/tcp"
-      # Where call media actually flows. One-to-one, for the reason in the header.
-      - "${FRAMELINK_BIND:-0.0.0.0}:50000-50199:50000-50199/udp"
+      # Where call media actually flows. One-to-one, and the same sixty ports the server writes
+      # into livekit.yaml, for the reason in the header.
+      - "${FRAMELINK_BIND:-0.0.0.0}:50000-50059:50000-50059/udp"
 
     healthcheck:
       test: ["CMD", "curl", "-fsS", "--max-time", "4", "http://127.0.0.1:8080/healthz"]

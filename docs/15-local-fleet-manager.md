@@ -9,17 +9,19 @@ Run the Fleet Manager on your own PC as a Docker container instead of starting i
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-Video calls need two hundred numbered network channels, and Windows treats those same two hundred numbers as scratch space it can lend to any program that asks. Sometimes a few are already lent out when the call server starts, and sometimes that stops the whole thing from starting at all.
+Video calls need sixty numbered network channels, and Windows treats those same sixty numbers as scratch space it can lend to any program that asks. Sometimes a few are already lent out when the call server starts, and sometimes that stops the whole thing from starting at all.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Tell Windows once, permanently, to stop lending those two hundred numbers to anybody. It is a single command, it opens nothing, and it survives restarts.
+Tell Windows once, permanently, to stop lending those sixty numbers to anybody. It is a single command, it opens nothing, and it survives restarts.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The UDP range `50000-50199` is published one-to-one — host port *n* maps to container port *n* and to nothing else. That is not a convention. The call server runs with external-IP discovery switched off and advertises the address it is genuinely on, so a connection completes only because the source port a frame observes is a port this host will deliver back to the same place. Remap the range and calls connect for nobody, with no error printed anywhere, which is why the fix below is a reservation rather than a smaller range.
+The UDP range `50000-50059` is published one-to-one — host port *n* maps to container port *n* and to nothing else. That is not a convention. The call server runs with external-IP discovery switched off and advertises the address it is genuinely on, so a connection completes only because the source port a frame observes is a port this host will deliver back to the same place. Remap the range and calls connect for nobody, with no error printed anywhere, which is why the fix below is a reservation rather than a different range.
 
-Windows allocates ephemeral ports from a dynamic range that begins at 49152 and is 16384 wide — 49152 to 65535 — so the entire media range sits inside it. Any program that opens an outbound UDP socket can be handed one of these numbers, and it keeps it for as long as it likes. Measured here: a probe container published 198 of 200, with `50005` held by a `svchost` socket on `127.0.0.1` and `50082` held by Microsoft Teams. Neither is a fixed service, so *which* two are missing changes between attempts, and on one attempt Docker Compose did not degrade at all — it refused outright with `failed to bind host port 0.0.0.0:50060/udp: address already in use` and the container never started. A stack that starts on Tuesday and refuses on Wednesday for a reason nobody can see is worse than one that never starts, which is what makes this step first.
+Windows allocates ephemeral ports from a dynamic range that begins at 49152 and is 16384 wide — 49152 to 65535 — so the entire media range sits inside it. Any program that opens an outbound UDP socket can be handed one of these numbers, and it keeps it for as long as it likes. Measured here while the range was still two hundred wide: a probe container published 198 of 200, with `50005` held by a `svchost` socket on `127.0.0.1` and `50082` held by Microsoft Teams. Neither is a fixed service, so *which* two are missing changes between attempts, and on one attempt Docker Compose did not degrade at all — it refused outright with `failed to bind host port 0.0.0.0:50060/udp: address already in use` and the container never started. A stack that starts on Tuesday and refuses on Wednesday for a reason nobody can see is worse than one that never starts, which is what makes this step first.
+
+Sixty is the width because a reservation is what makes the range dependable, and a reservation is a fixed grant: this workstation holds `50000-50059`, so that is what the stack asks for and the two agree by construction. The call server takes one port per participant connection, so sixty is an order of magnitude past a household's need — [guide 13](13-multi-device-deploy.md) contemplates several frames in one house, not sixty people in one call. To widen it, widen both ends together: `numberofports` here, the `ports:` entry in the stack file, and `FRAMELINK_LIVEKIT_UDP_END` so the call server is told about it.
 
 The RUN block reads the current state, then adds the reservation if it is not already there, then reads it back. Line by line: line 1 shows the dynamic range, so you can see for yourself that it swallows the media range; line 2 shows which port ranges are already withheld from it; line 3 is the guarded reservation — `grep -q` first, so a second run of this guide changes nothing; line 4 proves the reservation is there. `store=persistent` is what makes it survive a reboot, and it is applied early in boot, before ordinary programs are running, which is also why a reboot is the reliable way to make it take effect: `netsh` refuses to reserve a range while any port inside it is in use at that moment. **Line 3 needs a PowerShell or Command Prompt window opened with Run as administrator.** Lines 1, 2 and 4 do not.
 
@@ -28,13 +30,14 @@ The RUN block reads the current state, then adds the reservation if it is not al
 ```bash
 netsh int ipv4 show dynamicport udp
 netsh int ipv4 show excludedportrange protocol=udp
-netsh int ipv4 show excludedportrange protocol=udp | grep -qE '^ +50000 +50199' || netsh int ipv4 add excludedportrange protocol=udp startport=50000 numberofports=200 store=persistent
+netsh int ipv4 show excludedportrange protocol=udp | grep -qE '^ +50000 +50059' || netsh int ipv4 add excludedportrange protocol=udp startport=50000 numberofports=60 store=persistent
 netsh int ipv4 show excludedportrange protocol=udp
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
 
 ```text
+
 Protocol udp Dynamic Port Range
 ---------------------------------
 Start Port      : 49152
@@ -43,21 +46,38 @@ Number of Ports : 16384
 
 Protocol udp Port Exclusion Ranges
 
-Start Port    End Port
-----------    --------
-     54473       54572
-     54573       54672
+Start Port    End Port      
+----------    --------      
+     50000       50059     *
+     57566       57665      
+     57666       57765      
+     59236       59335      
+     59336       59435      
 
 * - Administered port exclusions.
+
+
+Protocol udp Port Exclusion Ranges
+
+Start Port    End Port      
+----------    --------      
+     50000       50059     *
+     57566       57665      
+     57666       57765      
+     59236       59335      
+     59336       59435      
+
+* - Administered port exclusions.
+
 ```
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The block above is this workstation **before** the reservation, and it is the whole of what was captured: `Start Port : 49152` with `Number of Ports : 16384` covers 49152 to 65535 and therefore covers 50000 to 50199, and the two ranges listed as excluded are somebody else's and do not overlap it. **The output of lines 3 and 4 was not captured, because adding an exclusion needs an Administrator shell and these captures were taken in an ordinary one.** After line 3 succeeds, line 4 must list a row reading `50000       50199` with a `*` beside it — the star means an administered exclusion, which is exactly what you just made. If line 3 answers `The process cannot access the file because it is being used by another process`, some program is holding a port inside the range right now: reboot and run the line again as the first thing you do, which is the state in which nothing has had a chance to take one. If line 4 still shows no `50000` row, the reservation did not happen and every later step will still mostly work — you will simply lose a call for one participant now and then, and the stack will occasionally refuse to start.
+`Start Port : 49152` with `Number of Ports : 16384` covers 49152 to 65535 and therefore covers 50000 to 50059 — that is the problem, stated in two lines by Windows itself. Then the row that answers it: `50000       50059     *`, where the star means an administered exclusion. It appears twice because lines 2 and 4 print the same table. **The capture above was taken on a workstation where the reservation was already in place, so line 3 printed nothing at all — the `grep -q` matched and the `netsh add` never ran.** That is the idempotent path and it is what a second run of this guide looks like; the first run instead shows no `50000` row in line 2's table, `Ok.` from line 3, and the row present in line 4's. The other excluded ranges belong to other software, will differ on your machine, and do not overlap the media range. If line 3 answers `The requested operation requires elevation`, the window is not an Administrator one. If it answers `The process cannot access the file because it is being used by another process`, some program is holding a port inside the range right now: reboot and run the line again as the first thing you do, which is the state in which nothing has had a chance to take one. If line 4 still shows no `50000` row, the reservation did not happen and every later step will still mostly work — you will simply lose a call for one participant now and then, and the stack will occasionally refuse to start.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The two hundred numbers call audio and video travel over now belong to FrameLink and to nothing else on this PC, permanently, so the call server can always have all of them.
+The sixty numbers call audio and video travel over now belong to FrameLink and to nothing else on this PC, permanently, so the call server can always have all of them.
 
 <a id="2-let-the-fleet-reach-the-container"></a>
 <img src="https://img.shields.io/badge/STEP_02-Let_the_fleet_reach_the_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Let the fleet reach the container"/>
@@ -78,7 +98,7 @@ The effect was measured rather than guessed, from a network namespace that is no
 
 The RUN block's first two lines say why in one screen. The virtual machine's default inbound action is `Block` and its loopback is enabled — which is precisely the observed behaviour, because `127.0.0.1` is loopback and the LAN address is not — and the only inbound rules that allow anything are ICMP and mDNS. There is no rule permitting TCP or UDP from anywhere, so the frames' traffic is dropped before it reaches Docker at all.
 
-Lines 3 and 4 add two rules scoped to that one virtual machine and to these ports only: TCP `5199` for the console and the frames' own websocket, TCP `7880` and `7881` for call signalling and its TCP media fallback, and UDP `50000-50199` for call media. Both are guarded on their own name, so running this guide twice creates nothing twice. **Both need a PowerShell window opened with Run as administrator.** The alternative fix is to delete `networkingMode=mirrored` from `.wslconfig` and run `wsl --shutdown`, which restores Docker's ordinary port publishing on all interfaces — it is fewer moving parts, and it restarts every container on the machine and changes a setting that was presumably chosen for a reason, so it is mentioned rather than recommended.
+Lines 3 and 4 add two rules scoped to that one virtual machine and to these ports only: TCP `5199` for the console and the frames' own websocket, TCP `7880` and `7881` for call signalling and its TCP media fallback, and UDP `50000-50059` for call media. Both are guarded on their own name, so running this guide twice creates nothing twice. **Both need a PowerShell window opened with Run as administrator.** The alternative fix is to delete `networkingMode=mirrored` from `.wslconfig` and run `wsl --shutdown`, which restores Docker's ordinary port publishing on all interfaces — it is fewer moving parts, and it restarts every container on the machine and changes a setting that was presumably chosen for a reason, so it is mentioned rather than recommended.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -86,7 +106,7 @@ Lines 3 and 4 add two rules scoped to that one virtual machine and to these port
 powershell -NoProfile -Command "Get-NetFirewallHyperVVMSetting -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -PolicyStore ActiveStore | Format-List Name,DefaultInboundAction,LoopbackEnabled"
 powershell -NoProfile -Command "Get-NetFirewallHyperVRule -PolicyStore ActiveStore -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' | Where-Object { \$_.Direction -eq 'Inbound' -and \$_.Action -eq 'Allow' -and \$_.Enabled -eq 'True' } | Select-Object -ExpandProperty DisplayName"
 powershell -NoProfile -Command "if (-not (Get-NetFirewallHyperVRule -Name 'FrameLink-Dev-TCP' -ErrorAction SilentlyContinue)) { New-NetFirewallHyperVRule -Name 'FrameLink-Dev-TCP' -DisplayName 'FrameLink dev stack (TCP)' -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Direction Inbound -Protocol TCP -LocalPorts 5199,7880,7881 -Action Allow }"
-powershell -NoProfile -Command "if (-not (Get-NetFirewallHyperVRule -Name 'FrameLink-Dev-UDP' -ErrorAction SilentlyContinue)) { New-NetFirewallHyperVRule -Name 'FrameLink-Dev-UDP' -DisplayName 'FrameLink dev stack (UDP media)' -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Direction Inbound -Protocol UDP -LocalPorts 50000-50199 -Action Allow }"
+powershell -NoProfile -Command "if (-not (Get-NetFirewallHyperVRule -Name 'FrameLink-Dev-UDP' -ErrorAction SilentlyContinue)) { New-NetFirewallHyperVRule -Name 'FrameLink-Dev-UDP' -DisplayName 'FrameLink dev stack (UDP media)' -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Direction Inbound -Protocol UDP -LocalPorts 50000-50059 -Action Allow }"
 ```
 
 ![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
