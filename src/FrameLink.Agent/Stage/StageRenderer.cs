@@ -227,7 +227,7 @@ public static class StageRenderer
                     givenUp
                         ? new Run("■  ", StagePalette.Red)
                         : new Run(Spinner(tick) + "  ", accent),
-                    new Run(status.Condition.Headline, StagePalette.Headline, Bold: true),
+                    new Run(ReconcileVoice.Headline(status), StagePalette.Headline, Bold: true),
                 ],
                 inner,
                 colour),
@@ -235,14 +235,15 @@ public static class StageRenderer
         };
 
         // The headline above already says what was detected (§2.7 item 1) in the common case, so
-        // the field is only spelled out when it adds something the headline did not.
-        var detected = status.Narration.Detected ?? status.Condition.Headline;
-        if (!string.Equals(detected, status.Condition.Headline, StringComparison.Ordinal))
+        // the field is only spelled out when it adds something the headline did not — and both
+        // that judgement and the headline it is made against are composed in ReconcileVoice, so
+        // the page beside this console cannot come to a different one.
+        if (ReconcileVoice.Detected(status) is { Length: > 0 } detected)
         {
             AddField(lines, "Detected", detected, inner, colour);
         }
 
-        AddField(lines, "Why", status.Narration.WhyItMatters ?? status.Condition.Detail, inner, colour);
+        AddField(lines, "Why", ReconcileVoice.WhyItMatters(status) ?? ReconcileVoice.Detail(status), inner, colour);
 
         if (status.Narration.Action is { Length: > 0 } action)
         {

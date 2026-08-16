@@ -142,6 +142,136 @@ public sealed class AgentStoppedFrameTests
         Assert.Equal(ReconcileVoice.UnknownContact, ReconcileVoice.ContactLine(null));
     }
 
+    /// <summary>A green answer from the Fleet Manager — adopted, on the served version.</summary>
+    private static DeviceCondition Green => DeviceStateLadder.FromHandshake(new HandshakeResult
+    {
+        Status = HandshakeStatus.Ok,
+        ProtocolVersion = ProtocolConstants.Version,
+        ServedAgentVersion = "0.2.0",
+    });
+
+    /// <summary>
+    /// The frame of 2026-08-16: authoritatively adopted, and stopped on a resource of its own.
+    /// </summary>
+    /// <remarks>
+    /// The narration is seeded the way <c>ControlLink</c> and <c>ConnectionAttempt</c> seed it — from
+    /// the condition's own two sentences — because that is what put the claim on the screen a second
+    /// time underneath itself. Which resource gave up is immaterial here; the headline is.
+    /// </remarks>
+    private static AgentStatus AdoptedAndStopped => Stopped with
+    {
+        Condition = Green,
+        Drifted = true,
+        Narration = new Narration { Detected = Green.Headline, WhyItMatters = Green.Detail },
+    };
+
+    [Fact]
+    public void A_frame_that_has_stopped_does_not_headline_itself_as_working()
+    {
+        var status = AdoptedAndStopped;
+
+        // Measured on the mule, 2026-08-16: "Everything is working — This frame is adopted, up to
+        // date and showing your photos" printed directly above "failed after 3 tries", above the
+        // sentence saying nothing further would happen until somebody helped, and above a Try again
+        // button — on a panel showing no photographs at all. The ladder is not wrong and is not
+        // changed: the Fleet Manager did adopt this frame and still says so. What was wrong is that
+        // the top line was the Fleet Manager's half of ProductRuns while the screen it titled had
+        // appeared on both halves.
+        Assert.Equal("Everything is working", status.Condition.Headline);
+        Assert.True(status.Condition.ProductRuns);
+        Assert.False(status.ProductRuns);
+        Assert.True(ReconcileVoice.HasStopped(status));
+
+        Assert.Equal(ReconcileVoice.StoppedHeadline, ReconcileVoice.Headline(status));
+        Assert.Equal(ReconcileVoice.StoppedDetail, ReconcileVoice.Detail(status));
+
+        // Both surfaces off the one composition, so neither can be put right without the other.
+        var message = BrowserStage.Compose(status, DateTimeOffset.UnixEpoch);
+        var console = AnsiText.Strip(StageRenderer.Render(status, DateTimeOffset.UnixEpoch, 0, 80, 24, colour: false));
+
+        Assert.Equal(ReconcileVoice.StoppedHeadline, message.Headline);
+        Assert.Equal(ReconcileVoice.StoppedDetail, message.Detail);
+        Assert.Contains(ReconcileVoice.StoppedHeadline, console, StringComparison.Ordinal);
+        Assert.DoesNotContain("Everything is working", console, StringComparison.Ordinal);
+        Assert.DoesNotContain("showing your photos", console, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_claim_the_body_contradicted_is_not_printed_a_second_time_underneath_it()
+    {
+        var status = AdoptedAndStopped;
+
+        // The link seeds Detected and WhyItMatters from the condition's own sentences, so a surface
+        // rendering all four printed the same claim twice — at 30 px and again at 20 px under it on
+        // the captured screenshot. StageRenderer already dropped the repeat for Detected and the
+        // page did not, which is the divergence ReconcileVoice exists to make impossible.
+        Assert.Equal(status.Condition.Headline, status.Narration.Detected);
+        Assert.Equal(status.Condition.Detail, status.Narration.WhyItMatters);
+
+        Assert.Null(ReconcileVoice.Detected(status));
+        Assert.Null(ReconcileVoice.WhyItMatters(status));
+
+        var message = BrowserStage.Compose(status, DateTimeOffset.UnixEpoch);
+
+        Assert.Null(message.Detected);
+        Assert.Null(message.WhyItMatters);
+
+        // A narration that says something the headline did not is still carried, unchanged.
+        var narrated = status with
+        {
+            Narration = new Narration
+            {
+                Detected = "The speaker volume setting is not what it should be.",
+                WhyItMatters = "Nobody on a call would be able to hear you.",
+            },
+        };
+
+        Assert.Equal("The speaker volume setting is not what it should be.", ReconcileVoice.Detected(narrated));
+        Assert.Equal("Nobody on a call would be able to hear you.", ReconcileVoice.WhyItMatters(narrated));
+    }
+
+    [Fact]
+    public void A_frame_still_putting_itself_right_says_that_and_an_uncleared_one_keeps_the_ladders_words()
+    {
+        var repairing = Stopped with
+        {
+            Condition = Green,
+            Drifted = true,
+            Resources = [],
+            Reconcile = new ReconcileNarration { Resource = "audio.mixer.pcm-volume", Attempt = 1, AttemptBudget = 3 },
+        };
+
+        // §2.6's "any drift stops the product" applies long before anything gives up, and a frame
+        // that has stopped the photos to put a setting back must not headline itself as showing
+        // them either.
+        Assert.False(ReconcileVoice.HasStopped(repairing));
+        Assert.False(repairing.ProductRuns);
+        Assert.Equal(ReconcileVoice.RepairingHeadline, ReconcileVoice.Headline(repairing));
+        Assert.Equal(ReconcileVoice.RepairingDetail, ReconcileVoice.Detail(repairing));
+
+        // A frame the Fleet Manager has not cleared keeps the ladder's own wording: "adopt this
+        // frame" is more actionable than "it is fixing itself", and the body under it is the
+        // adoption fingerprint rather than a delta.
+        var pending = DeviceStateLadder.FromHandshake(new HandshakeResult
+        {
+            Status = HandshakeStatus.Pending,
+            ProtocolVersion = ProtocolConstants.Version,
+            ServedAgentVersion = "0.2.0",
+        });
+
+        var uncleared = repairing with { Condition = pending };
+
+        Assert.Equal(pending.Headline, ReconcileVoice.Headline(uncleared));
+        Assert.Equal(pending.Detail, ReconcileVoice.Detail(uncleared));
+
+        // And a frame with nothing wrong on it says exactly what it always said.
+        var working = repairing with { Drifted = false };
+
+        Assert.True(working.ProductRuns);
+        Assert.Equal(Green.Headline, ReconcileVoice.Headline(working));
+        Assert.Equal(Green.Detail, ReconcileVoice.Detail(working));
+    }
+
     [Fact]
     public void The_browser_stage_sends_the_page_the_same_verdict_the_console_paints()
     {

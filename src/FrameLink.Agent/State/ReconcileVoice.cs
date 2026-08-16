@@ -111,6 +111,131 @@ public static class ReconcileVoice
                     || status.Reconcile.Attempt >= status.Reconcile.AttemptBudget));
     }
 
+    /// <summary>The top line of a frame that has given up on something.</summary>
+    public const string StoppedHeadline = "This frame has stopped and needs help";
+
+    /// <summary>The second line under <see cref="StoppedHeadline"/>.</summary>
+    public const string StoppedDetail =
+        "It could not finish setting itself up, so it is not showing your photos.";
+
+    /// <summary>The top line of a frame that is still putting its own settings back.</summary>
+    public const string RepairingHeadline = "Putting this frame right";
+
+    /// <summary>The second line under <see cref="RepairingHeadline"/>.</summary>
+    public const string RepairingDetail =
+        "Something on it is not as it should be. It is fixing that first, and then your photos come back.";
+
+    /// <summary>
+    /// §2.7 item 1 — the one line at the top of both surfaces.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Composed from the same snapshot the body underneath it is composed from, and that is the
+    /// whole of this.</b> On 2026-08-16 a frame printed <i>"Everything is working — This frame is
+    /// adopted, up to date and showing your photos"</i> directly above
+    /// <c>unit.chromium-kiosk.running-matches-content failed after 3 tries</c>, the sentence saying
+    /// nothing further would happen until somebody helped, and a Try again button — on a panel
+    /// showing no photographs at all.
+    /// </para>
+    /// <para>
+    /// <b>Both surfaces were taking the top two lines straight off
+    /// <see cref="DeviceCondition"/>.</b> <see cref="DeviceStateLadder.FromHandshake"/> derives that
+    /// from the handshake and nothing else, so <see cref="Protocol.HandshakeStatus.Ok"/> means
+    /// adopted, on the served version, and no more than that. What the frame has observed of
+    /// <i>itself</i> lives in <see cref="AgentStatus.Drifted"/>, kept off the ladder deliberately —
+    /// §2.6's ladder is about what the Fleet Manager has said — and the one place the two halves
+    /// were ever put together was <see cref="AgentStatus.ProductRuns"/>. So the screen decided to
+    /// <i>appear</i> on the composed truth and then titled itself with the adoption half alone.
+    /// </para>
+    /// <para>
+    /// <b>Decision 70's rule did not fail to bind here; it never reached this far.</b> <i>A stopped
+    /// frame stops looking like a working one</i> was carried out against everything that moved —
+    /// the spinner, the marquee, the attempt counter, the countdown — because the failure it was
+    /// written for was a frame that looked busy. A still headline making a false claim is the same
+    /// defect with the animation taken out.
+    /// </para>
+    /// <para>
+    /// <b>Which half wins when both stop the product.</b> A condition that already stops it keeps
+    /// its own wording: <i>adopt this frame</i>, <i>it has been blocked</i>, <i>it is updating</i>
+    /// are each more actionable than <i>it is fixing itself</i>, and the body under them renders an
+    /// adoption fingerprint rather than a delta. The composition is reached only where the Fleet
+    /// Manager has cleared the frame to run and the frame's own observation has not — which is
+    /// exactly the state that produced the contradiction, and is the same conjunction
+    /// <see cref="AgentStatus.ProductRuns"/> already makes.
+    /// </para>
+    /// </remarks>
+    public static string Headline(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!status.Condition.ProductRuns)
+        {
+            return status.Condition.Headline;
+        }
+
+        return HasStopped(status)
+            ? StoppedHeadline
+            : status.Drifted ? RepairingHeadline : status.Condition.Headline;
+    }
+
+    /// <summary>§2.7 item 1's second line, composed the same way as <see cref="Headline"/>.</summary>
+    public static string Detail(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!status.Condition.ProductRuns)
+        {
+            return status.Condition.Detail;
+        }
+
+        return HasStopped(status)
+            ? StoppedDetail
+            : status.Drifted ? RepairingDetail : status.Condition.Detail;
+    }
+
+    /// <summary>
+    /// §2.7 item 1's <c>Detected</c> field, or null when the headline has already said it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The same two sentences, a second time.</b> <c>ControlLink</c> and <c>ConnectionAttempt</c>
+    /// seed <see cref="Narration.Detected"/> and <see cref="Narration.WhyItMatters"/> from
+    /// <see cref="DeviceCondition.Headline"/> and <see cref="DeviceCondition.Detail"/>, so a surface
+    /// that renders all four printed the claim twice — measured on the same screenshot, at 30 px and
+    /// again at 20 px underneath it.
+    /// </para>
+    /// <para>
+    /// <see cref="Stage.StageRenderer"/> already suppressed the repeat for <c>Detected</c> and the
+    /// page did not, which is precisely the divergence this class exists to make impossible.
+    /// Composing the suppression here gives it to both surfaces, and it is written against the
+    /// composed headline as well as the condition's own, so a narration echoing either is dropped.
+    /// </para>
+    /// </remarks>
+    public static string? Detected(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        return status.Narration.Detected is { Length: > 0 } detected
+            && !string.Equals(detected, status.Condition.Headline, StringComparison.Ordinal)
+            && !string.Equals(detected, Headline(status), StringComparison.Ordinal)
+                ? detected
+                : null;
+    }
+
+    /// <summary>
+    /// §2.7 item 2, or null when <see cref="Detail"/> has already said it.
+    /// </summary>
+    public static string? WhyItMatters(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        return status.Narration.WhyItMatters is { Length: > 0 } why
+            && !string.Equals(why, status.Condition.Detail, StringComparison.Ordinal)
+            && !string.Equals(why, Detail(status), StringComparison.Ordinal)
+                ? why
+                : null;
+    }
+
     /// <summary>
     /// §2.7 item 7 — <c>item z failed after 3 tries, expected a but got b</c>, or null.
     /// </summary>
