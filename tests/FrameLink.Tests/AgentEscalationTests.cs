@@ -394,36 +394,41 @@ public sealed class AgentEscalationTests
         var outcome = await harness.ConvergeAsync();
         Assert.Equal(PassResult.Escalated, outcome.Result);
 
-        // Whatever the other resource had managed before the stop, it gets nothing after it: not
-        // an observation, not an Act, not a reboot. That is the whole of "the frame holds the
-        // failure and waits" — and it is asserted as an absence of work rather than as a state,
+        // Whatever the other resource had managed before the stop, no *work* happens on it after
+        // it: not an Act, not a reboot, not a spent attempt. That is the whole of "the frame holds
+        // the failure and waits", and it is asserted as an absence of work rather than as a state,
         // because whether this particular resource had already converged before the stop is not
         // the point and would make the test depend on the order two unrelated things happened in.
+        //
+        // Observations are deliberately *not* in that list. Decision 68: "Stopping means stopping
+        // acting, not stopping looking."
         var acts = other.Acts;
-        var observations = other.Observations;
         var crossings = harness.Boundary.Crossings.Count;
+        var attempts = ReconcileJournal.EntryFor(harness.Journal.Read(), "other").Attempts;
 
         harness.Clock.UtcNow += TimeSpan.FromHours(1);
         var after = await harness.PassAsync();
 
         Assert.Equal(PassResult.Escalated, after.Result);
         Assert.Equal(acts, other.Acts);
-        Assert.Equal(observations, other.Observations);
         Assert.Equal(crossings, harness.Boundary.Crossings.Count);
-        // Reported as not attempted rather than carrying a verdict from an earlier pass, because
-        // this pass did not look at it and a status list that says otherwise is a claim nobody made.
-        Assert.Equal(ResourceStatusKind.Blocked, ReconcileHarness.StatusOf(after, "other").Kind);
-        Assert.Equal("broken", ReconcileHarness.StatusOf(after, "other").BlockedBy);
+        Assert.Equal(attempts, ReconcileJournal.EntryFor(harness.Journal.Read(), "other").Attempts);
     }
 
     [Fact]
-    public async Task A_stopped_pass_still_reports_every_resource_in_the_catalog()
+    public async Task A_stopped_pass_reports_what_the_frame_is_rather_than_what_it_is_waiting_for()
     {
-        // The trap the previous shape had, measured: Blocked is not persisted, it is recomputed
-        // from what a walk reached - so a pass that stops early reported 37 to 56 rows of 79 and
-        // everything downstream vanished from the operator's view at exactly the moment they need
-        // to see what is queued up behind the failure. The completion is from the static graph, so
-        // it needs no observation and breaks none of decision 68's "stop acting".
+        // Decision 76, and the payload it was diagnosed from. The old shape returned at the first
+        // escalation and invented the rest of the catalog: every unreached resource was labelled
+        // Blocked with the escalated resource as its blockedBy, whether or not it depended on it.
+        // On the frame all 77 remaining rows claimed to be waiting on tool.xvf-host.installed,
+        // including boot.config.dtoverlay-waveshare-panel, which had been in sync since M2 and has
+        // no dependency on it at all — and the device reported 0 of 79 in sync while being almost
+        // entirely configured.
+        //
+        // Here "second" and "third" genuinely converge before "broken" gives up, so the true answer
+        // for both is in sync. Under the old shape they read as blocked on a resource neither of
+        // them has ever depended on.
         var broken = Broken();
         var second = new ScriptedResource("second", "want", "have-not");
         var third = new ScriptedResource("third", "want", "have-not");
@@ -433,27 +438,108 @@ public sealed class AgentEscalationTests
 
         Assert.Equal(PassResult.Escalated, outcome.Result);
         Assert.Equal(3, outcome.Statuses.Count);
+        Assert.Equal(ResourceStatusKind.Escalated, ReconcileHarness.StatusOf(outcome, "broken").Kind);
 
         foreach (var name in new[] { "second", "third" })
         {
             var status = ReconcileHarness.StatusOf(outcome, name);
 
-            // Named as waiting for the thing that actually stopped them, which is true in both
-            // readings: a dependent is blocked by the DAG, and everything else is blocked because
-            // nothing at all will be attempted until a human retries.
-            Assert.Equal(ResourceStatusKind.Blocked, status.Kind);
-            Assert.Equal("broken", status.BlockedBy);
+            Assert.Equal(ResourceStatusKind.InSync, status.Kind);
+            Assert.Null(status.BlockedBy);
         }
+
+        // And the count the operator reads is the count of the frame, not of the pass.
+        var report = harness.Telemetry.Latest!;
+        Assert.Equal(2, report.InSync);
+        Assert.Equal(1, report.RebootsExpected);
     }
 
     [Fact]
-    public async Task A_frame_that_has_already_given_up_touches_nothing_ordered_ahead_of_it()
+    public async Task A_stopped_pass_claims_no_dependency_the_graph_does_not_contain()
+    {
+        // The unambiguous half of decision 76, asserted against the graph itself rather than
+        // against a list of names — which is what makes it hold for any catalog. A row may only
+        // say it is blocked by X if X is in its own DependsOn closure, or if X is the one authority
+        // that is deliberately not a resource at all (§2.6's silent Fleet Manager).
+        //
+        // "downstream" genuinely depends on the resource that gives up; "unrelated" does not, and
+        // is drifted at the moment of the stop so that it cannot pass by being in sync.
+        var broken = Broken();
+        var downstream = new ScriptedResource("downstream", "want", "have-not", "broken");
+        var unrelated = new ScriptedResource("unrelated", "want", "have-not") { ActHasNoEffect = true };
+        using var harness = new ReconcileHarness(Options, broken, downstream, unrelated)
+        {
+            Telemetry = { Connected = true },
+        };
+
+        var outcome = await harness.ConvergeAsync();
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+
+        var depends = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
+        foreach (var resource in harness.Graph.Ordered)
+        {
+            depends[resource.Name] = resource.DependsOn;
+        }
+
+        foreach (var status in outcome.Statuses)
+        {
+            if (status.BlockedBy is not { } blocker || blocker == ReconcileLoop.SilentAuthority)
+            {
+                continue;
+            }
+
+            Assert.True(
+                Reaches(depends, status.Name, blocker),
+                $"'{status.Name}' claims to be blocked by '{blocker}', which is not in its dependency closure");
+        }
+
+        // The real dependent is named, so removing the false claims did not remove the true one.
+        var blocked = ReconcileHarness.StatusOf(outcome, "downstream");
+        Assert.Equal(ResourceStatusKind.Blocked, blocked.Kind);
+        Assert.Equal("broken", blocked.BlockedBy);
+
+        // And the resource that shares nothing with the failure is reported as what it is.
+        var untouched = ReconcileHarness.StatusOf(outcome, "unrelated");
+        Assert.Null(untouched.BlockedBy);
+        Assert.NotEqual(ResourceStatusKind.Blocked, untouched.Kind);
+    }
+
+    [Fact]
+    public async Task A_frame_that_gave_up_while_offline_still_headlines_the_resource_that_gave_up()
+    {
+        // Decision 70 states as a fact that a resource which has given up "sorts worst" in
+        // PublishStatusesAsync, and the enum's declaration order does not deliver it: Blocked is
+        // declared after Degraded. So a frame that gave up while its server was unreachable — which
+        // is Degraded rather than Escalated (§2.3) — headlined one of the blocked rows behind it,
+        // and the screen lost the resource name, the attempt count and §2.7 item 7's "has anybody
+        // been told" sentence. Decision 76 makes this reachable far more often, because a stopped
+        // frame now publishes the real blocked rows instead of one fabricated per resource.
+        var broken = Broken();
+        var downstream = new ScriptedResource("downstream", "want", "have-not", "broken");
+        using var harness = new ReconcileHarness(Options, broken, downstream) { Telemetry = { Connected = false } };
+
+        var outcome = await harness.ConvergeAsync();
+
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(ResourceStatusKind.Degraded, ReconcileHarness.StatusOf(outcome, "broken").Kind);
+        Assert.Equal(ResourceStatusKind.Blocked, ReconcileHarness.StatusOf(outcome, "downstream").Kind);
+
+        var narration = harness.Hub.Current.Reconcile;
+        Assert.Equal("broken", narration.Resource);
+        Assert.Equal(1, narration.Escalations);
+        Assert.Equal(
+            "The Fleet Manager could not be reached, so nobody has been told yet.",
+            narration.EscalationLine);
+    }
+
+    [Fact]
+    public async Task A_frame_that_has_already_given_up_acts_on_nothing_ordered_ahead_of_it()
     {
         // The half a per-resource check misses: the stop is inherited from an earlier process, and
         // the walk reaches the escalated entry only after everything ordered before it. Anything
-        // drifting there would be observed, acted on and rebooted for on every boot — §2.4's
-        // unbounded reboot loop, wearing the same hardware under a different resource's name, on a
-        // frame whose operator has already been told.
+        // drifting there would be acted on and rebooted for on every boot — §2.4's unbounded reboot
+        // loop, wearing the same hardware under a different resource's name, on a frame whose
+        // operator has already been told.
         var first = new ScriptedResource("first", "want", "want");
         var broken = Broken();
         using var harness = new ReconcileHarness(Options, first, broken) { Telemetry = { Connected = true } };
@@ -463,7 +549,6 @@ public sealed class AgentEscalationTests
         // Now something ordered ahead of the escalated resource drifts: a mixer value reset, a
         // hostname cloud-init put back.
         first.Drift();
-        var observations = first.Observations;
         var acts = first.Acts;
         var crossings = harness.Boundary.Crossings.Count;
 
@@ -471,17 +556,55 @@ public sealed class AgentEscalationTests
         var outcome = await harness.PassAsync();
 
         Assert.Equal(PassResult.Escalated, outcome.Result);
-        Assert.Equal(observations, first.Observations);
         Assert.Equal(acts, first.Acts);
         Assert.Equal(crossings, harness.Boundary.Crossings.Count);
+        Assert.Equal(0, ReconcileJournal.EntryFor(harness.Journal.Read(), "first").Attempts);
 
         // The drift is real and still there, so nothing above is passing because there was
         // nothing to do — the loop declined work it could have done.
         Assert.False((await first.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
 
+        // It is nevertheless *reported*, and reported as drifted rather than as blocked on the
+        // failure: a person reading this frame learns that two things are wrong with it, which is
+        // the truth, instead of one thing plus a false claim about the other (decision 76).
+        Assert.NotEqual(ResourceStatusKind.InSync, ReconcileHarness.StatusOf(outcome, "first").Kind);
+        Assert.Null(ReconcileHarness.StatusOf(outcome, "first").BlockedBy);
+
         // And the pass still says which resource stopped the frame, because a stop that reported
         // nothing would be indistinguishable from an agent that had simply died.
         Assert.Equal(ResourceStatusKind.Escalated, ReconcileHarness.StatusOf(outcome, "broken").Kind);
+    }
+
+    /// <summary>Whether <paramref name="from"/> depends on <paramref name="target"/>, transitively.</summary>
+    private static bool Reaches(
+        Dictionary<string, IReadOnlyList<string>> depends,
+        string from,
+        string target)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var queue = new Queue<string>();
+        queue.Enqueue(from);
+
+        while (queue.Count > 0)
+        {
+            var name = queue.Dequeue();
+            if (!seen.Add(name) || !depends.TryGetValue(name, out var dependencies))
+            {
+                continue;
+            }
+
+            foreach (var dependency in dependencies)
+            {
+                if (string.Equals(dependency, target, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                queue.Enqueue(dependency);
+            }
+        }
+
+        return false;
     }
 
     [Fact]

@@ -140,13 +140,19 @@ public sealed record ReconcileServices
 /// takes N round trips through a person.
 /// </para>
 /// <para>
-/// <b>Stopping means stopping acting, not stopping looking.</b> The status list a stopped pass
-/// publishes is completed from the static dependency graph, so it always carries every resource in
-/// the catalog: the ones already observed keep their real verdict and the rest are
-/// <c>Blocked</c> behind the resource that gave up. That needs no observation at all, which is why
-/// it is safe to do at the moment everything else stops — and without it, everything downstream
-/// vanishes from the operator's view at exactly the moment they need to see what is queued up
-/// behind the failure.
+/// <b>Stopping means stopping acting, not stopping looking (decision 76).</b> A stopped frame
+/// walks the whole catalog exactly as a running one does with its one change already spent: every
+/// resource is observed, nothing is acted on, no reboot is taken and no attempt is spent. So the
+/// report an operator reads is what this frame <i>is</i> — which on the frame that prompted this
+/// was 76 resources in sync behind one that had given up, reported as 0 of 79 because the pass
+/// returned at the escalation and labelled every unreached row <c>Blocked</c> by the resource that
+/// stopped it, dependency or not. <b>A stopped frame must not render as a broken one</b> any more
+/// than a broken one may render as working (§2.6).
+/// </para>
+/// <para>
+/// <b>The pass stopping is not the loop stopping (decision 75).</b> <see cref="RunAsync"/>
+/// schedules another pass after an escalation, because that tick is the only thing that can notice
+/// a budget a retry has reset — see <see cref="EndsTheLoop"/>.
 /// </para>
 /// </remarks>
 public sealed class ReconcileLoop
@@ -244,7 +250,7 @@ public sealed class ReconcileLoop
     /// <remarks>
     /// <para>
     /// Rung 4 stops the <i>frame</i>, and a stopped frame can have more than one resource that
-    /// gave up — <see cref="StoppedDeviceAsync"/> deliberately reports all of them, because clearing one
+    /// gave up — <see cref="WalkAsync"/> deliberately reports all of them, because clearing one
     /// while another remains would otherwise look like it had done nothing. This is the verb that
     /// matches that noun: an operator looking at a frame that has stopped reconciling asks it to
     /// try again, without having to name each setting that contributed.
@@ -453,153 +459,54 @@ public sealed class ReconcileLoop
 
         await AnnounceBootAsync(cancellationToken).ConfigureAwait(false);
 
-        // Before anything is observed, resumed or acted on. An escalation stops the *frame*
-        // (decision 68), so one inherited from an earlier process has to stop this pass at its
-        // very first instruction — a per-resource check inside the walk would let every resource
-        // ordered ahead of the escalated one be acted on and rebooted for, on every boot, forever.
-        // That is the durability the ledger is for: the frame holds the failure and waits.
-        if (await StoppedDeviceAsync(cancellationToken).ConfigureAwait(false) is { } stopped)
+        // Before anything is resumed or acted on. An escalation stops the *frame* (decision 68),
+        // so one inherited from an earlier process has to be known at this pass's very first
+        // instruction: a resume acts and reboots, and a per-resource check inside the walk would
+        // let every resource ordered ahead of the escalated one be acted on and rebooted for, on
+        // every boot, forever. That is the durability the ledger is for.
+        //
+        // What it does *not* do any more is end the pass. The walk runs, in observe-only mode, and
+        // publishes what it actually finds — see WalkAsync (decision 76).
+        if (!HasStopped)
         {
-            return await FinishAsync(
-                PassResult.Escalated,
-                stopped.Statuses,
-                null,
-                stopped.Detail,
-                cancellationToken).ConfigureAwait(false);
-        }
-
-        var resumed = await ResumePendingAsync(cancellationToken).ConfigureAwait(false);
-        if (resumed is not null)
-        {
-            return resumed;
+            var resumed = await ResumePendingAsync(cancellationToken).ConfigureAwait(false);
+            if (resumed is not null)
+            {
+                return resumed;
+            }
         }
 
         return await WalkAsync(cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
-    /// §2.5 rung 4 as a pass outcome — or null if this frame is still allowed to reconcile.
+    /// Rows for resources that gave up under a catalog this build no longer has.
     /// </summary>
     /// <remarks>
-    /// <para>
-    /// Every resource that gave up is reported, not merely the first. An operator deciding whether
-    /// to press <b>retry</b> needs to know how many settings gave up, and clearing one while
-    /// another remains would otherwise look like it had done nothing. The list is then completed
-    /// from the catalog, so a stopped frame's report is the whole catalog rather than the row or
-    /// two that happen to be in the ledger.
-    /// </para>
-    /// <para>
-    /// <b>It re-offers an escalation the Fleet Manager never received, and that is not "acting".</b>
-    /// §2.3 distinguishes <c>Degraded</c> from <c>Escalated</c> by exactly one thing — whether the
-    /// notification reached the server rather than the frame's offline buffer — and the promotion
-    /// used to happen in the walk. Under decision 68 the walk is never reached on a stopped frame,
-    /// so without this a frame that gave up during an outage would stay <c>Degraded</c> for ever,
-    /// telling its operator that nobody had been told long after somebody had. Nothing is observed,
-    /// nothing is acted on, no attempt is spent and nothing reboots: it is a message going out.
-    /// </para>
+    /// They keep the frame stopped, because <see cref="HasStopped"/> reads the ledger rather than
+    /// the graph, so they have to be named: a frame held by a resource nothing renders is a frame
+    /// whose screen cannot explain itself. They cannot be observed — there is no resource to ask —
+    /// so the ledger's own last record is the whole of what can be said about them.
     /// </remarks>
-    private async Task<(IReadOnlyList<ResourceStatus> Statuses, string Detail)?> StoppedDeviceAsync(
-        CancellationToken cancellationToken)
+    private List<ResourceStatus>? OrphanedGiveUps()
     {
-        List<ResourceStatus>? given = null;
+        List<ResourceStatus>? orphans = null;
 
         foreach (var entry in _services.Journal.Read().Ledger)
         {
-            if (!HasGivenUp(entry, _services.Options.AttemptBudget))
+            if (!HasGivenUp(entry, _services.Options.AttemptBudget)
+                || _services.Graph.Find(entry.Resource) is not null)
             {
                 continue;
             }
 
-            given ??= [];
-
-            given.Add(_services.Graph.Find(entry.Resource) is { } resource
-                ? await RefreshEscalationAsync(resource, entry, cancellationToken).ConfigureAwait(false)
-                : Terminal(
-                    entry.Resource,
-                    entry.EscalationNotified ? ResourceStatusKind.Escalated : ResourceStatusKind.Degraded,
-                    entry));
+            (orphans ??= []).Add(Terminal(
+                entry.Resource,
+                entry.EscalationNotified ? ResourceStatusKind.Escalated : ResourceStatusKind.Degraded,
+                entry));
         }
 
-        if (given is null)
-        {
-            return null;
-        }
-
-        var detail = $"'{string.Join("', '", given.Select(status => status.Name))}' has been given up on.";
-        return (Complete(given, given[0].Name), detail);
-    }
-
-    /// <summary>
-    /// Fills a partial status list out to the whole catalog, from the static dependency graph.
-    /// </summary>
-    /// <param name="observed">
-    /// What this pass actually looked at, in the order it looked. Every entry is preserved exactly
-    /// as it stands — nothing here overwrites an observation.
-    /// </param>
-    /// <param name="stoppedBy">
-    /// The resource that gave up, named as what everything else is waiting for.
-    /// </param>
-    /// <remarks>
-    /// <para>
-    /// <b>The measured trap this exists for.</b> <c>Blocked</c> is not persisted; it is recomputed
-    /// from the resources a walk actually reached. A pass that stops at the first escalation
-    /// therefore reached 37 to 56 of the catalog's 79, and the other twenty-odd silently vanished
-    /// from the Fleet Manager's view — at exactly the moment an operator needs to see what is
-    /// queued up behind the failure. An empty row is not safer than an informative one; it is a
-    /// frame that looks smaller than it is.
-    /// </para>
-    /// <para>
-    /// <b>It needs no observation, which is what makes it safe here.</b> Everything it uses is
-    /// static: the catalog's own order, and the name of the resource that stopped the pass. Nothing
-    /// is read off the machine, nothing is acted on, and no attempt is spent — so completing the
-    /// list breaks none of decision 68's "stop acting". Stopping means stopping acting, not
-    /// stopping looking.
-    /// </para>
-    /// <para>
-    /// <b>Every unreached resource is blocked by the one that gave up, whether or not it depends
-    /// on it.</b> That is true in both readings: a dependent is blocked by the DAG, and everything
-    /// else is blocked because nothing at all will be attempted until a human retries. Splitting
-    /// the two would put a distinction on screen that changes nothing about what anybody does next.
-    /// </para>
-    /// </remarks>
-    private List<ResourceStatus> Complete(List<ResourceStatus> observed, string stoppedBy)
-    {
-        var seen = new Dictionary<string, ResourceStatus>(observed.Count, StringComparer.Ordinal);
-        foreach (var status in observed)
-        {
-            seen[status.Name] = status;
-        }
-
-        var state = _services.Journal.Read();
-        var complete = new List<ResourceStatus>(_services.Graph.Count);
-
-        foreach (var resource in _services.Graph.Ordered)
-        {
-            if (seen.Remove(resource.Name, out var status))
-            {
-                complete.Add(status);
-                continue;
-            }
-
-            var entry = ReconcileJournal.EntryFor(state, resource.Name);
-
-            complete.Add(new ResourceStatus
-            {
-                Name = resource.Name,
-                Kind = ResourceStatusKind.Blocked,
-                BlockedBy = stoppedBy,
-                Delta = $"not attempted: waiting for '{stoppedBy}'",
-                Attempts = Spent(entry),
-                AttemptBudget = _services.Options.AttemptBudget,
-                Escalations = entry.Escalations,
-            });
-        }
-
-        // A status whose resource the catalog no longer has. It cannot be reconciled and it is not
-        // dropped either: silently losing a row is the failure this whole method exists to fix.
-        complete.AddRange(seen.Values);
-
-        return complete;
+        return orphans;
     }
 
     /// <summary>
@@ -714,28 +621,71 @@ public sealed class ReconcileLoop
 
             if (failed.Kind.HasGivenUp())
             {
-                // The verify that gave up is the last thing this pass does (decision 68). Walking
-                // on would act on whatever is ordered ahead of it, and the budget of the next
-                // resource to fail for the same underlying cause would be spent on the same fault.
-                return await FinishAsync(
-                    PassResult.Escalated,
-                    Complete([failed], resource.Name),
-                    null,
-                    $"'{resource.Name}' has been given up on.",
-                    cancellationToken).ConfigureAwait(false);
+                // The verify that gave up is the last thing this pass *acts* on (decision 68). It
+                // is not the last thing the pass does: the walk below runs in observe-only mode and
+                // publishes what this frame actually is, which is the difference between a stopped
+                // frame and a frame nobody can see (decision 76). The ledger now carries the
+                // escalation, so WalkAsync reads it and needs telling nothing.
+                _services.Log.Fail($"'{resource.Name}' has been given up on.");
             }
         }
 
         return null;
     }
 
+    /// <summary>
+    /// Walks the whole catalog — observing everything, acting on at most one thing, and acting on
+    /// nothing at all once this frame has given up.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A stopped frame walks exactly like a running one with its one change already spent</b>
+    /// (decision 76). §2.5 rung 4 is "the agent performs no further Act and takes no further
+    /// reboot", and decision 68 spells out what that leaves: <i>stopping means stopping acting, not
+    /// stopping looking</i>, reusing "the one-change-per-pass rule that turns the remainder of a
+    /// walk into pure observation" rather than inventing a second shape. So the stop is applied by
+    /// starting the walk with its change already spent, and every branch below is the branch it
+    /// always was.
+    /// </para>
+    /// <para>
+    /// <b>What that replaces was a walk that returned at the first escalation and then invented the
+    /// rest of the catalog.</b> Every unreached resource was labelled <c>Blocked</c> with the
+    /// escalated resource as its <c>blockedBy</c>, whether or not it depended on it — measured in
+    /// the payload from the frame, all 77 remaining rows claimed to be waiting on
+    /// <c>tool.xvf-host.installed</c>, including <c>boot.config.dtoverlay-waveshare-panel</c>, which
+    /// had been in sync since M2 and has no dependency on it whatsoever. The device reported
+    /// <b>0 of 79 in sync</b> while being almost entirely configured. Both halves of that were
+    /// fabrication: the dependency claim, and the census.
+    /// </para>
+    /// <para>
+    /// <b>Observing instead of inventing answers both at once, and needs no new machinery.</b>
+    /// <see cref="Blocker"/> already computes the DAG-true <c>Blocked(dependency)</c> for anything
+    /// genuinely downstream of the resource that gave up, because that resource is not
+    /// <c>InSync</c>; everything else reports what it is. There is nothing left to carry forward
+    /// from an earlier pass and nothing to mark stale, because every row is established by looking,
+    /// this pass, at this frame.
+    /// </para>
+    /// <para>
+    /// <b>The cost is one observation sweep per pass on a stopped frame, which is exactly what a
+    /// converged frame already pays.</b> Observe is side-effect-free by §2.3's contract — that is
+    /// the same guarantee decision 68 leans on — so the sweep spends no attempt, writes nothing to
+    /// the machine and takes no reboot.
+    /// </para>
+    /// </remarks>
     private async Task<PassOutcome> WalkAsync(CancellationToken cancellationToken)
     {
         var statuses = new Dictionary<string, ResourceStatus>(_services.Graph.Count, StringComparer.Ordinal);
         var ordered = new List<ResourceStatus>(_services.Graph.Count);
-        var acted = false;
+
+        // §2.5 rung 4 as one boolean, read once before anything is looked at. A per-resource check
+        // would let everything ordered ahead of the escalated resource be acted on and rebooted for
+        // on every boot, which is the failure the durable ledger exists to prevent.
+        var stopped = HasStopped;
+        var acted = stopped;
+
+        List<string>? gaveUp = null;
         DateTimeOffset? earliest = null;
-        var result = PassResult.Converged;
+        var result = stopped ? PassResult.Escalated : PassResult.Converged;
         string? detail = null;
 
         foreach (var resource in _services.Graph.Ordered)
@@ -765,20 +715,23 @@ public sealed class ReconcileLoop
             {
                 // §2.5 rung 2: stop touching it. The resource is not observed and not acted on
                 // until somebody resets the budget, which is what "stop" has to mean if the frame
-                // is to stop rebooting — and rung 4: the pass stops with it, so nothing ordered
-                // after this is attempted either.
-                var escalated = await RefreshEscalationAsync(resource, entry, cancellationToken).ConfigureAwait(false);
-                Record(escalated);
+                // is to stop rebooting. Rung 4 stops the frame around it — which `stopped` above
+                // has already applied to every resource in this walk, including the ones ordered
+                // ahead of this one.
+                (gaveUp ??= []).Add(resource.Name);
+                Record(await RefreshEscalationAsync(resource, entry, cancellationToken).ConfigureAwait(false));
 
-                return await FinishAsync(
-                    PassResult.Escalated,
-                    Complete(ordered, resource.Name),
-                    null,
-                    $"'{resource.Name}' has been given up on.",
-                    cancellationToken).ConfigureAwait(false);
+                stopped = true;
+                acted = true;
+                result = Worst(result, PassResult.Escalated);
+                continue;
             }
 
-            if (entry.NextAttemptUtc is { } next && _services.Clock.UtcNow < next)
+            // A backoff is a promise that this resource will be tried again shortly, and on a
+            // stopped frame nothing will be tried again until a person acts. So the countdown is
+            // skipped and the resource is observed like any other: what it *is* is knowable, and
+            // "trying again in 30s" is not true.
+            if (!stopped && entry.NextAttemptUtc is { } next && _services.Clock.UtcNow < next)
             {
                 earliest = Sooner(earliest, next);
                 Record(new ResourceStatus
@@ -893,16 +846,37 @@ public sealed class ReconcileLoop
 
             if (applied.Status.Kind.HasGivenUp())
             {
-                // A resource gave up while this pass was running (decision 68). Everything after
-                // it in the order is not merely unattempted but must stay so, and the list is
-                // completed from the catalog on the way out so the operator still sees all of it.
-                return await FinishAsync(
-                    PassResult.Escalated,
-                    Complete(ordered, resource.Name),
-                    earliest,
-                    detail ?? $"'{resource.Name}' has been given up on.",
-                    cancellationToken).ConfigureAwait(false);
+                // A resource gave up while this pass was running (decision 68). Nothing after it is
+                // acted on — `acted` is already true and `stopped` makes that permanent for the
+                // rest of the walk — but everything after it is still *observed*, so the operator
+                // sees what this frame is rather than a list of claims about what it is waiting for
+                // (decision 76).
+                (gaveUp ??= []).Add(resource.Name);
+                stopped = true;
             }
+        }
+
+        if (OrphanedGiveUps() is { } orphans)
+        {
+            foreach (var orphan in orphans)
+            {
+                (gaveUp ??= []).Add(orphan.Name);
+                Record(orphan);
+                result = Worst(result, PassResult.Escalated);
+            }
+        }
+
+        if (gaveUp is not null)
+        {
+            // Nothing is scheduled on a stopped frame, so a backoff or a recheck left behind by
+            // another resource must not shorten the wait: the only thing that changes now is a
+            // person, and the ordinary pass interval is the cadence for noticing one (decision 75).
+            earliest = null;
+
+            // Every resource that gave up, not merely the first. An operator deciding whether to
+            // press retry needs to know how many settings gave up, and clearing one while another
+            // remained would otherwise look like it had done nothing.
+            detail = $"'{string.Join("', '", gaveUp)}' has been given up on.";
         }
 
         return await FinishAsync(result, ordered, earliest, detail, cancellationToken).ConfigureAwait(false);
@@ -1096,7 +1070,7 @@ public sealed class ReconcileLoop
 
                 return await FinishAsync(
                     failed.Kind.HasGivenUp() ? PassResult.Escalated : PassResult.Pending,
-                    failed.Kind.HasGivenUp() ? Complete([failed], resource.Name) : [failed],
+                    [failed],
                     failed.NextAttemptUtc,
                     crossing.Detail,
                     cancellationToken).ConfigureAwait(false);
@@ -1169,7 +1143,7 @@ public sealed class ReconcileLoop
 
                 return await FinishAsync(
                     failed.Kind.HasGivenUp() ? PassResult.Escalated : PassResult.Rebooted,
-                    failed.Kind.HasGivenUp() ? Complete([failed], resource.Name) : [failed],
+                    [failed],
                     failed.NextAttemptUtc,
                     null,
                     cancellationToken).ConfigureAwait(false);
@@ -1485,11 +1459,11 @@ public sealed class ReconcileLoop
     /// that does not exist.
     /// </para>
     /// <para>
-    /// <b><see cref="PassResult.Escalated"/> no longer travels through here at all</b> (decision
-    /// 68): an escalation ends the pass where it happens, so it is returned directly rather than
-    /// merged with whatever else the walk found. It is nevertheless ranked above everything the
-    /// walk can produce, so that a future <c>Worst(result, Escalated)</c> added by somebody who has
-    /// not read this cannot quietly turn a stopped frame back into a running one.
+    /// <b><see cref="PassResult.Escalated"/> travels through here and outranks everything the walk
+    /// can produce.</b> A stopped frame keeps walking — observing, never acting (decision 76) — so
+    /// the escalation is merged with whatever else that walk found rather than returned from the
+    /// point it happened. The rank is what makes that safe: no number of in-sync, blocked or
+    /// backing-off rows found afterwards can turn a stopped frame back into a running one.
     /// </para>
     /// </remarks>
     private static PassResult Worst(PassResult current, PassResult candidate) =>
@@ -1589,9 +1563,16 @@ public sealed class ReconcileLoop
         DateTimeOffset? next,
         CancellationToken cancellationToken)
     {
+        // A resource that has given up sorts worst, which decision 70 states as a fact about this
+        // method and which the enum's own order does not deliver: `Blocked` is declared after
+        // `Degraded`, so a frame that gave up while its server was unreachable narrated a *blocked*
+        // row as its headline — losing the resource name, the attempt count and the "has anybody
+        // been told" line that §2.7 item 7 is made of. Asked explicitly here rather than by
+        // renumbering the enum, whose order is a wire-adjacent detail nothing else should depend on.
         var worst = statuses
             .Where(status => status.Kind != ResourceStatusKind.InSync)
-            .OrderByDescending(status => (int)status.Kind)
+            .OrderByDescending(status => status.Kind.HasGivenUp())
+            .ThenByDescending(status => (int)status.Kind)
             .FirstOrDefault();
 
         // §2.10 clause 1, the reconciler's half: supervision must not touch anything this loop is
