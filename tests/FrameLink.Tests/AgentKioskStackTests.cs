@@ -21,6 +21,23 @@ public sealed class AgentKioskStackTests
 {
     private static readonly CancellationToken None = TestContext.Current.CancellationToken;
 
+    /// <summary>The one <c>systemctl show</c> the autologin resource makes, verbatim.</summary>
+    private const string ShowGetty =
+        "show getty@tty1.service -p ExecStart -p LoadState -p ActiveState -p ActiveEnterTimestampMonotonic";
+
+    /// <summary>How the session is asked for on an OS that no longer has <c>/run/utmp</c>.</summary>
+    private const string ListSessions = "loginctl list-sessions --no-legend";
+
+    /// <summary>A getty that has the drop-in loaded and is up, active since 4.2 s into the boot.</summary>
+    private const string AutologinLoaded =
+        "ExecStart={ path=/sbin/agetty ; argv[]=/sbin/agetty --autologin framelink --noclear %I $TERM ; ignore_errors=yes }\n"
+        + "LoadState=loaded\n"
+        + "ActiveState=active\n"
+        + "ActiveEnterTimestampMonotonic=4200000";
+
+    /// <summary>What <c>loginctl list-sessions --no-legend</c> prints on a frame that logged in.</summary>
+    private const string LoggedInOnTty1 = "      1 1000 framelink seat0 tty1  active no   -";
+
     [Fact]
     public async Task Autologin_writes_the_drop_in_with_the_empty_ExecStart_that_makes_it_override()
     {
@@ -55,14 +72,200 @@ public sealed class AgentKioskStackTests
 
         // The file is perfect and systemd is still running the stock agetty — the exact state a
         // drop-in missing its empty ExecStart produces, and one a content compare calls healthy.
-        systemd.Answer("show getty@tty1.service -p ExecStart -p LoadState",
-            "ExecStart=/sbin/agetty -o -p -- \\u --noclear - $TERM\nLoadState=loaded");
-        processes.Answers["who "] = new ProcessResult(0, "framelink tty1         2026-08-15 12:00", string.Empty);
+        systemd.Answer(ShowGetty,
+            "ExecStart=/sbin/agetty -o -p -- \\u --noclear - $TERM\nLoadState=loaded\nActiveState=active");
+        processes.Answers[ListSessions] = new ProcessResult(0, LoggedInOnTty1, string.Empty);
 
         var observation = await resource.ObserveAsync(None);
 
         Assert.False(observation.InSync);
         Assert.Contains("systemd runs", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Autologin_reads_the_session_from_logind_rather_than_from_who()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        systemd.Answer(ShowGetty, AutologinLoaded);
+        processes.Answers[ListSessions] = new ProcessResult(0, LoggedInOnTty1, string.Empty);
+
+        var observation = await resource.ObserveAsync(None);
+
+        Assert.True(observation.InSync);
+
+        // `who` is gone from this resource because it was the fragile half of an observation that
+        // burned five reboots, an escalation and twelve blocked dependents on a correctly
+        // configured frame. It is NOT gone because it cannot work: measured on the frame
+        // afterwards, /run/utmp is absent and `who` answers anyway, exits 0 and prints a correct
+        // `framelink tty1` line. That failure is not explained. What logind buys is not a fix for a
+        // known cause — it is the authority that owns session state, and a session carrying both
+        // the user and tty1 is the console autologin specifically.
+        Assert.DoesNotContain(processes.Commands, command => command.StartsWith("who", StringComparison.Ordinal));
+        Assert.Contains(ListSessions, processes.Commands);
+    }
+
+    [Fact]
+    public async Task A_missing_session_records_how_long_the_getty_had_been_up()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        // Active since 4.2 s into a boot that is now 51.2 s old.
+        files.Seed(ConsoleAutologinResource.UptimePath, "51.20 402.11\n");
+        systemd.Answer(ShowGetty, AutologinLoaded);
+        processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var drifted = await resource.ObserveAsync(None);
+
+        // The number nobody had when this resource escalated, and the one that separates the two
+        // surviving explanations on sight: sampled before the login happened, or a console that
+        // logs nobody in. Reported, never acted on — a threshold now would be behaviour justified
+        // by a cause nobody has established.
+        Assert.False(drifted.InSync);
+        Assert.Contains("getty@tty1.service active for 47s", drifted.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_getty_age_is_systemds_own_number_against_the_kernels()
+    {
+        Assert.Equal(47, ConsoleAutologinResource.ActiveForSeconds("ActiveEnterTimestampMonotonic=4200000", "51.20 402.11"));
+
+        // A frame that cannot answer either half says nothing rather than claiming zero, which is
+        // itself the meaningful reading: a getty that went active this instant.
+        Assert.Null(ConsoleAutologinResource.ActiveForSeconds("ActiveEnterTimestampMonotonic=0", "51.20 402.11"));
+        Assert.Null(ConsoleAutologinResource.ActiveForSeconds("ActiveState=active", "51.20 402.11"));
+        Assert.Null(ConsoleAutologinResource.ActiveForSeconds("ActiveEnterTimestampMonotonic=4200000", null));
+        Assert.Null(ConsoleAutologinResource.ActiveForSeconds("ActiveEnterTimestampMonotonic=4200000", "not a number"));
+        Assert.Equal(0, ConsoleAutologinResource.ActiveForSeconds("ActiveEnterTimestampMonotonic=4200000", "4.30 9.10"));
+    }
+
+    [Fact]
+    public async Task Autologin_is_drifted_when_logind_has_no_session_on_tty1()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        systemd.Answer(ShowGetty, AutologinLoaded);
+
+        // A settled getty with nothing logged in on its terminal is the fault the third clause is
+        // for: the file is right, systemd loaded it, and nothing that draws on the screen will ever
+        // start. Escalating to a person is the correct end of that.
+        processes.Answers[ListSessions] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var drifted = await resource.ObserveAsync(None);
+
+        Assert.False(drifted.InSync);
+        Assert.Contains("logind has no session for framelink on tty1", drifted.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_administrators_ssh_session_is_not_a_console_login()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        systemd.Answer(ShowGetty, AutologinLoaded);
+
+        // Somebody logged in over the network to find out why the frame is dark is the same user
+        // with the same uid, and logind lists them with their pty. If that counted, the resource
+        // would report healthy exactly while a person was standing there proving it was not.
+        processes.Answers[ListSessions] = new ProcessResult(0, "      3 1000 framelink -     pts/0", string.Empty);
+
+        var drifted = await resource.ObserveAsync(None);
+
+        Assert.False(drifted.InSync);
+        Assert.Contains("logind has no session for framelink on tty1", drifted.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_getty_that_has_not_started_yet_is_not_drift_and_is_not_asked_about_sessions()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+
+        // getty@.service is Type=idle, so for up to five seconds of every boot the unit is loaded,
+        // correct, and has not run agetty yet. A session sampled in that window is absent for a
+        // reason that says nothing about this setting — and a resource that called it drift would
+        // act, reboot, and land in the identical window on the next boot, forever.
+        systemd.Answer(ShowGetty, AutologinLoaded.Replace("ActiveState=active", "ActiveState=activating", StringComparison.Ordinal));
+
+        var observation = await resource.ObserveAsync(None);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("has not run its login yet", observation.Observed, StringComparison.Ordinal);
+        Assert.DoesNotContain(ListSessions, processes.Commands);
+    }
+
+    [Fact]
+    public async Task A_getty_that_is_not_running_is_reported_as_itself()
+    {
+        using var files = new TemporaryFiles();
+        var systemd = new RecordingSystemControl();
+        var processes = new RecordingProcessRunner();
+        var resource = new ConsoleAutologinResource(files.Files, systemd, processes, new FakeUserSession());
+
+        files.Seed(ConsoleAutologinResource.DropInPath, ConsoleAutologinResource.ContentFor("framelink"));
+        systemd.Answer(ShowGetty, AutologinLoaded.Replace("ActiveState=active", "ActiveState=failed", StringComparison.Ordinal));
+
+        var drifted = await resource.ObserveAsync(None);
+
+        // A different diagnosis from "the login did not take", and the one that leads somewhere:
+        // a getty in this state will never log anybody in, whatever the drop-in says.
+        Assert.False(drifted.InSync);
+        Assert.Contains("getty@tty1.service is failed", drifted.Observed, StringComparison.Ordinal);
+        Assert.DoesNotContain(ListSessions, processes.Commands);
+    }
+
+    [Fact]
+    public void The_session_list_is_read_by_field_because_loginctls_columns_have_moved()
+    {
+        // systemd ≤ 255 printed SESSION UID USER SEAT TTY; later versions append STATE and IDLE.
+        // A parser pinned to a column index would call a healthy frame drifted on an OS upgrade,
+        // which is the same class of fault as reading a file the OS no longer writes.
+        Assert.True(ConsoleAutologinResource.HasSessionOnTty1(
+            "      1 1000 framelink seat0 tty1",
+            "framelink"));
+
+        Assert.True(ConsoleAutologinResource.HasSessionOnTty1(
+            "SESSION  UID USER      SEAT  TTY   STATE  IDLE SINCE\n"
+            + "      1 1000 framelink seat0 tty1  active no   -\n"
+            + "      3 1000 framelink -     pts/0 active no   -\n"
+            + "\n2 sessions listed.",
+            "framelink"));
+
+        // The header names neither the user nor the terminal, so it can never match on its own.
+        Assert.False(ConsoleAutologinResource.HasSessionOnTty1(
+            "SESSION  UID USER      SEAT  TTY   STATE  IDLE SINCE",
+            "framelink"));
+
+        // Another account holding the console is not this account holding the console.
+        Assert.False(ConsoleAutologinResource.HasSessionOnTty1("      1    0 root      seat0 tty1", "framelink"));
+        Assert.False(ConsoleAutologinResource.HasSessionOnTty1(string.Empty, "framelink"));
+
+        // A device path is accepted beside the bare name; nothing that is not tty1 can end in it.
+        Assert.True(ConsoleAutologinResource.HasSessionOnTty1("      1 1000 framelink seat0 /dev/tty1", "framelink"));
+        Assert.False(ConsoleAutologinResource.HasSessionOnTty1("      1 1000 framelink seat0 tty11", "framelink"));
+
+        Assert.Equal("active", ConsoleAutologinResource.ActiveStateIn("LoadState=loaded\nActiveState=active"));
+        Assert.Null(ConsoleAutologinResource.ActiveStateIn("LoadState=loaded"));
     }
 
     [Fact]
@@ -76,7 +279,7 @@ public sealed class AgentKioskStackTests
             new RecordingProcessRunner(),
             new FakeUserSession());
 
-        systemd.Answer("show getty@tty1.service -p ExecStart -p LoadState", "ExecStart=\nLoadState=not-found");
+        systemd.Answer(ShowGetty, "ExecStart=\nLoadState=not-found\nActiveState=inactive");
 
         var observation = await resource.ObserveAsync(None);
 

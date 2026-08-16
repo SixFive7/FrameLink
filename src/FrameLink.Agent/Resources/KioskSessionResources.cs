@@ -1,3 +1,4 @@
+using System.Globalization;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 
@@ -116,11 +117,70 @@ public sealed class SwapZramResource : IResource
 /// when they do the file is the half that lies.
 /// </para>
 /// <para>
-/// <b>And why <c>who</c> is the third check.</b> §2.4 forbids claiming "applied" from a successful
-/// write, and the post-boot effect of this resource is a login session on tty1. A frame that boots
-/// straight past the verify with the getty still starting spends at most one attempt and clears on
-/// the retry thirty seconds later; a frame that never logs anyone in escalates to a person, which
-/// is right, because nothing else on it will ever start.
+/// <b>And why the session is the third check.</b> §2.4 forbids claiming "applied" from a successful
+/// write, and the post-boot effect of this resource is a login session on tty1. A frame that never
+/// logs anyone in escalates to a person, which is right, because nothing else on it will ever
+/// start.
+/// </para>
+/// <para>
+/// <b>That session is read from logind, and it used to be read from <c>who</c>. The failure that
+/// caused the change is not explained, and this paragraph says so rather than guessing a second
+/// time.</b> On the first full provision this resource burned all five attempts, rebooted the frame
+/// five times, escalated, and left <b>twelve</b> resources <c>Blocked</c> behind it — while the
+/// drop-in was byte-correct, <c>systemd</c> had loaded it, and the only failing clause was
+/// <i>"nobody is logged in as framelink on tty1"</i>. What was then measured on the frame:
+/// <c>/run/utmp</c> is <b>absent</b> on Debian 13, and <c>who</c> <b>answers anyway</b>, exits 0,
+/// and correctly prints a <c>framelink tty1</c> line — Debian's <c>who</c> has another source,
+/// evidently logind. So the tidy explanation, that <c>who</c> reads a file this OS no longer has
+/// and therefore can never answer, is <b>false</b>, and it was written into this file once already.
+/// </para>
+/// <para>
+/// <b>What the evidence does support.</b> The verifies followed genuine reboots — the loop reaches
+/// that message only when the boot id changed. The configuration that was in place for the last two
+/// verifies is byte-identical to the one serving a working console session today, so the file is not
+/// the difference. The environment is not the difference either: <c>systemctl</c> is launched by the
+/// same <see cref="HostProcessRunner"/> from the same <c>PATH</c> in the same process, and its
+/// clause <i>passed</i> on the very passes where this one failed, so a <c>/usr/bin</c> binary
+/// demonstrably resolved. And the agent starts alongside the console getty rather than after it —
+/// <c>agetty</c> at pid 918 against <c>fl-agent</c> at pid 930 on one boot, the getty at pid 906 on
+/// another — while this verify is the first thing the loop does on a new boot, and the retry
+/// backoffs are spent rebooting for other resources, so every sample this resource ever took landed
+/// seconds after a boot.
+/// </para>
+/// <para>
+/// <b>What is left is two candidates and no way to choose between them from what was captured.</b>
+/// Either the sample was taken before the login had happened — which the timing above makes
+/// possible on every attempt rather than on one — or the console autologin genuinely was not
+/// producing a session in that window, in which case the check was telling the truth and the
+/// resource did its job. Nobody sampled the frame at boot-plus-one-second while it was failing, and
+/// the session that exists now started <i>after</i> the last failure, so neither candidate is
+/// excluded. A third is not excluded either: <see cref="HostProcessRunner"/> returns empty output
+/// when a command fails to launch, so the old code reported "nobody is logged in" for a <c>who</c>
+/// that never ran, and the journal cannot tell the two apart. The honest position is that the
+/// observable was fragile, it has been replaced, and the original failure is not fully explained.
+/// </para>
+/// <para>
+/// <b>Why logind is still the right observable, independent of all of that.</b> It is the authority
+/// that owns session state rather than a reporting tool layered over it; it distinguishes <i>this</i>
+/// login on tty1 from an administrator's SSH session, which <c>user@1000.service</c> being active
+/// cannot; and a failed <c>loginctl</c> is now reported as a tool that would not answer rather than
+/// as an absent session, which is the distinction the old code could not draw.
+/// </para>
+/// <para>
+/// <b>The <c>ActiveState</c> gate, and the number that will settle this next time.</b> A login
+/// session is a runtime fact, and a runtime fact sampled at the wrong instant is exactly how a
+/// correct configuration gets reported as drift. So the same <c>systemctl show</c> that reads the
+/// effective <c>ExecStart</c> also reads <c>ActiveState</c>: while the unit is still
+/// <c>activating</c> — which it genuinely is for up to five seconds of every boot, because
+/// <c>getty@.service</c> is <c>Type=idle</c> — the absence of a session is not a verdict about
+/// anything and is not counted. Every settled state is counted, and a getty that is
+/// <c>inactive</c> or <c>failed</c> is reported as itself, because that will never log anybody in.
+/// Beyond the gate, the delta now carries <b>how long the getty had been active</b> when no session
+/// was found, computed from the unit's own <c>ActiveEnterTimestampMonotonic</c> against
+/// <c>/proc/uptime</c>. That single number separates the two surviving candidates on sight — "active
+/// for 1s" is a sample taken too early, "active for 47s" is a console that is genuinely not logging
+/// anybody in — and it is deliberately <i>reported</i> rather than acted on, because a threshold
+/// chosen now would be a behaviour justified by a cause nobody has established.
 /// </para>
 /// </remarks>
 public sealed class ConsoleAutologinResource : IResource
@@ -133,6 +193,12 @@ public sealed class ConsoleAutologinResource : IResource
 
     /// <summary>The unit the drop-in modifies.</summary>
     public const string UnitName = "getty@tty1.service";
+
+    /// <summary>The terminal that unit owns, as <c>loginctl</c> spells it.</summary>
+    public const string Tty = "tty1";
+
+    /// <summary>Where the kernel publishes how long this boot has lasted.</summary>
+    public const string UptimePath = "/proc/uptime";
 
     private readonly ISystemFiles _files;
     private readonly ISystemControl _systemControl;
@@ -179,7 +245,7 @@ public sealed class ConsoleAutologinResource : IResource
         var desired = ContentFor(user);
         var actual = _files.ReadText(DropInPath);
 
-        var expected = $"{DropInPath} autologin {user}, systemd agrees, {user} on tty1";
+        var expected = $"{DropInPath} autologin {user}, systemd agrees, a logind session for {user} on {Tty}";
         var wrong = new List<string>(3);
 
         if (!string.Equals(
@@ -191,7 +257,9 @@ public sealed class ConsoleAutologinResource : IResource
         }
 
         var shown = await _systemControl
-            .RunAsync(["show", UnitName, "-p", "ExecStart", "-p", "LoadState"], cancellationToken)
+            .RunAsync(
+                ["show", UnitName, "-p", "ExecStart", "-p", "LoadState", "-p", "ActiveState", "-p", "ActiveEnterTimestampMonotonic"],
+                cancellationToken)
             .ConfigureAwait(false);
 
         if (shown.Output.Contains("LoadState=not-found", StringComparison.Ordinal))
@@ -207,10 +275,47 @@ public sealed class ConsoleAutologinResource : IResource
             wrong.Add($"systemd runs {Effective(shown.Output)}");
         }
 
-        var who = await _processes.RunAsync("who", [], cancellationToken).ConfigureAwait(false);
-        if (!IsLoggedInOnTty1(who.StandardOutput, user))
+        var state = ActiveStateIn(shown.Output);
+
+        if (state is null or "activating" or "reloading")
         {
-            wrong.Add($"nobody is logged in as {user} on tty1");
+            // getty@.service is Type=idle, so on every boot there is a window — up to five seconds
+            // — in which the unit exists, is correct, and has not run agetty yet. There is no
+            // session to find in that window and its absence says nothing, so it is not counted.
+            // What carries the verdict instead is the pair above, and they are the durable pair: a
+            // file that survived the boot and the value systemd actually loaded from it. Nothing
+            // hides here — the loop is level-triggered, so a frame whose login is genuinely broken
+            // is asked again on the next pass, by which time the unit has certainly settled.
+            return new ResourceObservation(
+                wrong.Count == 0,
+                expected,
+                wrong.Count == 0
+                    ? $"{DropInPath} autologin {user}, systemd agrees, {UnitName} is {state ?? "in a state systemd did not report"} and has not run its login yet"
+                    : string.Join("; ", wrong));
+        }
+
+        if (!string.Equals(state, "active", StringComparison.Ordinal))
+        {
+            // Not a missing session — a missing getty. It will never log anybody in, and that is a
+            // different diagnosis from a login that was attempted and did not take.
+            wrong.Add($"{UnitName} is {state}");
+        }
+        else
+        {
+            var sessions = await _processes
+                .RunAsync("loginctl", ["list-sessions", "--no-legend"], cancellationToken)
+                .ConfigureAwait(false);
+
+            if (!HasSessionOnTty1(sessions.StandardOutput, user))
+            {
+                // The age is evidence, not a verdict. It is the one number that separates "sampled
+                // before the login happened" from "this console logs nobody in", and neither of
+                // those has been established — so it is written down where the next occurrence will
+                // carry it, and nothing branches on it.
+                wrong.Add(sessions.Succeeded
+                    ? $"logind has no session for {user} on {Tty}{Age(shown.Output)}"
+                    : $"logind would not say which sessions exist ({Summarise(sessions)})");
+            }
         }
 
         return new ResourceObservation(
@@ -233,23 +338,132 @@ public sealed class ConsoleAutologinResource : IResource
             $"Telling this frame to sign itself in as '{user}' as soon as it starts, so it can put something on the screen.");
     }
 
-    /// <summary>Whether <c>who</c> shows <paramref name="user"/> holding tty1.</summary>
-    public static bool IsLoggedInOnTty1(string whoOutput, string user)
+    /// <summary>
+    /// Whether <c>loginctl list-sessions</c> shows <paramref name="user"/> holding
+    /// <see cref="Tty"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Matched on <i>fields</i> rather than on column positions, because the columns have moved:
+    /// <c>SESSION UID USER SEAT TTY</c> grew <c>STATE</c> and <c>IDLE</c> in later systemd, and a
+    /// parser pinned to index 4 would start reporting a healthy frame as drifted on an OS upgrade —
+    /// which is the same class of fault this whole change exists to remove. A line qualifies when
+    /// it carries the user name and <see cref="Tty"/> as whole fields.
+    /// </para>
+    /// <para>
+    /// That pair is also what makes the check specific. An SSH session for the same user is listed
+    /// with its pty (<c>pts/0</c>) and never matches, so an administrator logged in over the
+    /// network cannot make a frame whose console autologin is broken look healthy — which is
+    /// exactly when somebody would be logged in to find out why.
+    /// </para>
+    /// </remarks>
+    public static bool HasSessionOnTty1(string sessions, string user)
     {
-        ArgumentNullException.ThrowIfNull(whoOutput);
+        ArgumentNullException.ThrowIfNull(sessions);
 
-        foreach (var line in whoOutput.Split('\n'))
+        foreach (var line in sessions.Split('\n'))
         {
-            var fields = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (fields.Length >= 2
-                && string.Equals(fields[0], user, StringComparison.Ordinal)
-                && string.Equals(fields[1], "tty1", StringComparison.Ordinal))
+            var named = false;
+            var onTty = false;
+
+            foreach (var field in line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                named = named || string.Equals(field, user, StringComparison.Ordinal);
+
+                // The bare name is what loginctl prints. The device path is accepted beside it
+                // because a field ending in /tty1 cannot be anything except tty1, so the widening
+                // admits no false positive — and the failure it insures against is the one this
+                // resource has already paid five reboots for once.
+                onTty = onTty
+                    || string.Equals(field, Tty, StringComparison.Ordinal)
+                    || field.EndsWith("/" + Tty, StringComparison.Ordinal);
+            }
+
+            if (named && onTty)
             {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// The <c>ActiveState</c> in a <c>systemctl show</c> answer, or null when it was not reported.
+    /// </summary>
+    /// <remarks>
+    /// Null is a real answer and is treated as "not settled" rather than as a fault: the only way
+    /// to reach it is <c>systemctl show</c> failing to answer at all, and a frame in that condition
+    /// has already failed the <c>ExecStart</c> clause above, which is a better diagnosis than
+    /// anything this line could add.
+    /// </remarks>
+    public static string? ActiveStateIn(string shown)
+    {
+        ArgumentNullException.ThrowIfNull(shown);
+
+        return Value(shown, "ActiveState");
+    }
+
+    /// <summary>
+    /// How many seconds the unit had been active, from its own activation timestamp against
+    /// <c>/proc/uptime</c> — or null when either number is missing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Both are the kernel's and systemd's own numbers rather than anything the agent times, so
+    /// they survive the reboot every resource takes and mean the same thing on the far side of it.
+    /// They are not the same clock — <c>/proc/uptime</c> counts suspended time and systemd's
+    /// monotonic does not — which on a frame that never suspends is a distinction without a
+    /// difference, and this value is only ever read to the nearest second.
+    /// </para>
+    /// <para>
+    /// Null rather than zero for "cannot tell", on <see cref="Supervise.ProcMemoryProbe"/>'s
+    /// precedent: zero is a real and meaningful reading here — a unit that went active this instant
+    /// is the whole thing worth distinguishing — so it must not double as the absence of one.
+    /// </para>
+    /// </remarks>
+    public static long? ActiveForSeconds(string shown, string? uptime)
+    {
+        ArgumentNullException.ThrowIfNull(shown);
+
+        if (Value(shown, "ActiveEnterTimestampMonotonic") is not { } stamp
+            || !long.TryParse(stamp, NumberStyles.Integer, CultureInfo.InvariantCulture, out var microseconds)
+            || microseconds <= 0)
+        {
+            return null;
+        }
+
+        var first = uptime?.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (first is not { Length: > 0 }
+            || !double.TryParse(first[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var booted))
+        {
+            return null;
+        }
+
+        var seconds = (long)(booted - (microseconds / 1_000_000.0));
+
+        return seconds < 0 ? null : seconds;
+    }
+
+    /// <summary>The age clause of the delta, or nothing when it could not be computed.</summary>
+    private string Age(string shown) =>
+        ActiveForSeconds(shown, _files.ReadText(UptimePath)) is { } seconds
+            ? string.Create(CultureInfo.InvariantCulture, $" ({UnitName} active for {seconds}s)")
+            : string.Empty;
+
+    private static string? Value(string shown, string name)
+    {
+        var prefix = name + "=";
+
+        foreach (var line in shown.Split('\n'))
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return line[prefix.Length..].Trim();
+            }
+        }
+
+        return null;
     }
 
     private static string Effective(string shown)
@@ -264,6 +478,9 @@ public sealed class ConsoleAutologinResource : IResource
 
         return "no ExecStart at all";
     }
+
+    private static string Summarise(ProcessResult result) =>
+        result.Combined.Length == 0 ? "no answer" : result.Combined.Replace('\n', ' ').Trim();
 }
 
 /// <summary>
