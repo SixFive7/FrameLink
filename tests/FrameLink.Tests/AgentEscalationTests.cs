@@ -364,7 +364,7 @@ public sealed class AgentEscalationTests
 
         Assert.Equal(PassResult.Escalated, (await harness.ConvergeAsync()).Result);
 
-        // Now something ordered ahead of the halted resource drifts: a mixer value reset, a
+        // Now something ordered ahead of the escalated resource drifts: a mixer value reset, a
         // hostname cloud-init put back.
         first.Drift();
         var observations = first.Observations;

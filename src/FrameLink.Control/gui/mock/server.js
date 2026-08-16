@@ -446,7 +446,6 @@ const classifyHealth = (agentStatus) => {
 	if (head === 'insync') return 'in-sync';
 	if (WORKING.has(head)) return 'working';
 	if (BROKEN.has(head)) return 'degraded';
-	if (head === 'halted') return 'halted';
 	return 'unknown';
 };
 
