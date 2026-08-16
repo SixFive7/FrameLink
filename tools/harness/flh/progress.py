@@ -271,10 +271,22 @@ _MILESTONES: list[dict[str, Any]] = [
                 "committed in fe00f40 - the button, its client method and its rendered bundle "
                 "are covered by GuiFreshnessTests but no operator has clicked one on a screen. "
                 "The 409 'offline' branch was never exercised against a real disconnected frame; "
-                "every press landed on a live socket. tool.xvf-host.installed remains Escalated "
-                "and was deliberately not retried. Reboot-verification is claimed for 35 "
+                "every press landed on a live socket. Reboot-verification is claimed for 36 "
                 "resources and not for all 72 that are in-sync - see the comment on "
-                "_HARDWARE_VERIFIED_RESOURCES for why that is an evidence limit."
+                "_HARDWARE_VERIFIED_RESOURCES for why that is an evidence limit. "
+                "ONE OBSERVATION FROM THAT SESSION IS STILL UNEXPLAINED, and is written down "
+                "here rather than guessed at: on 2026-08-16 at 07:16:18 CEST, "
+                "unit.chromium-kiosk.running-matches-content read a command line for a browser "
+                "that was genuinely running as pid 1253 and reported ALL twelve compared "
+                "arguments missing - 'running without --ozone-platform=wayland, "
+                "--user-data-dir=/tmp/framelink-chromium, --kiosk, ...' - from a process whose "
+                "/proc/1253/cmdline had been measured minutes earlier as carrying every one of "
+                "them. The obvious cause was checked and excluded: CommandLineOf splits on NUL "
+                "correctly. 7b1e5f7 explains the two attempts that followed, where MainPID is 0 "
+                "during ExecStartPre and the resource says 'no browser process is running', but "
+                "it does not explain this one, which found a non-empty command line and compared "
+                "it wrongly. What would settle it is logging the argv the resource actually read "
+                "at the moment it decides. Until then it is undetermined, not fixed."
             ),
         },
     },
@@ -374,10 +386,19 @@ _MILESTONES: list[dict[str, Any]] = [
 #:     sequence 787. Either half alone is weaker: the boot event alone does not say the verify
 #:     passed, and in-sync alone does not say a reboot was ever involved.
 #:
+#:   2026-08-16, one more (third block): tool.xvf-host.installed, whose evidence is the frame's
+#:     own journal rather than the Fleet Manager's event history. It is called out separately
+#:     because the membership test above could not be applied to it - by the time it converged,
+#:     the report that would have shown it in-sync was the one corrupted by the stopped-pass
+#:     census defect (9e3ecf2), and the frame's persistent journal had been rotated away by the
+#:     Kiosk flood. What stands in their place is stronger for this one row rather than weaker:
+#:     the loop's own "survived the reboot" verdict, which ResumePendingAsync emits only when
+#:     the boot id has changed, plus the six installed files on disk.
+#:
 #: THE LIST IS A FLOOR, NOT A CENSUS, and the gap is evidence and not doubt. 72 of 79 were
-#: in-sync at sequence 787; only these 35 can be shown to have been reboot-verified from the
+#: in-sync at sequence 787; only these 36 can be shown to have been reboot-verified from the
 #: evidence held, because /api/devices/{id}/events returns the last 50 events and the rest of
-#: this frame's history had already rolled off before it was read. The other 37 in-sync
+#: this frame's history had already rolled off before it was read. The other 36 in-sync
 #: resources are very probably in the same condition and are deliberately not claimed.
 _HARDWARE_VERIFIED_RESOURCES: list[str] = [
     # 2026-08-15 - M2's acceptance set.
@@ -417,6 +438,19 @@ _HARDWARE_VERIFIED_RESOURCES: list[str] = [
     "unit.framelink-camera.enabled",
     "unit.xdg-desktop-portal.dropin-desktop",
     "wireplumber.conf.camera-monitors-disabled",
+    # 2026-08-16 - the pin-and-verify fetch, on its first execution against the real upstream.
+    # 173e321's Act ran for the first time at 07:16:41 CEST and the loop reported it "survived
+    # the reboot" at 07:17:02: six files fetched from raw.githubusercontent.com at the pinned
+    # commit 725f38464e73477a30aba9f5c220f1cfdc66d682, every SHA-256 verified before install,
+    # nothing refused. On disk afterwards, with the modes the resource intends: xvf_host
+    # 1,772,904 bytes -rwxr-xr-x, libcommand_map.so 151,680, libdevice_i2c.so 72,568,
+    # libdevice_usb.so 73,312, dfu_cmds.yaml 2,507, transport_config.yaml 30. The frame's
+    # outbound HTTPS was confirmed separately first (raw.githubusercontent.com answered 200 for
+    # a real file, 6,043 bytes), so a failure here would have been the mechanism rather than the
+    # network. This is the most reusable result of that session: it is the first proof that
+    # fetch-pinned-and-digest-verified works from agent code against a live third party, which
+    # is the mechanism every future third-party binary depends on.
+    "tool.xvf-host.installed",
 ]
 
 #: The durable artifacts a session starting from nothing needs, and what each one is *for*.
@@ -620,6 +654,42 @@ def _environment() -> dict[str, Any]:
                 "POWER_OFF_ON_HALT=1 is set in this Pi's EEPROM, so `halt` genuinely cuts power. A "
                 "silent frame on a live relay has three explanations, not two: booting, hung, or "
                 "halted and drawing nothing."
+            ),
+            "userSessionAfterAgentStartSeconds": 0.52,
+            "userSessionMeasurement": (
+                "The number behind three separate defects, measured on the mule 2026-08-16 from "
+                "the frame's own persistent journal on one monotonic clock. fl-agent.service "
+                "reaches active at 9.7-11.3 s into every boot; the console autologin opens its "
+                "PAM session at 10.3-11.7 s, 0.52-0.89 s later, on all 30 boots the card then "
+                "held; and the user manager (user@1000.service / session.slice) comes up 0.03-0.7 "
+                "s after that again. The loop's first Observe is the first thing a pass does, "
+                "within ~100-250 ms of the process starting, so it lands before the session "
+                "exists every time. That is why boot.autologin.getty-tty1 burned five attempts "
+                "and five reboots on a frame that was logging itself in correctly - its verdicts "
+                "at monotonic 10.018670 and 11.188142 preceded the logins at 10.358098 and "
+                "11.631500 by 352 ms and 472 ms - and it is the same instant at which every "
+                "systemctl --user resource fails with 'Failed to connect to user scope bus'. "
+                "Anything whose observable lives in that session must not be judged before it. "
+                "Root cause in git log d275689; the gate that acts on it is 74cdedf."
+            ),
+            "panelTouchInput": (
+                "The panel DOES expose a touch device to Linux, measured on the mule 2026-08-16, "
+                "read-only and with no physical touch. /proc/bus/input/devices carries 'Goodix "
+                "Capacitive TouchScreen' on Bus=0018 (i2c-11, address 0x5d, controller ID 9271) "
+                "with Handlers=kbd mouse0 event4 and PROP=2, which is INPUT_PROP_DIRECT - a "
+                "touchscreen rather than a touchpad. udev classifies it ID_INPUT_TOUCHSCREEN=1. "
+                "The node is /dev/input/event4, crw-rw---- root:input, with the stable alias "
+                "/dev/input/by-path/platform-1f00080000.i2c-event. Opened O_RDONLY|O_NONBLOCK it "
+                "returns its name over EVIOCGNAME and its axes over EVIOCGABS - ABS_X 0-799 and "
+                "ABS_Y 0-1279, matching the 800x1280 panel exactly, so coordinates arrive in "
+                "panel pixels with no scaling - plus ABS_MT_POSITION_X/Y multitouch slots, and "
+                "read() returns EAGAIN with nobody touching it. The agent runs as root and "
+                "framelink is also in group 996(input). This closes a question the repository had "
+                "never answered: reference/v1-state-inventory.txt has no /proc/bus/input/devices, "
+                "no /dev/input listing and no evdev evidence of any kind, and the console stage's "
+                "sentence 'This screen has no buttons' was false on this hardware. evtest and "
+                "libinput are NOT installed on the frame, so the capability read was done with "
+                "raw ioctls rather than by installing anything. Acted on in git log b6d2506."
             ),
         },
     }
