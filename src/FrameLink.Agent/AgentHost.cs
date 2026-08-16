@@ -171,19 +171,45 @@ public sealed class AgentHost
         var systemFiles = HostSystemFiles.Instance;
         var display = new SysfsDisplayProbe(systemFiles);
 
+        var terminalPath = Environment.GetEnvironmentVariable(TerminalVariable) ?? TtyTerminal.DefaultPath;
+
         using var stage = new ConsoleStage(
-            TtyTerminal.Open(Environment.GetEnvironmentVariable(TerminalVariable) ?? TtyTerminal.DefaultPath, _log),
+            TtyTerminal.Open(terminalPath, _log),
             hub,
             _clock,
             display,
             _log);
 
+        // The console stage's terminal is not the product's any more (§2.7), so something has to
+        // decide which of the two the panel is showing. It reads §2.7's second stage to decide, and
+        // that stage does not exist for another two hundred lines — hence the forward reference
+        // rather than a constructor argument. Console is the honest answer until then: no graphical
+        // stack is up, which is exactly what a null browser stage means.
+        using var terminals = new LinuxVirtualTerminals(systemFiles);
+        BrowserStage? browserStage = null;
+        using var screen = new ScreenHandover(
+            terminals,
+            HostProcessRunner.Instance,
+            _clock,
+            _log,
+            () => browserStage?.Phase ?? BrowserStagePhase.Console,
+            TtyTerminal.NumberOf(terminalPath) ?? TtyTerminal.AgentTerminal,
+            TtyTerminal.ProductTerminal);
+
         // Painted before anything slow happens. Endpoint discovery can spend a couple of seconds
-        // listening for mDNS, and §2.7's hard rule against blank screens covers those seconds too.
+        // listening for mDNS, and §2.7's hard rule against blank screens covers those seconds too —
+        // which since the move to a terminal of its own also means the panel has to be showing the
+        // one being painted, four lines below as soon as there is a token to pass it.
         stage.Paint();
 
         using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         var restart = new ProcessRestartSignal(shutdown, _log);
+
+        // Reconciled rather than taken. On a cold boot there is no compositor and this is the take
+        // that puts the narration in front of a person watching a frame provision. On an agent
+        // restart — every update, every crash — the product is already on the panel, and grabbing
+        // it for a couple of seconds because a service restarted would be a fault of its own.
+        await screen.ReconcileAsync(shutdown.Token).ConfigureAwait(false);
 
         var endpoints = await ResolveEndpointsAsync(store, hub, shutdown.Token).ConfigureAwait(false);
 
@@ -421,13 +447,17 @@ public sealed class AgentHost
             Clock = _clock,
             Log = _log,
             Interlock = interlock,
+            Screen = screen,
             Values = values,
             DeviceId = identity.DeviceId,
         });
 
+        // Closes the forward reference opened above. From here the handover reads a real phase.
+        browserStage = browser;
+
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Eight loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // Nine loops now, and none is gated on another finishing. §1.2.2: a frame must provision
         // and self-heal with the server unreachable, so the reconciler runs from the first second
         // whether or not anything ever answers. What adoption gates is the resources that need
         // issued values, and it gates them through the DAG (§2.2) rather than by not running.
@@ -436,7 +466,7 @@ public sealed class AgentHost
         // exactly when no help is coming — and the inventory buffers on disk like everything else
         // on that channel (§4.1). The button in particular has to work with nothing reachable,
         // because pressing it is how somebody in this room starts a call.
-        var running = new List<Task>(9)
+        var running = new List<Task>(10)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
@@ -444,6 +474,12 @@ public sealed class AgentHost
             loop.RunAsync(shutdown.Token),
             supervisor.RunAsync(shutdown.Token),
             BrowserStageLoopAsync(browser, shutdown.Token),
+
+            // §2.7's two stages now sit on two terminals, so which one the panel shows is state
+            // that has to be reconciled like everything else (§2.2) rather than set once and
+            // trusted. It returns on its own the moment it learns this machine has no consoles to
+            // switch between, which is every run off a frame.
+            screen.RunAsync(shutdown.Token),
             packages.RunAsync(shutdown.Token),
             button.RunAsync(shutdown.Token),
 

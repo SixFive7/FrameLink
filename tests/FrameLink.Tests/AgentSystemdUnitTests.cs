@@ -155,6 +155,31 @@ public sealed class AgentSystemdUnitTests
     }
 
     [Fact]
+    public void The_unit_names_the_terminal_the_console_stage_actually_paints()
+    {
+        // TTYPath is what makes exec_context_has_tty() true and therefore what makes systemd derive
+        // and export $TERM for the service. Pointing it at a terminal the stage does not write to
+        // would still produce a $TERM, so nothing at runtime would complain — it would just be a
+        // unit describing a frame that no longer exists. One value, one source.
+        var directives = ParsedDirectives().Single(directive => directive.Key == "TTYPath");
+
+        Assert.Equal(TtyTerminal.DefaultPath, directives.Value);
+        Assert.NotEqual("/dev/tty" + TtyTerminal.ProductTerminal, directives.Value);
+    }
+
+    [Fact]
+    public void The_unit_still_refuses_to_take_the_console_getty_away()
+    {
+        // Conflicts=getty@tty1.service would give the console stage the panel to itself and would
+        // remove the physical login §5.5 leans on for a frame that will not come up and cannot be
+        // reached over the network. It has been rejected twice for that reason, and once more now
+        // that the stage has a terminal of its own and does not need it. The comment is the record
+        // of why, so the directive is what must stay absent while the reasoning stays present.
+        Assert.DoesNotContain("Conflicts=", Directives(), StringComparison.Ordinal);
+        Assert.Contains("Conflicts=getty@tty1.service", UnitInstaller.ReadUnit(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_restart_loop_has_a_brake_and_it_is_switched_on()
     {
         // version2.md §2.4: "an unbounded retry cycle is more damaging than a stalled provision."

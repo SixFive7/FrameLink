@@ -14,9 +14,10 @@ namespace FrameLink.Tests;
 /// Test doubles shared by the agent suite.
 /// </summary>
 /// <remarks>
-/// The agent's Linux-only surfaces — <c>/dev/tty1</c>, <c>/var/lib</c>, systemd, the socket — are
-/// each behind one interface, so this file is what lets the whole of M1 be asserted on Windows
-/// without a single OS check leaking into the code under test.
+/// The agent's Linux-only surfaces — the console device, the virtual terminals behind it,
+/// <c>/var/lib</c>, systemd, the socket — are each behind one interface, so this file is what lets
+/// the whole of M1 be asserted on Windows without a single OS check leaking into the code under
+/// test.
 /// </remarks>
 internal sealed class RecordingLog : IAgentLog
 {
@@ -355,6 +356,90 @@ internal sealed class MemoryTerminal : ITerminal
     public void Write(string text) => Frames.Add(text);
 
     public void Dispose() => IsDisposed = true;
+}
+
+/// <summary>
+/// Virtual terminals with no kernel behind them.
+/// </summary>
+/// <remarks>
+/// The counterpart to <c>TtyTerminal.Over</c>, and it exists for the same reason: the boundary
+/// between the two stages has to be assertable without a console, because the machine that runs the
+/// suite does not have one and the machine that has one cannot run the suite. The two failure modes
+/// are separate on purpose — <see cref="Accepts"/> is the kernel refusing the request, which is a
+/// machine with no consoles at all, and <see cref="Completes"/> is the kernel taking the request
+/// and the switch never happening, which is a compositor that will not let go.
+/// </remarks>
+internal sealed class RecordingVirtualTerminals : IVirtualTerminals
+{
+    public RecordingVirtualTerminals(int foreground = 1) => Active = foreground;
+
+    /// <summary>Which terminal reads as in front.</summary>
+    public int? Active { get; set; }
+
+    /// <summary>Whether <c>VT_ACTIVATE</c> is accepted at all.</summary>
+    public bool Accepts { get; set; } = true;
+
+    /// <summary>Whether an accepted request actually changes the foreground terminal.</summary>
+    public bool Completes { get; set; } = true;
+
+    /// <summary>Every terminal that was asked for, in order.</summary>
+    public List<int> Activated { get; } = [];
+
+    /// <summary>Called before the request is answered, so a test can time it against other work.</summary>
+    public Action<int>? OnActivate { get; set; }
+
+    public int? Foreground() => Active;
+
+    public bool Activate(int terminal)
+    {
+        Activated.Add(terminal);
+        OnActivate?.Invoke(terminal);
+
+        if (!Accepts)
+        {
+            return false;
+        }
+
+        if (Completes)
+        {
+            Active = terminal;
+        }
+
+        return true;
+    }
+}
+
+/// <summary>Answers one exact command vector, and records every one it was asked.</summary>
+internal sealed class ScriptedProcessRunner : IProcessRunner
+{
+    /// <summary>Starts with no compositor, which is what a frame looks like before it has one.</summary>
+    public ScriptedProcessRunner() => CompositorRunning = false;
+
+    public List<string> Commands { get; } = [];
+
+    public Dictionary<string, ProcessResult> Answers { get; } = new(StringComparer.Ordinal);
+
+    public ProcessResult Default { get; set; } = new(0, string.Empty, string.Empty);
+
+    /// <summary>Whether <c>pgrep -x labwc</c> finds a compositor.</summary>
+    public bool CompositorRunning
+    {
+        get => Answers.TryGetValue(PgrepLabwc, out var answer) && answer.Succeeded;
+        set => Answers[PgrepLabwc] = new ProcessResult(value ? 0 : 1, string.Empty, string.Empty);
+    }
+
+    private const string PgrepLabwc = "pgrep -x labwc";
+
+    public Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        var line = executable + " " + string.Join(' ', arguments);
+        Commands.Add(line);
+
+        return Task.FromResult(Answers.TryGetValue(line, out var scripted) ? scripted : Default);
+    }
 }
 
 /// <summary>A release feed with no server behind it.</summary>

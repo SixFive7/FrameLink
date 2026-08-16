@@ -90,23 +90,42 @@ StateDirectoryMode=0700
 # being applied (6.2). An in-process updater has no helper to kill, so the default is correct, and
 # neither KillMode=process nor systemd-run --scope may be added back as cargo cult.
 
-# The console stage writes directly to /dev/tty1, the DSI panel's default (2.7), before any
-# graphical stack exists. It opens the device itself rather than inheriting it, because under
-# systemd stdout is the journal, not the panel - so TTYPath is not what hands the stage its
-# terminal. It is still load-bearing: exec_context_has_tty() in systemd's execute.h is true as soon
-# as tty_path is set, and that is what makes systemd derive and export $TERM for the service. Drop
-# the line and the stage renders ANSI with no $TERM at all, which is precisely the difference the
-# two copies of this file used to carry. Journal output is the second honesty surface, never the
-# first; guide 12 step 5 already made the journal persistent and capped it at 64 MB.
-TTYPath=/dev/tty1
+# The console stage writes directly to /dev/tty8, which is ITS OWN virtual terminal and not the
+# panel's default one, before any graphical stack exists. It opens the device itself rather than
+# inheriting it, because under systemd stdout is the journal, not the panel - so TTYPath is not what
+# hands the stage its terminal. It is still load-bearing: exec_context_has_tty() in systemd's
+# execute.h is true as soon as tty_path is set, and that is what makes systemd derive and export
+# $TERM for the service. Drop the line and the stage renders ANSI with no $TERM at all, which is
+# precisely the difference the two copies of this file used to carry. Journal output is the second
+# honesty surface, never the first; guide 12 step 5 already made the journal persistent and capped
+# it at 64 MB.
+#
+# Why eight. One is the product's and getty's. Two through six are claimed on demand by
+# systemd-logind's NAutoVTs=6, which spawns an autovt@ getty on any of them the moment somebody
+# switches there, and ReserveVT=6 keeps one on six permanently. Seven is where an X server or a
+# display manager lands by convention. Eight is the first one nothing else wants, and it is still
+# inside the twelve function keys, so an operator at the frame reads the narration with Ctrl+Alt+F8
+# on the occasions the agent has deliberately NOT taken the screen.
+TTYPath=/dev/tty8
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=fl-agent
 
-# NOT set, and worth saying why: Conflicts=getty@tty1.service. It would give the console stage the
-# panel to itself, but it also removes the physical login that is the recovery path when a frame
-# will not come up. Turning the console getty off belongs in the resource catalog as a reconciled,
-# centrally visible setting (M2/M3), not as a side effect of installing the agent.
+# STILL not set, and the conclusion is now reached a different way: Conflicts=getty@tty1.service.
+# It would give the console stage the panel to itself, but it also removes the physical login that
+# is the recovery path when a frame will not come up. That objection has not weakened - what has
+# changed is that the thing it was blocking is no longer wanted either.
+#
+# The problem it would have solved was real and was measured on the frame: agetty and fl-agent both
+# held /dev/tty1, the repair screen appeared for under a second, and the login prompt repainted over
+# it. But the fix for two programs on one screen is not to remove one of them, it is to stop them
+# sharing a screen. The agent renders to tty8 above and brings that terminal to the front when it is
+# the surface that should be seen (2.6, 2.7); getty keeps tty1 untouched, so the physical login
+# survives even while the agent is narrating, which is strictly better than what Conflicts= offered.
+#
+# What Conflicts= would additionally have done is turn the console getty off on every frame as a
+# side effect of installing the agent. That still belongs in the resource catalog as a reconciled,
+# centrally visible setting (M2/M3) if it is ever wanted, and after this change nothing wants it.
 
 [Install]
 WantedBy=multi-user.target

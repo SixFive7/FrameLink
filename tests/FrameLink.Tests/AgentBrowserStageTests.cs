@@ -1,3 +1,4 @@
+using FrameLink.Agent;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Resources;
@@ -186,6 +187,92 @@ public sealed class AgentBrowserStageTests
     }
 
     [Fact]
+    public async Task The_screen_is_taken_before_anything_is_stopped()
+    {
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+        frame.Compositor(running: true);
+
+        await frame.Stage.TickAsync(None);
+
+        var stoppedWhenTaken = -1;
+        frame.Terminals.OnActivate = _ => stoppedWhenTaken =
+            frame.Systemd.Commands.Count(command => command.StartsWith("stop ", StringComparison.Ordinal))
+            + frame.Session.Commands.Count(command => command.Contains(" stop ", StringComparison.Ordinal));
+
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(61);
+        Assert.Equal(BrowserStagePhase.TornDown, await frame.Stage.TickAsync(None));
+
+        // Stopping the getty kills the compositor, the compositor drops DRM master, and the panel
+        // falls back to whatever text is on the product's terminal — a login prompt, for as long as
+        // it takes anything to notice. Taking the screen first means the compositor dies on a
+        // terminal nobody is looking at and the panel goes straight from the empty desktop to the
+        // explanation.
+        Assert.Equal(0, stoppedWhenTaken);
+        Assert.Equal(ScreenOwner.Agent, frame.Screen.Held);
+        Assert.Equal(TtyTerminal.AgentTerminal, frame.Terminals.Active);
+    }
+
+    [Fact]
+    public async Task The_retry_narrates_on_the_console_until_there_is_something_else_to_show()
+    {
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+        frame.Compositor(running: true);
+
+        await frame.Stage.TickAsync(None);
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(61);
+        await frame.Stage.TickAsync(None);
+
+        // The teardown stopped the getty, so the compositor is gone with it.
+        frame.Compositor(running: false);
+        frame.Clock.UtcNow += TimeSpan.FromMinutes(2);
+        Assert.Equal(BrowserStagePhase.Console, await frame.Stage.TickAsync(None));
+
+        // Nothing hands the panel back at that line, and the omission is the design: the getty has
+        // been started but the compositor takes seconds to appear, so handing it back here would
+        // put the panel on a terminal showing a login prompt and hand it to a compositor that has
+        // not started.
+        Assert.Equal(ScreenOwner.Agent, frame.Screen.Held);
+
+        frame.Compositor(running: true);
+        frame.Clock.UtcNow += frame.Screen.Settle + TimeSpan.FromSeconds(1);
+        Assert.Equal(ScreenOwner.Product, await frame.Screen.ReconcileAsync(None));
+    }
+
+    [Fact]
+    public async Task A_page_is_not_judged_on_a_panel_it_is_not_being_shown_on()
+    {
+        // §5.5 lets a person log in on another terminal, and while they are there the handover
+        // stands aside — so the product's terminal is not in front and the page has no way to
+        // render. Counting that against the deadline would tear the session down for something
+        // nobody did wrong. The deadline is measured from when the panel is actually the
+        // product's.
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+        frame.Compositor(running: true);
+
+        Assert.Equal(BrowserStagePhase.Awaiting, await frame.Stage.TickAsync(None));
+
+        // Somebody pressed Ctrl+Alt+F3 and logged in, so the handover stands aside and the
+        // product's terminal never comes to the front.
+        frame.Terminals.Active = 3;
+        await frame.Screen.ReconcileAsync(None);
+        Assert.Null(frame.Screen.Held);
+
+        // Held is null rather than Agent, and that distinction is load-bearing: an unknown panel is
+        // not evidence of anything, so the deadline still applies. It is suppressed only once the
+        // agent's console is confirmed to be the thing in front.
+        frame.Terminals.Active = TtyTerminal.AgentTerminal;
+        Assert.True(await frame.Screen.TakeAsync(None));
+        Assert.Equal(ScreenOwner.Agent, frame.Screen.Held);
+
+        frame.Clock.UtcNow += TimeSpan.FromMinutes(10);
+        Assert.Equal(BrowserStagePhase.Awaiting, await frame.Stage.TickAsync(None));
+        Assert.Equal(0, frame.Stage.Teardowns);
+    }
+
+    [Fact]
     public void The_page_is_sent_the_same_narration_the_console_renders()
     {
         var now = new DateTimeOffset(2026, 8, 15, 12, 0, 0, TimeSpan.Zero);
@@ -240,6 +327,17 @@ public sealed class AgentBrowserStageTests
         {
             Hub = new AgentStatusHub(AgentStatusFactory.Green());
 
+            // The same forward reference AgentHost opens, for the same reason: the handover reads
+            // the stage's phase and the stage takes the screen, so one of the two has to be wired
+            // after the other exists.
+            BrowserStage? stage = null;
+            Screen = new ScreenHandover(
+                Terminals,
+                Processes,
+                Clock,
+                Log,
+                () => stage?.Phase ?? BrowserStagePhase.Console);
+
             Stage = new BrowserStage(new BrowserStageServices
             {
                 Channel = Channel,
@@ -250,9 +348,12 @@ public sealed class AgentBrowserStageTests
                 Clock = Clock,
                 Log = Log,
                 Interlock = Interlock,
+                Screen = Screen,
                 Values = FleetValues.From(settings ?? new Dictionary<string, string>(StringComparer.Ordinal)),
                 DeviceId = "TEST-DEVI-CEID-0001",
             });
+
+            stage = Stage;
         }
 
         public LocalChannel Channel { get; } = new();
@@ -271,6 +372,12 @@ public sealed class AgentBrowserStageTests
 
         public SupervisionInterlock Interlock { get; } = new();
 
+        public RecordingVirtualTerminals Terminals { get; } = new(TtyTerminal.ProductTerminal);
+
+        public ScriptedProcessRunner Processes { get; } = new();
+
+        public ScreenHandover Screen { get; }
+
         public BrowserStage Stage { get; }
 
         public void BrowserIs(string state) =>
@@ -279,6 +386,12 @@ public sealed class AgentBrowserStageTests
                 state,
                 string.Empty);
 
-        public void Dispose() => Stage.Detach();
+        public void Compositor(bool running) => Processes.CompositorRunning = running;
+
+        public void Dispose()
+        {
+            Stage.Detach();
+            Screen.Dispose();
+        }
     }
 }

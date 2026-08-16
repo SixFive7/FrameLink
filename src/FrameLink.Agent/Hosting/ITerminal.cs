@@ -5,8 +5,8 @@ using System.Text;
 namespace FrameLink.Agent.Hosting;
 
 /// <summary>
-/// A character display the agent can repaint — on a frame, the DSI panel's console
-/// <c>/dev/tty1</c> (§2.7).
+/// A character display the agent can repaint — on a frame, the virtual console the agent owns
+/// (§2.7).
 /// </summary>
 public interface ITerminal : IDisposable
 {
@@ -88,8 +88,40 @@ public static class TerminalFailure
 /// </remarks>
 public sealed partial class TtyTerminal : ITerminal
 {
-    /// <summary>The DSI panel's default console (§2.7).</summary>
-    public const string DefaultPath = "/dev/tty1";
+    /// <summary>
+    /// The virtual terminal §2.7's console stage owns.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Eight, and the number is reasoned rather than picked.</b> One is out: that is the
+    /// product's, and it is where <c>getty@tty1</c> serves the physical login §5.5 leans on for a
+    /// frame that will not boot and cannot be reached over the network. Two through six are out
+    /// because <c>systemd-logind</c> ships <c>NAutoVTs=6</c>, which spawns an <c>autovt@</c> getty
+    /// on any of them the moment somebody switches there — the same two-programs-one-screen defect
+    /// this move exists to end, deferred rather than fixed — and <c>ReserveVT=6</c> keeps one on
+    /// six permanently. Seven is out by convention: it is where an X server or a display manager
+    /// lands, and leaving it clear costs nothing. Eight is the first free one, which is the same
+    /// rule <c>startx</c> uses and therefore the least arbitrary available.
+    /// </para>
+    /// <para>
+    /// It also has to stay inside the twelve function keys, and that is not cosmetic: an operator
+    /// standing at the frame with a keyboard reaches this console with <b>Ctrl+Alt+F8</b>, which is
+    /// how the narration is read when the agent has deliberately <i>not</i> taken the screen.
+    /// There is no Ctrl+Alt+F13.
+    /// </para>
+    /// <para>
+    /// The console rotation is unaffected: <c>boot.cmdline.fbcon-rotate</c> sets
+    /// <c>fbcon=rotate:1</c> on the kernel command line, which rotates the framebuffer console
+    /// itself and therefore every virtual terminal on it, not just the first.
+    /// </para>
+    /// </remarks>
+    public const int AgentTerminal = 8;
+
+    /// <summary>The virtual terminal the autologin session and its compositor own.</summary>
+    public const int ProductTerminal = 1;
+
+    /// <summary>The device node for <see cref="AgentTerminal"/>.</summary>
+    public const string DefaultPath = "/dev/tty8";
 
     private const int FallbackColumns = 80;
     private const int FallbackRows = 24;
@@ -133,24 +165,7 @@ public sealed partial class TtyTerminal : ITerminal
 
         try
         {
-            var stream = new FileStream(
-                path,
-                new FileStreamOptions
-                {
-                    Mode = FileMode.Open,
-                    Access = FileAccess.Write,
-                    Share = FileShare.ReadWrite,
-                    Options = FileOptions.WriteThrough,
-
-                    // Unbuffered, and that is the fix for a crash rather than a micro-optimisation.
-                    // At the default 4096 the stream is a BufferedFileStreamStrategy, whose
-                    // FlushWrite does not clear _writePos when the underlying write throws — so a
-                    // frame that failed with EIO stayed in the buffer and was retried by the flush
-                    // inside Dispose, where nothing was catching. That is the mule's SIGABRT.
-                    // A console has no use for buffering anyway: every frame is one write followed
-                    // by one flush, and WriteThrough already refuses the OS page cache.
-                    BufferSize = 0,
-                });
+            var stream = OpenDevice(path);
 
             var (columns, rows, measured) = MeasureWindow(stream);
 
@@ -195,6 +210,28 @@ public sealed partial class TtyTerminal : ITerminal
         return new TtyTerminal(stream, columns, rows, sizeIsKnown);
     }
 
+    /// <summary>
+    /// The virtual terminal number a <c>/dev/ttyN</c> path names, or null for anything else.
+    /// </summary>
+    /// <remarks>
+    /// So that the device the stage writes to and the terminal the handover brings to the front
+    /// are one decision. Overriding the path with <c>FL_TTY</c> and leaving the switch pointed at
+    /// terminal eight would produce a frame that paints one console and reveals another, which is
+    /// a blank screen with a perfectly healthy log beside it.
+    /// </remarks>
+    public static int? NumberOf(string path)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        const string Prefix = "/dev/tty";
+
+        return path.StartsWith(Prefix, StringComparison.Ordinal)
+            && int.TryParse(path.AsSpan(Prefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out var number)
+            && number > 0
+                ? number
+                : null;
+    }
+
     /// <inheritdoc/>
     public void Write(string text)
     {
@@ -229,6 +266,56 @@ public sealed partial class TtyTerminal : ITerminal
             // The descriptor is closed regardless: FileStream closes its handle in a finally,
             // so the only thing lost here is bytes that were never going to reach a screen.
         }
+    }
+
+    /// <summary>
+    /// Opens the console device, without letting it become the agent's controlling terminal.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="ConsoleDevice"/> carries the whole argument for <c>O_NOCTTY</c>; the short
+    /// version is that <c>tty1</c> always had getty's session and the agent's own terminal has
+    /// none, so this is the one open that could have made a keystroke on the panel signal the
+    /// agent. The managed open stays as the fallback, because it is the one that produces a real
+    /// diagnosis when the device is simply not there — a container, a workstation, a virtual
+    /// agent (§5.3) — and that diagnosis is what <see cref="Open"/> turns into the standard-output
+    /// terminal.
+    /// </remarks>
+    private static FileStream OpenDevice(string path)
+    {
+        var handle = ConsoleDevice.TryOpenForWriting(path);
+
+        if (handle is not null)
+        {
+            try
+            {
+                return new FileStream(handle, FileAccess.Write, bufferSize: 0);
+            }
+            catch (Exception exception) when (exception is ArgumentException or IOException or UnauthorizedAccessException)
+            {
+                handle.Dispose();
+            }
+        }
+
+        return new FileStream(
+            path,
+            new FileStreamOptions
+            {
+                Mode = FileMode.Open,
+                Access = FileAccess.Write,
+                Share = FileShare.ReadWrite,
+                Options = FileOptions.WriteThrough,
+
+                // Unbuffered, and that is the fix for a crash rather than a micro-optimisation.
+                // At the default 4096 the stream is a BufferedFileStreamStrategy, whose
+                // FlushWrite does not clear _writePos when the underlying write throws — so a
+                // frame that failed with EIO stayed in the buffer and was retried by the flush
+                // inside Dispose, where nothing was catching. That is the mule's SIGABRT.
+                // A console has no use for buffering anyway: every frame is one write followed
+                // by one flush, and WriteThrough already refuses the OS page cache.
+                // The handle-based constructor above is unbuffered for the same reason: .NET
+                // wraps a stream in the buffering strategy only when bufferSize exceeds one.
+                BufferSize = 0,
+            });
     }
 
     private static (int Columns, int Rows, bool Measured) MeasureWindow(FileStream stream)
