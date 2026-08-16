@@ -221,6 +221,9 @@ public sealed class AgentConsoleStageTests
     [Fact]
     public void The_accent_colour_follows_the_rung_and_marks_a_refusal_in_red()
     {
+        // Asked of a whole frame, because that is the only way it can be asked (decision 83).
+        // These five carry no drift of their own, so what varies is the rung — and on a frame with
+        // nothing wrong on it the rung is still exactly what the accent should say.
         var accents = new[]
         {
             HandshakeStatus.Ok,
@@ -229,8 +232,11 @@ public sealed class AgentConsoleStageTests
             HandshakeStatus.NotConfigured,
             HandshakeStatus.VersionMismatch,
         }
-        .Select(status => StagePalette.For(DeviceStateLadder.FromHandshake(
-            new HandshakeResult { Status = status, ProtocolVersion = ProtocolConstants.Version })))
+        .Select(status => StagePalette.For(Pending() with
+        {
+            Condition = DeviceStateLadder.FromHandshake(
+                new HandshakeResult { Status = status, ProtocolVersion = ProtocolConstants.Version }),
+        }))
         .ToList();
 
         Assert.Equal(StagePalette.Green, accents[0]);
@@ -238,6 +244,14 @@ public sealed class AgentConsoleStageTests
         Assert.Equal(StagePalette.Red, accents[2]);
         Assert.Equal(StagePalette.Blue, accents[3]);
         Assert.Equal(StagePalette.Amber, accents[4]);
+
+        // Silence is the fifth rung and the one the ladder reaches without a handshake at all.
+        Assert.Equal(StagePalette.Grey, StagePalette.For(Silent()));
+
+        // The names the page is sent are the same five values, so neither surface can invent one.
+        Assert.Equal(
+            ["green", "blue", "red", "blue", "amber"],
+            accents.Select(StagePalette.NameOf));
     }
 
     [Fact]

@@ -6,6 +6,36 @@ using FrameLink.Protocol;
 namespace FrameLink.Agent.State;
 
 /// <summary>
+/// Which of three things a frame is, once the ladder and the frame's own observation are put
+/// together — §2.7's top line, and everything else that has to agree with it.
+/// </summary>
+/// <remarks>
+/// <b>One classification, so that no second one can be written.</b> The wording, the accent and
+/// anything a later surface derives from "what is this frame" all come off
+/// <see cref="ReconcileVoice.Voice"/>, which makes the conjunction §2.6 specifies exactly once. A
+/// screen whose headline and whose colour were composed separately is how a frame ends up saying
+/// it is fixing itself in the green of a frame that is working.
+/// </remarks>
+public enum StageVoice
+{
+    /// <summary>
+    /// The ladder's own wording and the rung's own accent — what the Fleet Manager said.
+    /// </summary>
+    /// <remarks>
+    /// Either the condition already stops the product, in which case <i>adopt this frame</i>,
+    /// <i>it has been blocked</i> and <i>it is updating</i> are each more actionable than <i>it is
+    /// fixing itself</i>; or nothing is wrong at all and the frame says what it always said.
+    /// </remarks>
+    Ladder,
+
+    /// <summary>Cleared to run, and putting one of its own settings back.</summary>
+    Repairing,
+
+    /// <summary>Cleared to run, and has given up on something (§2.7 item 7).</summary>
+    Stopped,
+}
+
+/// <summary>
 /// <b>The sentences the frame says about reconciliation</b> — §2.7 items 5, 7 and 8.
 /// </summary>
 /// <remarks>
@@ -126,6 +156,41 @@ public static class ReconcileVoice
         "Something on it is not as it should be. It is fixing that first, and then your photos come back.";
 
     /// <summary>
+    /// <b>The conjunction §2.6 specifies, made once</b> — what this frame is, from both halves.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Everything the screen says about the frame as a whole is a function of this, and that is
+    /// the point of it existing.</b> <see cref="Headline"/> and <see cref="Detail"/> are the words;
+    /// <see cref="Stage.StagePalette.For(AgentStatus)"/> is the colour. Composing the second one
+    /// separately is what left a repairing frame green under a headline saying it was fixing
+    /// something (decision 83) — the same defect as <c>c3116bc</c>'s headline, one property along.
+    /// </para>
+    /// <para>
+    /// <b>Which half wins when both stop the product.</b> A condition that already stops it keeps
+    /// its own voice: <i>adopt this frame</i>, <i>it has been blocked</i>, <i>it is updating</i> are
+    /// each more actionable than <i>it is fixing itself</i>, and the body under them renders an
+    /// adoption fingerprint rather than a delta. The composition is reached only where the Fleet
+    /// Manager has cleared the frame to run and the frame's own observation has not — which is
+    /// exactly the state that produced the contradiction, and is the same conjunction
+    /// <see cref="AgentStatus.ProductRuns"/> already makes.
+    /// </para>
+    /// </remarks>
+    public static StageVoice Voice(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!status.Condition.ProductRuns)
+        {
+            return StageVoice.Ladder;
+        }
+
+        return HasStopped(status) ? StageVoice.Stopped
+            : status.Drifted ? StageVoice.Repairing
+            : StageVoice.Ladder;
+    }
+
+    /// <summary>
     /// §2.7 item 1 — the one line at the top of both surfaces.
     /// </summary>
     /// <remarks>
@@ -155,43 +220,25 @@ public static class ReconcileVoice
     /// defect with the animation taken out.
     /// </para>
     /// <para>
-    /// <b>Which half wins when both stop the product.</b> A condition that already stops it keeps
-    /// its own wording: <i>adopt this frame</i>, <i>it has been blocked</i>, <i>it is updating</i>
-    /// are each more actionable than <i>it is fixing itself</i>, and the body under them renders an
-    /// adoption fingerprint rather than a delta. The composition is reached only where the Fleet
-    /// Manager has cleared the frame to run and the frame's own observation has not — which is
-    /// exactly the state that produced the contradiction, and is the same conjunction
-    /// <see cref="AgentStatus.ProductRuns"/> already makes.
+    /// <b>Which half wins when both stop the product</b> is <see cref="Voice"/>'s answer, and this
+    /// is only the wording of it. Reading the classification from there rather than repeating the
+    /// conjunction is what keeps the accent beside these sentences from being composed differently.
     /// </para>
     /// </remarks>
-    public static string Headline(AgentStatus status)
+    public static string Headline(AgentStatus status) => Voice(status) switch
     {
-        ArgumentNullException.ThrowIfNull(status);
-
-        if (!status.Condition.ProductRuns)
-        {
-            return status.Condition.Headline;
-        }
-
-        return HasStopped(status)
-            ? StoppedHeadline
-            : status.Drifted ? RepairingHeadline : status.Condition.Headline;
-    }
+        StageVoice.Stopped => StoppedHeadline,
+        StageVoice.Repairing => RepairingHeadline,
+        _ => status.Condition.Headline,
+    };
 
     /// <summary>§2.7 item 1's second line, composed the same way as <see cref="Headline"/>.</summary>
-    public static string Detail(AgentStatus status)
+    public static string Detail(AgentStatus status) => Voice(status) switch
     {
-        ArgumentNullException.ThrowIfNull(status);
-
-        if (!status.Condition.ProductRuns)
-        {
-            return status.Condition.Detail;
-        }
-
-        return HasStopped(status)
-            ? StoppedDetail
-            : status.Drifted ? RepairingDetail : status.Condition.Detail;
-    }
+        StageVoice.Stopped => StoppedDetail,
+        StageVoice.Repairing => RepairingDetail,
+        _ => status.Condition.Detail,
+    };
 
     /// <summary>
     /// §2.7 item 1's <c>Detected</c> field, or null when the headline has already said it.

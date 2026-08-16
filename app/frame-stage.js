@@ -25,6 +25,20 @@ const HEARTBEAT_MS = 15000;
 const RECONNECT_MIN_MS = 500;
 const RECONNECT_MAX_MS = 5000;
 
+// The agent's console palette, in the medium this surface has. The accent is *composed by the
+// agent* and arrives named (`stage.accent`), because the two stages must not each work out what
+// colour a frame is: the console painted a repairing frame green under a headline saying it was
+// fixing something for exactly as long as it derived its accent from the ladder alone. This page
+// derives nothing — it looks the name up, and an unfamiliar one falls through to the ordinary
+// headline colour rather than to a guess.
+const ACCENTS = {
+  green: '#4fd6a0',
+  amber: '#f0a52a',
+  blue: '#4aa3e8',
+  red: '#e58f8f',
+  grey: '#9a9a9a',
+};
+
 let socket = null;
 let backoff = RECONNECT_MIN_MS;
 let configuration = null;
@@ -122,6 +136,26 @@ function line(text, style) {
   return node;
 }
 
+// The headline with the agent's accent beside it, the way the console stage puts its glyph beside
+// the same sentence. A dot and not a spinner: nothing on this screen may suggest motion that is
+// not happening, and the console's own glyph goes still for the same reason.
+function headline(text, accent) {
+  // Typed rather than truthiness-checked, so a name that happens to exist on Object.prototype
+  // resolves to no accent instead of to a function.
+  const colour = typeof ACCENTS[accent] === 'string' ? ACCENTS[accent] : null;
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;justify-content:center;gap:14px;max-width:40em';
+
+  if (colour) {
+    const dot = document.createElement('span');
+    dot.style.cssText = `flex:none;width:16px;height:16px;border-radius:50%;background:${colour}`;
+    row.appendChild(dot);
+  }
+
+  row.appendChild(line(text, 'font-size:30px;font-weight:650;letter-spacing:.01em'));
+  return row;
+}
+
 function render(stage) {
   const element = overlay();
 
@@ -138,7 +172,7 @@ function render(stage) {
   element.replaceChildren();
   element.style.display = 'flex';
 
-  if (stage.headline) element.appendChild(line(stage.headline, 'font-size:30px;font-weight:650;letter-spacing:.01em'));
+  if (stage.headline) element.appendChild(headline(stage.headline, stage.accent));
   if (stage.detail) element.appendChild(line(stage.detail, 'font-size:18px;color:#9a9a9a;max-width:40em'));
   if (stage.detected) element.appendChild(line(stage.detected, 'font-size:20px;color:#e8e8e8;max-width:40em;margin-top:10px'));
   if (stage.whyItMatters) element.appendChild(line(stage.whyItMatters, 'font-size:17px;color:#9a9a9a;max-width:40em'));

@@ -217,6 +217,14 @@ public sealed class BrowserStage
         {
             Condition = status.Condition.State.ToString(),
             ProductRuns = status.ProductRuns,
+
+            // The colour goes the same way the words do (decision 83): composed here, from the
+            // whole status, and sent by name. The page had no accent at all before this, so the
+            // green it could not paint was not on the panel — but the only field it could have
+            // painted one from was the rung above, which says InSync for a frame that is repairing
+            // itself. Sending the composed accent is what stops that being a defect waiting to be
+            // rendered, and gives the browser surface the across-the-room signal the console has.
+            Accent = StagePalette.NameOf(StagePalette.For(status)),
             Headline = ReconcileVoice.Headline(status),
             Detail = ReconcileVoice.Detail(status),
             Detected = ReconcileVoice.Detected(status),

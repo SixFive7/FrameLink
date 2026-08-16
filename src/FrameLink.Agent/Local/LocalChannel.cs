@@ -70,10 +70,27 @@ public sealed record PageMessage
 public sealed record StageMessage
 {
     /// <summary>Which rung of §2.6's ladder the device is on.</summary>
+    /// <remarks>
+    /// The rung and nothing else, which is honest and is why it is not what the page paints with:
+    /// an adopted frame repairing itself is <c>InSync</c> here and <see cref="Accent"/> is amber.
+    /// It stays because it is the one field that says what the <i>Fleet Manager</i> last answered.
+    /// </remarks>
     public required string Condition { get; init; }
 
     /// <summary>Whether the product may run (§2.6).</summary>
     public required bool ProductRuns { get; init; }
+
+    /// <summary>
+    /// The accent the console paints this same frame with, by name (decision 83).
+    /// </summary>
+    /// <remarks>
+    /// <b>Composed by the agent, never derived by the page.</b> One of <c>green</c>, <c>amber</c>,
+    /// <c>blue</c>, <c>red</c> or <c>grey</c> — the name of the value
+    /// <c>StagePalette.For(AgentStatus)</c> chose, so the colour on the panel is the same colour on
+    /// the console whichever surface the frame is currently showing. A page that does not know the
+    /// name renders its ordinary headline colour rather than guessing.
+    /// </remarks>
+    public string? Accent { get; init; }
 
     /// <summary>The ladder's headline, for a reader with no computer experience.</summary>
     public string? Headline { get; init; }

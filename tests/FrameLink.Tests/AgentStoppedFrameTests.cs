@@ -342,6 +342,97 @@ public sealed class AgentStoppedFrameTests
     }
 
     [Fact]
+    public void The_accent_says_what_the_headline_says_rather_than_what_the_ladder_says()
+    {
+        // The third finding in this family and the one nothing rendered in words: decision 82
+        // recorded it and left it, because painting it changes what the screen does. A frame the
+        // Fleet Manager has cleared and that is repairing itself was painted in the accent of a
+        // frame that is working — the box title, the spinner beside the headline and every
+        // progress bar under it — while the headline above them said it was fixing something.
+        var repairing = Stopped with
+        {
+            Condition = Green,
+            Drifted = true,
+            Resources = [],
+            Reconcile = new ReconcileNarration { Resource = "audio.mixer.pcm-volume", Attempt = 1, AttemptBudget = 3 },
+        };
+
+        Assert.Equal(ReconcileVoice.RepairingHeadline, ReconcileVoice.Headline(repairing));
+
+        var painted = StageRenderer.Render(repairing, DateTimeOffset.UnixEpoch, tick: 0, 100, 24, colour: true);
+
+        Assert.Contains(Ansi.Foreground(StagePalette.Amber), painted, StringComparison.Ordinal);
+        Assert.DoesNotContain(Ansi.Foreground(StagePalette.Green), painted, StringComparison.Ordinal);
+
+        // And a frame that has given up is painted as one everywhere the accent reaches, not only
+        // on the still glyph and the bar that already knew.
+        var stopped = StageRenderer.Render(AdoptedAndStopped, DateTimeOffset.UnixEpoch, tick: 0, 100, 24, colour: true);
+
+        Assert.Contains(Ansi.Foreground(StagePalette.Red), stopped, StringComparison.Ordinal);
+        Assert.DoesNotContain(Ansi.Foreground(StagePalette.Green), stopped, StringComparison.Ordinal);
+
+        // A frame with nothing wrong on it is still green, and a frame the Fleet Manager has not
+        // cleared still keeps the rung's own accent — the same two exceptions the headline makes.
+        var working = repairing with { Drifted = false };
+        var uncleared = repairing with
+        {
+            Condition = DeviceStateLadder.FromHandshake(new HandshakeResult
+            {
+                Status = HandshakeStatus.Pending,
+                ProtocolVersion = ProtocolConstants.Version,
+            }),
+        };
+
+        Assert.Contains(
+            Ansi.Foreground(StagePalette.Green),
+            StageRenderer.Render(working, DateTimeOffset.UnixEpoch, tick: 0, 100, 24, colour: true),
+            StringComparison.Ordinal);
+
+        Assert.Contains(
+            Ansi.Foreground(StagePalette.Blue),
+            StageRenderer.Render(uncleared, DateTimeOffset.UnixEpoch, tick: 0, 100, 24, colour: true),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_page_is_sent_the_accent_the_console_paints_rather_than_deriving_one()
+    {
+        // The second surface, because a fix on one is half a fix. The page composes no colour of
+        // its own: it is sent the name of the value StagePalette chose for this very frame, and the
+        // only field it could otherwise have painted from is the rung — which says InSync for a
+        // frame that is repairing itself, and would have carried decision 83's defect onto the
+        // panel the moment anybody used it.
+        var repairing = Stopped with
+        {
+            Condition = Green,
+            Drifted = true,
+            Resources = [],
+            Reconcile = new ReconcileNarration { Resource = "audio.mixer.pcm-volume", Attempt = 1, AttemptBudget = 3 },
+        };
+
+        var message = BrowserStage.Compose(repairing, DateTimeOffset.UnixEpoch);
+
+        Assert.Equal("InSync", message.Condition);
+        Assert.Equal("amber", message.Accent);
+        Assert.Equal(StagePalette.NameOf(StagePalette.For(repairing)), message.Accent);
+        Assert.Equal(ReconcileVoice.RepairingHeadline, message.Headline);
+
+        Assert.Equal("red", BrowserStage.Compose(AdoptedAndStopped, DateTimeOffset.UnixEpoch).Accent);
+        Assert.Equal("green", BrowserStage.Compose(repairing with { Drifted = false }, DateTimeOffset.UnixEpoch).Accent);
+
+        // And the page paints it. Asserted against the shipped source because that is the whole of
+        // what reaches the panel — the file is embedded in the binary, and a page that read the
+        // field and never rendered it would leave the browser stage exactly as colourless as it was.
+        var page = AgentButtonTests.Asset("frame-stage.js");
+
+        Assert.Contains("stage.accent", page, StringComparison.Ordinal);
+        Assert.Contains("ACCENTS", page, StringComparison.Ordinal);
+        Assert.All(
+            (string[])["green", "amber", "blue", "red", "grey"],
+            name => Assert.Contains($"{name}:", page, StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void The_console_stage_names_the_fleet_manager_when_this_frame_has_no_touchscreen()
     {
         // Decision 72's honest half, kept and now true of the frame that prints it. The sentence it

@@ -5,11 +5,14 @@ using FrameLink.Agent.State;
 
 namespace FrameLink.Agent.Stage;
 
-/// <summary>Colours for each rung of the device state ladder.</summary>
+/// <summary>Colours for §2.7's two stages.</summary>
 /// <remarks>
-/// One accent per rung so that a glance from across a room already carries information, before a
-/// word has been read. Held to the same bar as everything else (§7.4) — the console stage is not
-/// a lesser surface, it is the same design language in a 16-colour medium.
+/// One accent per frame so that a glance from across a room already carries information, before a
+/// word has been read — which is exactly why it has to be the accent of the frame the person is
+/// looking at rather than of the last thing the Fleet Manager said about it (decision 83). Held to
+/// the same bar as everything else (§7.4) — the console stage is not a lesser surface, it is the
+/// same design language in a 16-colour medium, and the page beside it is sent the same value by
+/// name rather than deriving its own.
 /// </remarks>
 public static class StagePalette
 {
@@ -40,30 +43,75 @@ public static class StagePalette
     /// <summary>Silence.</summary>
     public const int Grey = 244;
 
-    /// <summary>The accent for a condition.</summary>
+    /// <summary>
+    /// <b>The accent for a whole frame</b>, composed the way its headline is (decision 83).
+    /// </summary>
     /// <remarks>
-    /// <b>The rung, and only the rung.</b> This took a <c>DeviceState.Reconciling</c> arm
-    /// until decision 82, which nothing could reach because nothing produced that rung — local
-    /// drift is <see cref="AgentStatus.Drifted"/>, deliberately not on the ladder. The consequence
-    /// is stated rather than hidden: a frame the Fleet Manager has cleared and that is repairing
-    /// itself keeps <see cref="Green"/> here while <see cref="ReconcileVoice.Headline"/> says it is
-    /// fixing something, because the accent is composed from the condition alone. Painting that
-    /// amber means composing this the way the headline is composed, which is a change to what the
-    /// screen does rather than a dead branch, and is left for the operator to ask for.
+    /// <para>
+    /// <b>It takes an <see cref="AgentStatus"/> and not a <see cref="DeviceCondition"/>, and that
+    /// is the fix.</b> The rung is what the Fleet Manager said; whether the frame is repairing
+    /// itself is <see cref="AgentStatus.Drifted"/>, deliberately not on the ladder (decision 82).
+    /// Reading the rung alone painted an adopted frame that was putting a setting back in
+    /// <see cref="Green"/> underneath <see cref="ReconcileVoice.RepairingHeadline"/>, and painted a
+    /// frame that had given up in <see cref="Green"/> underneath
+    /// <see cref="ReconcileVoice.StoppedHeadline"/> — the third rendering in this family to make
+    /// the same claim, after a stopped frame's live progress animation and <c>c3116bc</c>'s
+    /// headline. §2.6: a frame that is not running the product must not be rendered as one that is,
+    /// in wording, in animation or in colour.
+    /// </para>
+    /// <para>
+    /// <b>The conjunction is not repeated here.</b> <see cref="ReconcileVoice.Voice"/> makes it
+    /// once and both the words and this colour are switches over its answer, so the two cannot come
+    /// apart again — including in the two cases where the rung's own accent is still right: a frame
+    /// with nothing wrong on it, and one the Fleet Manager has not cleared, whose blue or red says
+    /// something the drift does not.
+    /// </para>
+    /// <para>
+    /// <see cref="Amber"/> for a repairing frame is the accent the dead <c>DeviceState.Reconciling</c>
+    /// arm carried and nothing could ever select; <see cref="Red"/> for a stopped one is already
+    /// what <see cref="StageRenderer"/> paints its still glyph and its stopped bar with, so the
+    /// screen now agrees with itself rather than with the handshake.
+    /// </para>
     /// </remarks>
-    public static int For(DeviceCondition condition)
+    public static int For(AgentStatus status) => ReconcileVoice.Voice(status) switch
     {
-        ArgumentNullException.ThrowIfNull(condition);
+        StageVoice.Stopped => Red,
+        StageVoice.Repairing => Amber,
+        _ => ForRung(status.Condition),
+    };
 
-        return condition.State switch
-        {
-            DeviceState.InSync => Green,
-            DeviceState.VersionMismatch => Amber,
-            DeviceState.ControlNotConfigured => Blue,
-            DeviceState.NotAdopted => condition.Cause is "blocked" or "bad-signature" ? Red : Blue,
-            _ => Grey,
-        };
-    }
+    /// <summary>
+    /// The name the browser stage sends for an accent this class chose (§2.7's second surface).
+    /// </summary>
+    /// <remarks>
+    /// The page cannot use a 256-colour terminal index, and it must not re-derive the accent from
+    /// anything of its own — one surface guessing is exactly how the console and the page come to
+    /// disagree. So the composed value travels as a name and each medium renders it: this class in
+    /// ANSI, <c>frame-stage.js</c> in CSS.
+    /// </remarks>
+    public static string NameOf(int accent) => accent switch
+    {
+        Green => "green",
+        Amber => "amber",
+        Blue => "blue",
+        Red => "red",
+        _ => "grey",
+    };
+
+    /// <summary>The rung's own accent — one colour per rung of §2.6's ladder.</summary>
+    /// <remarks>
+    /// Private, and it stays private. Every accent on the screen is the whole frame's
+    /// (<see cref="For(AgentStatus)"/>); a caller able to ask for the rung's colour alone is a
+    /// caller able to reintroduce decision 83's defect without noticing.
+    /// </remarks>
+    private static int ForRung(DeviceCondition condition) => condition.State switch
+    {
+        DeviceState.InSync => Green,
+        DeviceState.VersionMismatch => Amber,
+        DeviceState.ControlNotConfigured => Blue,
+        DeviceState.NotAdopted => condition.Cause is "blocked" or "bad-signature" ? Red : Blue,
+        _ => Grey,
+    };
 }
 
 /// <summary>
@@ -124,7 +172,7 @@ public static class StageRenderer
         rows = Math.Max(MinimumRows, rows);
 
         var inner = columns - 4;
-        var accent = StagePalette.For(status.Condition);
+        var accent = StagePalette.For(status);
         var blank = Compose([], inner, colour);
 
         var head = BuildHead(status, tick, inner, accent, colour);
