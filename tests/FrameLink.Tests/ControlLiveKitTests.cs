@@ -1122,5 +1122,297 @@ public sealed class ControlCallTokenTests
         Assert.Equal(
             HttpStatusCode.Unauthorized,
             (await server.Client.PostAsync("/api/devices/anything/call-token", content: null, Token)).StatusCode);
+
+        Assert.Equal(
+            HttpStatusCode.Unauthorized,
+            (await server.Client.PostAsync("/api/livekit/guest-token?identity=jori", content: null, Token)).StatusCode);
+    }
+}
+
+/// <summary>
+/// The token a person joins with (§3.7, decision 86).
+/// </summary>
+/// <remarks>
+/// <para>
+/// Every test here is about a boundary rather than about minting, because minting is
+/// <c>LiveKitToken</c>'s and is already pinned against a live server above. What this route adds
+/// is four refusals and one guarantee: the namespace a frame can never occupy, the room the fleet
+/// actually uses, a lifetime measured in hours, and — the one that would be discovered in front of
+/// a family rather than here — that asking for a person's token does not disturb a frame's.
+/// </para>
+/// </remarks>
+public sealed class ControlGuestTokenTests
+{
+    private const string Password = "a-very-long-operator-password";
+
+    private static CancellationToken Token => TestContext.Current.CancellationToken;
+
+    [Fact]
+    public async Task A_person_is_minted_a_joinable_token_under_a_name_of_their_own()
+    {
+        await using var server = await ControlServer.StartAsync(Password);
+        await server.SignInAsync(Password);
+
+        var minted = await MintAsync(server, "identity=jori");
+
+        // The prefix is the route's, not the caller's: they asked for `jori` and are told exactly
+        // what LiveKit will call them, because the token is useless to anyone who has to guess.
+        Assert.Equal("guest:jori", minted.Identity);
+        Assert.Equal(CallProvisioning.DefaultRoom, minted.Room);
+        Assert.Equal("ws://livekit.invalid:7880", minted.Url);
+
+        var facts = LiveKitToken.Inspect(minted.Token);
+        Assert.NotNull(facts);
+        Assert.Equal("guest:jori", facts.Identity);
+        Assert.Equal(CallProvisioning.DefaultRoom, facts.Room);
+
+        // The bare name is the display name, so what the household sees on screen is `jori` while
+        // what LiveKit keys on is the namespaced form that cannot collide with a frame.
+        Assert.Equal("jori", facts.Name);
+        Assert.Equal(minted.ExpiresUtc.ToUnixTimeSeconds(), facts.Expires!.Value.ToUnixTimeSeconds());
+    }
+
+    [Fact]
+    public async Task Minting_for_a_person_leaves_every_frames_credentials_untouched()
+    {
+        // The property the device route cannot offer. `/api/devices/{id}/call-token` runs a forced
+        // review, which re-mints and pushes — so using it to get into a call would rotate the live
+        // token of the frame whose id was borrowed. This route writes nothing at all, which is
+        // what makes it safe to call while a frame is mid-call.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        var before = await server.EffectiveAsync(deviceId, CallProvisioning.TokenKey);
+        var identityBefore = await server.EffectiveAsync(deviceId, CallProvisioning.IdentityKey);
+        var revisionBefore = (await server.GetDeviceSettingsAsync(deviceId)).Revision;
+
+        await MintAsync(server, "identity=jori");
+
+        Assert.Equal(before, await server.EffectiveAsync(deviceId, CallProvisioning.TokenKey));
+        Assert.Equal(identityBefore, await server.EffectiveAsync(deviceId, CallProvisioning.IdentityKey));
+
+        // The revision counter moves on every settings write anywhere in the fleet, so an
+        // unchanged one is the assertion that nothing was written rather than that nothing
+        // important was.
+        Assert.Equal(revisionBefore, (await server.GetDeviceSettingsAsync(deviceId)).Revision);
+    }
+
+    [Fact]
+    public async Task A_frame_is_never_given_an_identity_from_the_reserved_namespace()
+    {
+        // The other half of the partition. Settings are generic (§3.4), so nothing stops an
+        // operator writing `guest:jori` into call.identity — and if that reached a token, the next
+        // person minted as `guest:jori` and that frame would kick each other out of the call. The
+        // value is ignored where a setting becomes a participant identity, and the corrected one
+        // is written back, so the setting heals rather than staying quietly wrong.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        (await server.SetDeviceSettingAsync(deviceId, CallProvisioning.IdentityKey, "guest:jori"))
+            .EnsureSuccessStatusCode();
+
+        var response = await server.Client.PostAsync($"/api/devices/{deviceId}/call-token", content: null, Token);
+        response.EnsureSuccessStatusCode();
+
+        var issued = await response.ReadAsync(ControlJson.Default.CallTokenResponse);
+        Assert.Equal(deviceId, issued.Identity);
+        Assert.Equal(deviceId, await server.EffectiveAsync(deviceId, CallProvisioning.IdentityKey));
+
+        var stored = await server.EffectiveAsync(deviceId, CallProvisioning.TokenKey);
+        Assert.Equal(deviceId, LiveKitToken.Inspect(stored)!.Identity);
+    }
+
+    [Fact]
+    public async Task An_operator_set_identity_outside_the_namespace_is_still_honoured()
+    {
+        // The reservation is one string, not a policy against hand-set identities. Narrowing it
+        // further would be a behaviour change to converged fleets dressed up as a safety measure.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        (await server.SetDeviceSettingAsync(deviceId, CallProvisioning.IdentityKey, "kitchen-frame"))
+            .EnsureSuccessStatusCode();
+
+        var stored = await server.EffectiveAsync(deviceId, CallProvisioning.TokenKey);
+        Assert.Equal("kitchen-frame", LiveKitToken.Inspect(stored)!.Identity);
+    }
+
+    [Fact]
+    public async Task A_room_no_frame_is_in_is_refused_and_the_real_ones_are_named()
+    {
+        // room.auto_create is on, so a mistyped room is not an error anywhere downstream: it is a
+        // brand-new empty room, a valid token, and one participant sitting alone. The refusal
+        // happens here or it does not happen at all.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        await server.EnrolAsync(key, Password);
+
+        var response = await server.Client.PostAsync(
+            "/api/livekit/guest-token?identity=jori&room=famliy",
+            content: null,
+            Token);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var error = await response.ReadAsync(ControlJson.Default.ApiError);
+        Assert.Equal("no-such-room", error.Error);
+        Assert.Contains(CallProvisioning.DefaultRoom, error.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_room_a_frame_was_moved_into_is_a_room_a_person_can_be_minted_into()
+    {
+        // The set of rooms is read from what frames were actually issued, so moving one frame to
+        // its own room makes that room mintable and does not make the fleet default unmintable.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        (await server.SetDeviceSettingAsync(deviceId, CallProvisioning.RoomKey, "kitchen"))
+            .EnsureSuccessStatusCode();
+
+        Assert.Equal("kitchen", (await MintAsync(server, "identity=jori&room=kitchen")).Room);
+        Assert.Equal(
+            CallProvisioning.DefaultRoom,
+            (await MintAsync(server, "identity=jori&room=family")).Room);
+    }
+
+    [Fact]
+    public async Task The_fleet_default_room_is_mintable_with_no_frames_at_all()
+    {
+        // Proving the call server works before there is anything to call is the first thing anyone
+        // does with this route, and an empty fleet is exactly when the room check would otherwise
+        // have nothing to say yes to.
+        await using var server = await ControlServer.StartAsync(Password);
+        await server.SignInAsync(Password);
+
+        Assert.Equal(CallProvisioning.DefaultRoom, (await MintAsync(server, "identity=jori")).Room);
+
+        (await server.SetFleetSettingAsync(CallProvisioning.RoomKey, "huisman")).EnsureSuccessStatusCode();
+
+        // And moving the fleet default moves what an unqualified request means, rather than
+        // pinning people to a room the frames have left.
+        Assert.Equal("huisman", (await MintAsync(server, "identity=jori")).Room);
+    }
+
+    [Fact]
+    public async Task A_name_that_could_forge_a_namespace_or_carry_a_sentence_is_refused()
+    {
+        await using var server = await ControlServer.StartAsync(Password);
+        await server.SignInAsync(Password);
+
+        foreach (var bad in (string[])["", "   ", "guest:jori", "jori huisman", "jori/../frame", new string('j', 65)])
+        {
+            var response = await server.Client.PostAsync(
+                $"/api/livekit/guest-token?identity={Uri.EscapeDataString(bad)}",
+                content: null,
+                Token);
+
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+
+        // The colon is the character the refusal is really about: with it excluded, `guest:` is
+        // the only namespace prefix a minted identity can have.
+        Assert.Equal("guest:jori.h_2", (await MintAsync(server, "identity=jori.h_2")).Identity);
+    }
+
+    [Fact]
+    public async Task A_persons_token_lasts_hours_where_a_frames_lasts_a_year()
+    {
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        var minted = await MintAsync(server, "identity=jori");
+        var frame = LiveKitToken.ExpiryOf(await server.EffectiveAsync(deviceId, CallProvisioning.TokenKey));
+
+        // Four hours, not four hours give or take a configuration: there is no knob, because a
+        // caller-supplied lifetime is a way to ask for a year on a credential nothing renews and
+        // nothing revokes.
+        var life = minted.ExpiresUtc - DateTimeOffset.UtcNow;
+        Assert.InRange(life, TimeSpan.FromHours(3.9), CallProvisioning.GuestLifetime);
+        Assert.Equal(TimeSpan.FromHours(4), CallProvisioning.GuestLifetime);
+        Assert.True(frame!.Value - minted.ExpiresUtc > TimeSpan.FromDays(300));
+    }
+
+    [Fact]
+    public async Task The_response_carries_the_token_and_never_the_secret()
+    {
+        await using var server = await ControlServer.StartAsync(Password);
+        await server.SignInAsync(Password);
+
+        var body = await (await server.Client.PostAsync(
+            "/api/livekit/guest-token?identity=jori",
+            content: null,
+            Token)).Content.ReadAsStringAsync(Token);
+
+        var credential = await new SqliteLiveKitStore(
+            new SqliteDatabase(Path.Combine(server.Workspace.Root, "framelink.db")),
+            TimeProvider.System).FindAsync(Token);
+
+        Assert.NotNull(credential);
+
+        // The whole body, not just the field the secret would have had. The secret is what signs
+        // every token in the fleet, and a route that handed one out would make every frame's
+        // credential mintable by whoever holds this response.
+        Assert.DoesNotContain(credential.Secret, body, StringComparison.Ordinal);
+
+        // The key is a different matter and it does travel — inside the token's `iss` claim, where
+        // LiveKit reads it to know which secret to check. It is base64url rather than plain text
+        // there, so the assertion has to decode; the point is that it is an identifier, and the
+        // status route already shows it.
+        var minted = await MintAsync(server, "identity=jori");
+        Assert.Equal(credential.Key, LiveKitToken.Inspect(minted.Token)!.Issuer);
+    }
+
+    [Fact]
+    public async Task A_deployment_with_calling_switched_off_mints_nothing_for_anybody()
+    {
+        await using var server = await ControlServer.StartAsync(
+            Password,
+            livekit: options => options with { Mode = LiveKitMode.Disabled });
+
+        await server.SignInAsync(Password);
+
+        var response = await server.Client.PostAsync(
+            "/api/livekit/guest-token?identity=jori",
+            content: null,
+            Token);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("not-configured", (await response.ReadAsync(ControlJson.Default.ApiError)).Error);
+    }
+
+    [Fact]
+    public async Task An_external_livekit_signs_a_persons_token_with_the_operators_own_secret()
+    {
+        // §3.7's escape hatch reaches this route by the same path a frame's token does, because
+        // both ask LiveKitDeployment rather than reaching for the bundled secret themselves.
+        await using var server = await ControlServer.StartAsync(
+            Password,
+            livekit: options => options with
+            {
+                Mode = LiveKitMode.External,
+                ExternalUrl = "wss://livekit.example.org",
+                ExternalKey = "APIborrowed",
+                ExternalSecret = "a-borrowed-secret-of-at-least-thirty-two",
+            });
+
+        await server.SignInAsync(Password);
+
+        var minted = await MintAsync(server, "identity=jori");
+
+        Assert.Equal("wss://livekit.example.org", minted.Url);
+        Assert.Equal("APIborrowed", LiveKitToken.Inspect(minted.Token)!.Issuer);
+    }
+
+    private static async Task<CallGuestTokenResponse> MintAsync(ControlServer server, string query)
+    {
+        var response = await server.Client.PostAsync($"/api/livekit/guest-token?{query}", content: null, Token);
+        response.EnsureSuccessStatusCode();
+        return await response.ReadAsync(ControlJson.Default.CallGuestTokenResponse);
     }
 }

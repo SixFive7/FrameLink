@@ -549,6 +549,32 @@ public sealed record CallTokenResponse
     public required string Reason { get; init; }
 }
 
+/// <summary>A call token minted for a person rather than a frame (§3.7, decision 86).</summary>
+/// <remarks>
+/// <b>The only place this token is ever written.</b> Nothing is stored, so this response is the
+/// whole artifact — lose it and the answer is to ask for another, which costs one request. The
+/// API secret is absent for the same reason it is absent from
+/// <see cref="LiveKitStatusResponse"/>; the API key travels inside the token's <c>iss</c> claim,
+/// as it does in every frame's, and is an identifier rather than a credential.
+/// </remarks>
+public sealed record CallGuestTokenResponse
+{
+    /// <summary>The participant identity the token names, prefix included.</summary>
+    public required string Identity { get; init; }
+
+    /// <summary>The room it is good for, and only that room.</summary>
+    public required string Room { get; init; }
+
+    /// <summary>The signalling address to present it to, or null when none is configured.</summary>
+    public string? Url { get; init; }
+
+    /// <summary>The token itself.</summary>
+    public required string Token { get; init; }
+
+    /// <summary>When it stops working. Nothing renews it.</summary>
+    public required DateTimeOffset ExpiresUtc { get; init; }
+}
+
 /// <summary>What a secret rotation did.</summary>
 public sealed record LiveKitRotateResponse
 {

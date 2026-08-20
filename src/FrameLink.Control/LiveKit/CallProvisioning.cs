@@ -61,7 +61,9 @@ public sealed record CallIssueResult(
 /// is unique by construction and immutable for the life of the device, which is exactly what the
 /// claim needs; the operator's display name travels in the token's <c>name</c> claim instead, so
 /// what the family sees on screen is still "Douwe" and what LiveKit keys on cannot collide.
-/// An identity an operator has already set by hand is left alone.
+/// An identity an operator has already set by hand is left alone, unless it sits in the
+/// <see cref="GuestIdentityPrefix"/> namespace — see that constant for why one string is
+/// reserved and what it is reserved against.
 /// </para>
 /// <para>
 /// <b>Renewal is what actually retires the failure class.</b> Every review re-mints when the
@@ -102,6 +104,63 @@ public sealed class CallProvisioning(
     /// suite asserts the two constants are equal.
     /// </remarks>
     public const string DefaultRoom = "family";
+
+    /// <summary>
+    /// The namespace every identity minted for a person lives in, and no frame's ever may.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A colon, which is what makes this a partition rather than a convention. A device's
+    /// identity is either its device id — sixteen Crockford Base32 characters and three hyphens,
+    /// an alphabet with no colon in it — or a string an operator typed into
+    /// <see cref="IdentityKey"/>, and the second case is the one that could collide. So the
+    /// prefix is reserved on both sides: nothing outside <c>guest:</c> is minted for a person,
+    /// and <see cref="ReviewAsync"/> refuses to hand a frame an identity inside it however the
+    /// setting got there. The two halves together are why the collision is impossible rather
+    /// than merely unlikely, and why there is no runtime uniqueness check to go stale.
+    /// </para>
+    /// <para>
+    /// The hazard being partitioned is the one <see cref="CallProvisioning"/> already names: two
+    /// participants sharing one identity are treated by LiveKit as one participant reconnecting,
+    /// so each kicks the other out. A person minting a token for themselves and picking, by
+    /// accident, the string a frame is using would take that frame off its own call — silently,
+    /// and in front of a family.
+    /// </para>
+    /// </remarks>
+    public const string GuestIdentityPrefix = "guest:";
+
+    /// <summary>
+    /// How long a token minted for a person is good for.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Four hours, against a frame's year, and the gap is the whole of the argument in
+    /// <see cref="LiveKitOptions.TokenLifetime"/> run backwards. A frame's token is long because
+    /// renewal is free: the Fleet Manager holds the secret, knows every adopted device, and
+    /// re-mints on contact. A person's token has none of that — this route writes nothing down,
+    /// so there is no record for renewal machinery to find and nothing that would notice the
+    /// expiry — which puts the lifetime back to being the entire policy rather than a safety
+    /// margin on top of one.
+    /// </para>
+    /// <para>
+    /// It is also the only bound on a leaked one. The single revocation this project has is
+    /// rotating the API secret, which invalidates <i>every frame's</i> token as collateral and
+    /// costs the whole fleet a re-mint, so nobody will reach for it to retire one person's
+    /// credential. Four hours covers a sitting — a call, or an evening spent proving media
+    /// flows — and is gone by the next one; a session that outruns it costs one more
+    /// authenticated request, which is a far better trade than a token nobody can take back.
+    /// </para>
+    /// <para>
+    /// Not a parameter, deliberately. A caller-supplied lifetime is a way to ask for a year, and
+    /// a year on a credential nothing renews and nothing revokes is exactly the failure class
+    /// §3.7 was written to retire.
+    /// </para>
+    /// </remarks>
+    public static TimeSpan GuestLifetime => TimeSpan.FromHours(4);
+
+    /// <summary>Whether an identity sits in the namespace reserved for people.</summary>
+    public static bool IsGuestIdentity(string? identity) =>
+        identity is not null && identity.StartsWith(GuestIdentityPrefix, StringComparison.Ordinal);
 
     /// <summary>Reviews one frame's credentials and issues a token if it needs one.</summary>
     /// <param name="deviceId">The frame.</param>
@@ -146,7 +205,20 @@ public sealed class CallProvisioning(
 
         var effective = await settings.ResolveAsync(deviceId, cancellationToken).ConfigureAwait(false);
 
-        var identity = Value(effective, IdentityKey) ?? deviceId;
+        // The reserved half of GuestIdentityPrefix. An operator's hand-set identity is honoured,
+        // except inside the namespace people are minted into — there it is dropped for the device
+        // id, which is unique by construction. Dropped rather than refused because a settings
+        // write is generic (§3.4) and has no idea what it is writing: the check belongs at the one
+        // place a setting becomes a participant identity, which is here. The next mint writes the
+        // corrected value back to `call.identity`, so the setting heals rather than staying wrong.
+        var configured = Value(effective, IdentityKey);
+        if (IsGuestIdentity(configured))
+        {
+            logger.CallIdentityReserved(deviceId, configured!);
+            configured = null;
+        }
+
+        var identity = configured ?? deviceId;
         var room = Value(effective, RoomKey) ?? DefaultRoom;
         var url = options.EffectiveUrl;
         var existing = Value(effective, TokenKey);
@@ -262,6 +334,63 @@ public sealed class CallProvisioning(
         }
 
         return issued;
+    }
+
+    /// <summary>
+    /// Every room the fleet actually resolves to right now.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The generated <c>livekit.yaml</c> sets <c>room.auto_create: true</c>, which is what lets a
+    /// frame be the first one into <c>family</c> — and is also why a room name cannot be checked
+    /// by asking the call server. Every name is a room there, the moment somebody joins it: a
+    /// mistyped one mints a perfectly valid token, creates an empty room nobody else is in, and
+    /// presents as a participant sitting alone with no error on any side. So the set of rooms
+    /// that exist is the set this fleet <i>puts frames in</i>, and it is read from the settings
+    /// the frames were actually issued.
+    /// </para>
+    /// <para>
+    /// The fleet default is always a member, even with no adopted frame to hold it. That is the
+    /// case where somebody is proving the call server works before there is anything to call, and
+    /// refusing it would make the room check hardest exactly when the fleet is emptiest.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlySet<string>> RoomsAsync(CancellationToken cancellationToken)
+    {
+        var rooms = new HashSet<string>(StringComparer.Ordinal)
+        {
+            await FleetRoomAsync(cancellationToken).ConfigureAwait(false),
+        };
+
+        // Adopted only. A pending or blocked device holds no settings at all — SqliteSettingsStore
+        // resolves it to nothing — so it is in no room, and counting one would invent a room from
+        // a device that has never been given a token.
+        var records = await devices.ListAsync(includeBlocked: false, cancellationToken).ConfigureAwait(false);
+
+        foreach (var record in records.Where(record => record.State is DeviceState.Adopted))
+        {
+            var effective = await settings.ResolveAsync(record.DeviceId, cancellationToken).ConfigureAwait(false);
+            rooms.Add(Value(effective, RoomKey) ?? DefaultRoom);
+        }
+
+        return rooms;
+    }
+
+    /// <summary>
+    /// The room a frame with no override of its own is put in.
+    /// </summary>
+    /// <remarks>
+    /// The fleet default if there is one, and <see cref="DefaultRoom"/> otherwise — the same two
+    /// steps <see cref="ReviewAsync"/> takes, which is the point of it being one method. A caller
+    /// that reached for <see cref="DefaultRoom"/> directly would be right on every fleet that has
+    /// never set <c>call.room</c> and wrong on every fleet that has, minting into <c>family</c>
+    /// while every frame sat somewhere else.
+    /// </remarks>
+    public async Task<string> FleetRoomAsync(CancellationToken cancellationToken)
+    {
+        var fleet = await settings.GetFleetDefaultsAsync(cancellationToken).ConfigureAwait(false);
+
+        return fleet.TryGetValue(RoomKey, out var room) && room.Length > 0 ? room : DefaultRoom;
     }
 
     /// <summary>

@@ -52,6 +52,7 @@ public static class OperatorEndpoints
         app.MapGet("/api/livekit", GetLiveKitAsync);
         app.MapPost("/api/livekit/rotate", RotateLiveKitAsync);
         app.MapPost("/api/devices/{deviceId}/call-token", IssueCallTokenAsync);
+        app.MapPost("/api/livekit/guest-token", IssueGuestTokenAsync);
 
         app.MapGet("/api/alerts", GetAlertsAsync);
     }
@@ -927,11 +928,150 @@ public static class OperatorEndpoints
                 statusCode: StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Mints a token a person can join a call with (§3.7, decision 86).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The route a frame's route cannot be.</b> <c>/api/devices/{id}/call-token</c> mints under
+    /// the <i>device id</i> and writes the result into that device's settings, so using it to get
+    /// into a call would join as the frame — which LiveKit reads as that frame reconnecting, and
+    /// knocks it off its own call — and would rotate the frame's live credential on the way past.
+    /// This route is the opposite of both: it names a person, and it writes nothing at all. No
+    /// settings row, no push, no review; the response is the only copy.
+    /// </para>
+    /// <para>
+    /// <b>Everything the caller controls is bounded before it reaches the signature.</b> The
+    /// namespace is not theirs to choose, the room must be one the fleet is actually in, and the
+    /// lifetime is not a parameter — see <see cref="CallProvisioning.GuestIdentityPrefix"/>,
+    /// <see cref="CallProvisioning.RoomsAsync"/> and
+    /// <see cref="CallProvisioning.GuestLifetime"/> for why each of the three is fixed here rather
+    /// than asked for. What is left to the caller is one name, and the name is what appears on
+    /// other people's screens.
+    /// </para>
+    /// <para>
+    /// <b>Scope, recorded because the shape invites more.</b> This is a minting seam and nothing
+    /// else. A web client and an Android app are explicitly out of scope for v2 (decision 86), so
+    /// there is deliberately no participant record, no renewal, no revocation list and no GUI —
+    /// each of those is a thing to maintain in exchange for a feature nobody has asked to ship.
+    /// </para>
+    /// </remarks>
+    private static async Task<IResult> IssueGuestTokenAsync(
+        string? identity,
+        string? room,
+        CallProvisioning calls,
+        LiveKitDeployment deployment,
+        LiveKitOptions options,
+        TimeProvider clock,
+        ILogger<CallProvisioning> logger,
+        CancellationToken cancellationToken)
+    {
+        var name = identity?.Trim() ?? string.Empty;
+
+        if (name.Length is 0)
+        {
+            return BadKey(
+                "Name the person this token is for, as ?identity=<name>. It becomes their "
+                + "participant identity and the name everyone else sees.");
+        }
+
+        // Letters, digits, and the three separators that survive a URL, a log line and a screen
+        // unambiguously. The colon is the one character that matters: excluding it is what stops a
+        // caller writing their own namespace prefix, so `guest:` below is the only one there can
+        // be. Sixty-four characters because an identity is a claim in a JWT the frame stores, not
+        // a place to put a sentence.
+        if (name.Length > 64 || !name.All(static c => char.IsAsciiLetterOrDigit(c) || c is '-' or '_' or '.'))
+        {
+            return BadKey(
+                "A name may be up to 64 letters, digits, hyphens, underscores and dots. "
+                + $"'{name}' is not.");
+        }
+
+        if (!options.IsCallingConfigured)
+        {
+            return CallRefused("not-configured", "Calling is switched off on this Fleet Manager.");
+        }
+
+        // Naming a room is optional, and the two branches are genuinely different questions. An
+        // unnamed one is the room the fleet puts a frame in, which is a fact rather than a request
+        // and needs no checking. A named one has to be checked against every room the fleet is
+        // actually using, which costs a resolve per adopted frame — so it is paid for only by the
+        // caller who asked for something.
+        var requested = room?.Trim();
+        string joining;
+
+        if (requested is { Length: > 0 })
+        {
+            var rooms = await calls.RoomsAsync(cancellationToken).ConfigureAwait(false);
+
+            if (!rooms.Contains(requested))
+            {
+                // 409 rather than 404: the room is not a resource on this server, it is a name
+                // this fleet does not use. Naming the ones it does use is the whole value of the
+                // refusal — the failure being prevented is a typo that would otherwise mint a
+                // working token into an empty room and look exactly like success.
+                return CallRefused(
+                    "no-such-room",
+                    $"No frame in this fleet is in a room called '{requested}'. "
+                    + $"Rooms in use: {string.Join(", ", rooms.Order(StringComparer.Ordinal))}.");
+            }
+
+            joining = requested;
+        }
+        else
+        {
+            joining = await calls.FleetRoomAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        // The secret's only reader. It is fetched here rather than passed in, from the same
+        // LiveKitDeployment every frame's token is signed by, and it goes no further than the
+        // HMAC below — nothing about it reaches the response, the log or the database.
+        var credential = await deployment.CredentialAsync(cancellationToken).ConfigureAwait(false);
+
+        if (credential is null)
+        {
+            return CallRefused(
+                "not-configured",
+                "This Fleet Manager has no LiveKit key and secret to sign a token with.");
+        }
+
+        var participant = CallProvisioning.GuestIdentityPrefix + name;
+        var now = clock.GetUtcNow();
+        var expires = now + CallProvisioning.GuestLifetime;
+
+        var token = LiveKitToken.Mint(
+            credential,
+            participant,
+            joining,
+            name,
+            now,
+            CallProvisioning.GuestLifetime);
+
+        logger.GuestTokenIssued(participant, joining, expires);
+
+        return Results.Json(
+            new CallGuestTokenResponse
+            {
+                Identity = participant,
+                Room = joining,
+                Url = options.EffectiveUrl.Length > 0 ? options.EffectiveUrl : null,
+                Token = token,
+                ExpiresUtc = expires,
+            },
+            ControlJson.Default.CallGuestTokenResponse);
+    }
+
     private static IResult NotFound(string deviceId) =>
         Results.Json(
             new ApiError { Error = "no-such-device", Detail = $"No device with id '{deviceId}'." },
             ControlJson.Default.ApiError,
             statusCode: StatusCodes.Status404NotFound);
+
+    private static IResult CallRefused(string error, string detail) =>
+        Results.Json(
+            new ApiError { Error = error, Detail = detail },
+            ControlJson.Default.ApiError,
+            statusCode: StatusCodes.Status409Conflict);
 
     private static IResult NotFoundKey(string key) =>
         Results.Json(

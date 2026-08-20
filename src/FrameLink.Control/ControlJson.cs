@@ -40,6 +40,7 @@ namespace FrameLink.Control;
 [JsonSerializable(typeof(ImageStatusResponse))]
 [JsonSerializable(typeof(LiveKitStatusResponse))]
 [JsonSerializable(typeof(CallTokenResponse))]
+[JsonSerializable(typeof(CallGuestTokenResponse))]
 [JsonSerializable(typeof(LiveKitRotateResponse))]
 [JsonSerializable(typeof(AlertsResponse))]
 [JsonSerializable(typeof(Alerting.AlertWebhookBody))]

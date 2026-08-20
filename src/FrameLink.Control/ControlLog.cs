@@ -333,6 +333,29 @@ internal static partial class ControlLog
         DateTimeOffset expires,
         string reason);
 
+    [LoggerMessage(
+        EventId = 1816,
+        Level = LogLevel.Information,
+        Message = "Minted a call token for '{Identity}' in room '{Room}', expiring {Expires}. "
+            + "Nothing renews or revokes it; it is gone when it expires.")]
+    public static partial void GuestTokenIssued(
+        this ILogger logger,
+        string identity,
+        string room,
+        DateTimeOffset expires);
+
+    [LoggerMessage(
+        EventId = 1817,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} has call.identity set to '{Configured}', which is inside the "
+            + "namespace reserved for people joining a call. It is being ignored and the device "
+            + "id used instead, so that no frame can be knocked off its own call by a name "
+            + "collision. Remove the setting to stop this repeating.")]
+    public static partial void CallIdentityReserved(
+        this ILogger logger,
+        string deviceId,
+        string configured);
+
     // §3.5's alerting. Warning rather than Information for an opened alert, because the container
     // log IS the delivery channel on a deployment with no webhook configured — an operator
     // grepping their logs has to be able to find these by level rather than by wording.
