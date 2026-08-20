@@ -35,6 +35,18 @@
 # remove a volume it does not own, so `docker compose down -v`, a wrong project name and a
 # mistyped command all leave it exactly where it was.
 #
+# ── AND WHY THE IMAGE VOLUME IS NOT ──────────────────────────────────────────────────────────
+# §3.9's generator needs three image-sized files on disk at once — the 2.8 GB pinned base, a
+# 2.8 GB working copy and the artifact it publishes — and ControlOptions defaults that directory
+# to DataDirectory/images. Left there, one press of Generate puts nine gigabytes of scratch on the
+# volume §3.1 budgeted for a SQLite file, beside the one thing in this stack that cannot be
+# rebuilt. So it gets a volume of its own and FRAMELINK_IMAGE_DIR points at it.
+#
+# That volume is deliberately NOT external, and the contrast with framelink-data above is the
+# whole argument. Everything on it is re-downloadable from raspberrypi.com and re-generatable from
+# a button, so `docker compose down -v` reclaiming six gigabytes is the correct outcome rather
+# than a disaster — and the database it must never reclaim is on a volume Compose cannot touch.
+#
 # ── THE MEDIA PORTS ARE PUBLISHED ONE-TO-ONE, AND ON WINDOWS THAT NEEDS A RESERVATION ────────
 # LiveKit runs with use_external_ip: false and is told this host's LAN address as node_ip, which
 # the Fleet Manager derives from FRAMELINK_LIVEKIT_PUBLIC_URL below — so its ICE candidates name
@@ -97,10 +109,39 @@ services:
 
       FRAMELINK_DATA_DIR: /var/lib/fl-control
 
-      # Deliberately empty, and the emptiness is the correct value here rather than an omission.
-      # There is no reverse proxy on a workstation, so every request arrives from its real source
-      # address and §3.3's per-IP rate limiter should believe exactly nobody's X-Forwarded-For.
-      # The deployment stack's value belongs to the estate it was measured on and is inert here.
+      # §3.9's base image and the image it generates, on the separate volume the header argues
+      # for. Unset, this falls back to FRAMELINK_DATA_DIR/images — a path no volume backs and
+      # which the image does not contain, so pressing Generate answers BaseImageMissing naming a
+      # directory that was never created. Setting it is what makes the button work at all.
+      FRAMELINK_IMAGE_DIR: /var/lib/fl-images
+
+      # Still empty, and still correct — but NOT for the reason this comment used to give. It
+      # said there is no reverse proxy on a workstation, so every request arrives from its real
+      # source address. Half of that is true and the half that matters is not: Docker's
+      # published-port NAT rewrites the source of every LAN connection to this network's bridge
+      # gateway (172.18.0.1 as currently allocated), so the frame at 10.20.30.53 is recorded as
+      # the gateway and §3.3's per-address budget is one budget shared by every frame in the
+      # house. With one frame that is invisible; with three, one reconnect storm spends the
+      # siblings' allowance too.
+      #
+      # Naming the gateway here does not fix that and makes something else worse, and both halves
+      # were measured on 2026-08-20 against this image, on a throwaway pair of containers with
+      # FRAMELINK_RATE_LIMIT_ATTEMPTS=1. UseForwardedHeaders does reach the /agent websocket: with
+      # FRAMELINK_TRUSTED_PROXIES set to the bridge gateway, an upgrade carrying
+      # `X-Forwarded-For: 203.0.113.9` was refused as 203.0.113.9, and with the variable empty the
+      # identical request was refused as the gateway. So the mechanism works and it works on this
+      # path. What it has nothing to work with is the device itself: a frame is not a browser
+      # behind a proxy — WebSocketControlTransportFactory opens a bare ClientWebSocket and sets no
+      # request headers anywhere, and a layer-4 NAT cannot add one — so on the real /agent path
+      # there is no X-Forwarded-For to recover an address from.
+      #
+      # Setting it would therefore recover nothing and cost the budget its integrity, because
+      # after the NAT *every* client is the gateway: trusting the gateway is trusting every client
+      # on the LAN to declare its own source address, which turns a coarse-but-enforced limit into
+      # a forgeable one. The address is not recoverable for /agent in this deployment and no value
+      # in this file can make it so; the exact fix is a budget keyed on the identity §3.3 already
+      # has — the keypair — which is an Appendix B item and not a variable. Behind Traefik the
+      # header is real and the setting is the one that matters; see framelink.stack.yml.
       FRAMELINK_TRUSTED_PROXIES: ""
 
       # The address frames dial for calls. Not derivable by the container: it knows the addresses
@@ -117,6 +158,7 @@ services:
 
     volumes:
       - framelink-data:/var/lib/fl-control
+      - framelink-images:/var/lib/fl-images
 
     ports:
       # The console and the /agent websocket. 5199 is not an arbitrary development port: it is
@@ -158,3 +200,10 @@ volumes:
   framelink-data:
     name: ${FRAMELINK_VOLUME:-framelink-data}
     external: true
+
+  # Compose-managed on purpose — see the header. No `external: true`, so a fresh machine needs no
+  # `docker volume create` before the first `up`, and the ownership works out with no chown for
+  # the reason deploy/fleet-manager/Dockerfile records: /var/lib/fl-images exists in the image
+  # owned by 10001, and Docker propagates that into a freshly created named volume.
+  framelink-images:
+    name: ${FRAMELINK_IMAGE_VOLUME:-framelink-images}

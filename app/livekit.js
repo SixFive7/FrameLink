@@ -2,8 +2,13 @@
 // `LivekitClient` in index.html) behind a small event interface the UI listens to.
 //
 // Always-connected lifecycle: connect on start, stay connected while idle with camera+mic
-// OFF, publish on call enter, unpublish on call leave. Resilient to LiveKit outages —
+// OFF, publish on call enter, MUTE on call leave. Resilient to LiveKit outages —
 // connect/reconnect retry forever so a remote outage never disturbs the slideshow.
+//
+// That line used to say "unpublish on call leave" and it was measurably wrong. See disableCall()
+// below: the tracks stay published and muted between calls, so a room with one idle frame in it
+// reports one participant carrying two publications for as long as that frame is switched on.
+// Nothing may read that as somebody being on a call.
 
 const LK = window.LivekitClient;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -176,6 +181,25 @@ export class CallClient extends EventTarget {
     } catch (e) { /* no mic — still join */ }
   }
 
+  // Leaving a call MUTES the camera and the microphone; it does not unpublish them, and that is
+  // kept deliberately rather than tolerated. setTrackEnabled(source, false) in the vendored
+  // livekit-client unpublishes only ScreenShare and takes `else yield o.mute()` for camera and
+  // microphone, so both publications survive with their track SIDs — which is why the next call
+  // re-uses them instead of negotiating new ones, and why it comes up faster. It was measured on
+  // 2026-08-20 not to hold the hardware open: nothing has /dev/video* while the frame is idle,
+  // because muting a LocalVideoTrack stops the underlying MediaStreamTrack.
+  //
+  // THE COST, AND THE ONE RULE THAT COMES WITH IT. The room permanently reports this frame as a
+  // participant carrying two publications, from boot until shutdown. That number is a statement
+  // about the frame being switched ON and about nothing else. Never derive "a call is in
+  // progress" from a participant count, a publication or publisher count, a track SID that still
+  // exists, or a room that is not empty — every one of those is equally true of a frame that has
+  // been showing photos to an empty room for a week.
+  //
+  // What DOES answer that question, in the two places that ask it: frame-stage.js holds an
+  // `inCall` flag that callStarted() and callEnded() set explicitly, and the agent reads that flag
+  // off the page heartbeat as Supervisor.CallActive. Both are told; neither counts anything. A
+  // third place that needs the answer should be told too, by the same route.
   async disableCall() {
     if (!this.room || !this.inCall) return;
     this.inCall = false;

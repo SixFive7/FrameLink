@@ -153,10 +153,22 @@ RUN groupadd --gid 10001 framelink \
 COPY --from=build --chown=root:root /out/app /app
 COPY --from=build --chown=root:root /out/agent /app/agent
 
-# The volume mount point, created in the image and owned by the runtime user so that Docker
+# The volume mount points, created in the image and owned by the runtime user so that Docker
 # propagates that ownership into a freshly created named volume. An operator re-using an existing
 # root-owned volume has to chown it once; the deployment guide says so and gives the command.
-RUN install -d -o 10001 -g 10001 -m 0750 /var/lib/fl-control
+#
+# There are two because §3.9's generator wants three image-sized files where §3.1 budgeted a
+# SQLite database, so both compose files give it a volume of its own and point FRAMELINK_IMAGE_DIR
+# at /var/lib/fl-images. That path has to exist HERE for the same reason the data directory does:
+# a named volume mounted over a path the image does not contain is created root-owned 0755, and
+# this container runs as 10001 with every capability dropped — so the first Generate would fail
+# creating the working directory, on a volume that looks perfectly correct in `docker inspect`.
+#
+# FRAMELINK_IMAGE_DIR is deliberately NOT set in the ENV block below. ControlOptions defaults it
+# to DataDirectory/images so that a self-hoster who mounts one volume gets a working setup on it,
+# and an image that overrode that default would take the choice away from the deployment that
+# should be making it.
+RUN install -d -o 10001 -g 10001 -m 0750 /var/lib/fl-control /var/lib/fl-images
 
 USER 10001:10001
 WORKDIR /var/lib/fl-control

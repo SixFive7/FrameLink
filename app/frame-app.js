@@ -200,6 +200,19 @@ class FrameApp extends LitElement {
     return this._sink;
   }
 
+  // AUTO-ANSWER IS AN EVENT, AND THAT IS THE ONLY SAFE SHAPE IT HAS. A peer frame keeps its
+  // camera and microphone PUBLISHED AND MUTED between calls (see app/livekit.js disableCall), so
+  // a room containing an idle frame is never an empty room and never has zero publishers. Anyone
+  // rewriting this to answer on "the room has a publisher", "participants.length > 0" or "the
+  // track SID is still there" turns switching a frame on into placing a call, in every house,
+  // permanently. `this._byId` is remote-only — livekit-client raises these events for remote
+  // participants, so a frame's own muted publications never reach it — and the exit test on
+  // _remove() below counts that same remote-only map, which is what keeps it honest.
+  //
+  // NOT MEASURED, AND WORTH MEASURING BEFORE THE SECOND FRAME ARRIVES: whether a peer's muted
+  // publication raises TrackSubscribed on a frame that connects afterwards. If it does, a frame
+  // rebooting beside an idle sibling auto-answers into a call nobody started. It cannot be
+  // observed on a one-frame fleet and it is not asserted here in either direction.
   _onTracks({ kind, track, p }) {
     if (track.kind === 'audio') {
       if (kind === 'sub') this._audioSink().appendChild(track.attach());

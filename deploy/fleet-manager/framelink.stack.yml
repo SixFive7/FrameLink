@@ -141,9 +141,18 @@ services:
       FRAMELINK_OPERATOR_PASSWORD: ${FRAMELINK_OPERATOR_PASSWORD}
 
       # ── Paths inside the container ────────────────────────────────────────────────────────
-      # The volume mount point. Everything precious is under it: framelink.db, the LiveKit
-      # binary and its generated configuration, and §3.9's generated images.
+      # The volume mount point. Everything precious is under it: framelink.db, and the LiveKit
+      # binary with its generated configuration.
       FRAMELINK_DATA_DIR: /var/lib/fl-control
+
+      # §3.9's images, and the reason they are not under the line above. The generator holds three
+      # image-sized files at once — the 2.8 GB pinned base, a working copy and the artifact — and
+      # unset, this defaults to FRAMELINK_DATA_DIR/images, which puts nine gigabytes of scratch on
+      # the volume §3.1 budgeted for a SQLite database and beside the only thing in this stack
+      # that cannot be rebuilt. The second volume is not external for exactly the reason the first
+      # one is: everything on it is re-downloadable and re-generatable, so Compose is welcome to
+      # reclaim it, and the volume it must never reclaim is one Compose does not own.
+      FRAMELINK_IMAGE_DIR: /var/lib/fl-images
 
       # ── The per-IP rate limiter behind a reverse proxy (§3.3) ─────────────────────────────
       # The registration endpoint is fully open and internet-exposed, and per-IP rate limiting is
@@ -180,6 +189,7 @@ services:
 
     volumes:
       - framelink-data:/var/lib/fl-control
+      - framelink-images:/var/lib/fl-images
 
     ports:
       # LiveKit signalling: HTTP and WebSocket. The half a reverse proxy could carry.
@@ -346,3 +356,11 @@ volumes:
   framelink-data:
     name: ${FRAMELINK_VOLUME:-framelink-data}
     external: true
+
+  # Deliberately NOT external. The one line above is the most important in this file because the
+  # data it names cannot be rebuilt; nothing on this one is in that position, so Compose owning it
+  # is a feature — `docker compose down -v` reclaims six gigabytes of disposable image and cannot
+  # reach the database while doing it. Its ownership needs no chown because /var/lib/fl-images
+  # exists in the image owned by 10001; deploy/fleet-manager/Dockerfile records why.
+  framelink-images:
+    name: ${FRAMELINK_IMAGE_VOLUME:-framelink-images}

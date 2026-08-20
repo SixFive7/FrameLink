@@ -250,6 +250,15 @@ public sealed class Supervisor
     /// asymmetry is deliberate — the cost of a false "in a call" is a restart deferred to the next
     /// tick, and the cost of a false "no call" is somebody's conversation ending.
     /// </para>
+    /// <para>
+    /// <b>This is the only honest producer, and a room's occupancy is not a second one.</b> The
+    /// page leaves its camera and microphone published-and-muted between calls so the next call
+    /// re-uses their track SIDs (<c>app/livekit.js</c>, <c>disableCall</c>), which means the
+    /// LiveKit room reports this frame as a participant with two publications from boot until
+    /// shutdown. A participant count, a publisher count or a non-empty room therefore says the
+    /// frame is switched on and nothing more, and substituting one of them for the flag above
+    /// would defer §2.10's daily restart for ever on every frame in the fleet.
+    /// </para>
     /// </remarks>
     public bool CallActive
     {
