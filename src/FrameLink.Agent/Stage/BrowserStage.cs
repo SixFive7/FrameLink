@@ -126,6 +126,22 @@ public sealed record BrowserStageServices
 /// clause 3 applies as written: it becomes ordinary drift, the reconciler owns it, and the repair
 /// gets the full §2.7 narration and a reboot.
 /// </para>
+/// <para>
+/// <b>The stage owns its own arming, and that is a decision rather than an accident.</b> The
+/// deadline is armed from what this class can see on its own tick — a running browser that owes a
+/// check-in — and never from being told. The alternative on offer was for
+/// <c>Supervisor.RestartBrowserAsync</c> to re-arm the stage after it restarts the browser, which
+/// fixes the same night's teardown and assumes the opposite thing: that arming belongs to whoever
+/// disturbs the page. Three reasons it does not. <c>LocalChannel.Forget()</c> has three callers
+/// today and the stage cannot enumerate tomorrow's, so a fix at one caller is a fix at one caller.
+/// The dependency runs one way — this class uses <see cref="SupervisionInterlock"/>, and
+/// <c>Supervisor</c> touches the stage only through the static <see cref="Compose"/> — so a
+/// re-arm call would make the two mutually dependent and would need a second forward reference in
+/// <c>AgentHost</c> to wire. And §2.10 draws the line itself: "supervision restarts a page that
+/// <i>was</i> rendering and stopped; the stage tears the session down for a page that <i>never</i>
+/// rendered. Sharing a tick interval is convenience, not coupling." A supervisor that armed this
+/// deadline would be exactly that coupling.
+/// </para>
 /// </remarks>
 public sealed class BrowserStage
 {
@@ -142,21 +158,39 @@ public sealed class BrowserStage
     public const string RetryDelayKey = "stage.browserRetryDelay";
 
     /// <summary>The <c>getty</c> whose autologin session <i>is</i> the graphical session.</summary>
-    public const string GettyUnitName = "getty@tty1.service";
+    /// <remarks>
+    /// The same unit <see cref="ConsoleAutologinResource"/> owns, named through that resource so the
+    /// two spellings cannot drift apart — <see cref="SessionResources"/> is only correct while they
+    /// are the same string.
+    /// </remarks>
+    public const string GettyUnitName = ConsoleAutologinResource.UnitName;
 
     /// <summary>
     /// The resources a deliberate teardown makes transiently wrong.
     /// </summary>
     /// <remarks>
-    /// All three read the running session rather than a file: the browser process, the compositor
-    /// process, and the transform on a live Wayland output. The files that produce them stay under
-    /// ordinary drift detection throughout, which is the same line the supervision windows draw.
+    /// <para>
+    /// Three of the four read the running session rather than a file: the browser process, the
+    /// compositor process, and the transform on a live Wayland output. The files that produce them
+    /// stay under ordinary drift detection throughout, which is the same line the supervision
+    /// windows draw.
+    /// </para>
+    /// <para>
+    /// <b>The fourth is the unit the teardown stops, and leaving it out was a measured defect.</b>
+    /// <see cref="TearDownAsync"/> runs <c>systemctl stop getty@tty1.service</c>, and
+    /// <c>boot.autologin.getty-tty1</c> is the resource that reads that unit's state — so with the
+    /// list naming only the three consequences, the reconciler read the teardown's own act as
+    /// drift, with the delta <c>observed 'getty@tty1.service is inactive'</c>, and repaired it with
+    /// a reboot. §2.10 clause 2 says the transient wrongness a supervision action <i>causes</i> is
+    /// expected rather than drift; the cause belongs in the list as much as its effects do.
+    /// </para>
     /// </remarks>
     public static IReadOnlyList<string> SessionResources { get; } =
     [
         ChromiumKioskRunningResource.ResourceName,
         BashProfileLabwcResource.ResourceName,
         DisplayTransformResource.ResourceName,
+        ConsoleAutologinResource.ResourceName,
     ];
 
     private readonly BrowserStageServices _services;
@@ -275,10 +309,17 @@ public sealed class BrowserStage
             return Phase;
         }
 
-        if (Phase is BrowserStagePhase.Console)
+        // The one arming point, and the condition is the invariant rather than a phase: a deadline
+        // is running exactly while a live browser owes a check-in and none has been armed. The
+        // first clause is "after starting the GUI" — forgetting any earlier check-in is what makes
+        // the deadline measure *this* browser rather than the one before it. The second is the same
+        // sentence said about a page that has gone away underneath a browser that is still up,
+        // which is what a supervised restart leaves behind (§2.10): it forgets the check-in, so
+        // the page this stage vouched for is no longer vouching for anything and the next one gets
+        // a window of its own, measured from now.
+        if (Phase is BrowserStagePhase.Console
+            || (_armedUtc is null && _services.Channel.LastCheckInUtc is null))
         {
-            // "After starting the GUI" — this is that moment. Forgetting any earlier check-in is
-            // what makes the deadline measure *this* browser rather than the one before it.
             _services.Channel.Forget();
             _armedUtc = now;
             Phase = BrowserStagePhase.Awaiting;
@@ -288,7 +329,17 @@ public sealed class BrowserStage
             return Phase;
         }
 
-        if (_services.Channel.LastCheckInUtc is { } checkIn && _armedUtc is { } armed && checkIn >= armed)
+        if (_armedUtc is not { } armed)
+        {
+            // No deadline is running, so there is nothing to judge: the page met the last one and
+            // the browser has been up ever since. A page that rendered and then went quiet is
+            // §2.10's kiosk-liveness rule, not this one, and the two are deliberately separate —
+            // this rule's answer is to tear the session down, and that is the wrong answer for a
+            // page that has already proved it can render.
+            return Phase;
+        }
+
+        if (_services.Channel.LastCheckInUtc is { } checkIn && checkIn >= armed)
         {
             if (Phase is not BrowserStagePhase.Live)
             {
@@ -298,6 +349,16 @@ public sealed class BrowserStage
                     CultureInfo.InvariantCulture,
                     $"The page checked in after {(int)(checkIn - armed).TotalSeconds} s. The browser is now the frame's screen."));
             }
+
+            // The deadline this page met is spent, and a spent deadline must not survive the page
+            // that met it. Nothing else cleared it while the browser stayed up, so it kept the
+            // instant the GUI started — and any later `LocalChannel.Forget()`, which is what every
+            // supervised browser restart does, put the stage back in front of a *stale* arm hours
+            // old, failed the guard above against a check-in that had just been forgotten, and tore
+            // the graphical session down within one tick of a restart that was working exactly as
+            // designed. Measured on four consecutive nights: the teardown followed the 03:00
+            // restart by +0.220 s to +1.213 s, on a page that had been rendering for 23 h 52 m.
+            _armedUtc = null;
 
             return Phase;
         }
@@ -315,7 +376,7 @@ public sealed class BrowserStage
             return Phase;
         }
 
-        if (_armedUtc is { } startedAt && now - startedAt >= CheckInDeadline)
+        if (now - armed >= CheckInDeadline)
         {
             await TearDownAsync(
                 string.Create(

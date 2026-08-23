@@ -104,6 +104,35 @@ public sealed class AgentBrowserStageTests
     }
 
     [Fact]
+    public async Task The_unit_the_teardown_stops_is_the_one_the_interlock_has_to_cover()
+    {
+        // The measured defect: the window named the teardown's three *consequences* and not the
+        // act itself, so the reconciler read `systemctl stop getty@tty1.service` as drift — delta
+        // `observed 'getty@tty1.service is inactive'` — and repaired it with a reboot, on a frame
+        // whose graphical session the agent was deliberately holding down.
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+
+        await frame.Stage.TickAsync(None);
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(61);
+        await frame.Stage.TickAsync(None);
+
+        Assert.Contains("stop " + BrowserStage.GettyUnitName, frame.Systemd.Commands);
+        Assert.True(frame.Interlock.Excuses(ConsoleAutologinResource.ResourceName, frame.Clock.UtcNow));
+
+        // Written as an invariant rather than as a fourth string, because the list can only be
+        // right while it names a resource for every unit the teardown stops.
+        Assert.Equal(ConsoleAutologinResource.UnitName, BrowserStage.GettyUnitName);
+        Assert.Contains(ConsoleAutologinResource.ResourceName, BrowserStage.SessionResources);
+        Assert.Contains(ChromiumKioskRunningResource.ResourceName, BrowserStage.SessionResources);
+
+        // And it is still a window rather than an amnesty: the retry restarts the getty at two
+        // minutes and the cover runs out a minute after that, which is §2.10 clause 3's boundary.
+        frame.Clock.UtcNow += frame.Stage.RetryDelay + frame.Stage.CheckInDeadline;
+        Assert.False(frame.Interlock.Excuses(ConsoleAutologinResource.ResourceName, frame.Clock.UtcNow));
+    }
+
+    [Fact]
     public async Task The_console_is_not_where_the_frame_stays_forever()
     {
         using var frame = new StagedFrame();
@@ -146,6 +175,98 @@ public sealed class AgentBrowserStageTests
 
         Assert.False(frame.Interlock.Excuses(BashProfileLabwcResource.ResourceName, frame.Clock.UtcNow));
         Assert.NotEmpty(frame.Interlock.Expire(frame.Clock.UtcNow));
+    }
+
+    [Fact]
+    public async Task The_daily_restart_does_not_tear_down_the_session_it_restarted()
+    {
+        // The measured defect, end to end and through the real supervisor. §2.10's 03:00 restart
+        // fires, RestartBrowserAsync forgets the page's check-in so the liveness rule cannot
+        // measure a new browser against an old heartbeat — and the stage then failed its own
+        // check-in guard against an arm timestamp from the previous morning and tore the graphical
+        // session down. Four consecutive nights, +0.220 s to +1.213 s after the restart, on a page
+        // that had been rendering for 23 h 52 m. A supervised restart is not drift and must not
+        // stop the product (§2.10).
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+
+        Assert.Equal(BrowserStagePhase.Awaiting, await frame.Stage.TickAsync(None));
+        frame.Channel.Receive(new PageMessage { Kind = PageMessage.KindHello }, frame.Clock.UtcNow);
+        Assert.Equal(BrowserStagePhase.Live, await frame.Stage.TickAsync(None));
+
+        // Yesterday's 03:00 has been marked as taken, so the next crossing is owed.
+        Assert.Equal(0, await frame.Supervisor.TickAsync(None));
+
+        frame.Clock.UtcNow += TimeSpan.FromHours(23) + TimeSpan.FromMinutes(52);
+        Assert.Equal(1, await frame.Supervisor.TickAsync(None));
+        Assert.Contains("systemctl --user restart chromium-kiosk.service", frame.Session.Commands);
+        Assert.Null(frame.Channel.LastCheckInUtc);
+
+        // The very next stage tick, which on a frame is at most five seconds later.
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(1);
+        var phase = await frame.Stage.TickAsync(None);
+
+        Assert.NotEqual(BrowserStagePhase.TornDown, phase);
+        Assert.Equal(0, frame.Stage.Teardowns);
+        Assert.DoesNotContain("stop " + BrowserStage.GettyUnitName, frame.Systemd.Commands);
+    }
+
+    [Fact]
+    public async Task A_restarted_browser_gets_a_deadline_of_its_own_rather_than_none_at_all()
+    {
+        // The other half of the same line, and the half a bare "forget the old deadline" would
+        // lose. A page that never comes back after a supervised restart is nobody else's business:
+        // §2.10's liveness rule stands down explicitly when the channel has no check-in at all,
+        // naming this rule as the owner. So the stage has to arm afresh — and then a blank desktop
+        // is caught on this browser's own deadline instead of the previous one's.
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+
+        await frame.Stage.TickAsync(None);
+        frame.Channel.Receive(new PageMessage { Kind = PageMessage.KindHello }, frame.Clock.UtcNow);
+        Assert.Equal(BrowserStagePhase.Live, await frame.Stage.TickAsync(None));
+
+        frame.Clock.UtcNow += TimeSpan.FromHours(23) + TimeSpan.FromMinutes(52);
+        frame.Channel.Forget();
+
+        Assert.Equal(BrowserStagePhase.Awaiting, await frame.Stage.TickAsync(None));
+
+        // Not one second early: the new page gets the whole deadline, measured from the restart.
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(59);
+        Assert.Equal(BrowserStagePhase.Awaiting, await frame.Stage.TickAsync(None));
+        Assert.Equal(0, frame.Stage.Teardowns);
+
+        frame.Clock.UtcNow += TimeSpan.FromSeconds(2);
+        Assert.Equal(BrowserStagePhase.TornDown, await frame.Stage.TickAsync(None));
+        Assert.Equal(1, frame.Stage.Teardowns);
+    }
+
+    [Fact]
+    public async Task A_page_that_keeps_checking_in_is_never_judged_again()
+    {
+        // The invariant behind both tests above: a deadline runs exactly while a live browser owes
+        // a check-in. A page that met one is not measured against anything, however long it stays
+        // up and whoever else is holding the panel — the ordinary state of a frame is 23 hours of
+        // this, so a rule that could re-arm underneath a rendering page would be the same defect
+        // pointing the other way.
+        using var frame = new StagedFrame();
+        frame.BrowserIs("active");
+
+        await frame.Stage.TickAsync(None);
+        frame.Channel.Receive(new PageMessage { Kind = PageMessage.KindHello }, frame.Clock.UtcNow);
+        Assert.Equal(BrowserStagePhase.Live, await frame.Stage.TickAsync(None));
+
+        // Somebody is logged in on another terminal, so the agent's console is what is in front.
+        frame.Terminals.Active = TtyTerminal.AgentTerminal;
+        Assert.True(await frame.Screen.TakeAsync(None));
+
+        for (var hour = 0; hour < 24; hour++)
+        {
+            frame.Clock.UtcNow += TimeSpan.FromHours(1);
+            Assert.Equal(BrowserStagePhase.Live, await frame.Stage.TickAsync(None));
+        }
+
+        Assert.Equal(0, frame.Stage.Teardowns);
     }
 
     [Fact]
@@ -354,9 +475,32 @@ public sealed class AgentBrowserStageTests
             });
 
             stage = Stage;
+
+            // The real supervisor over the same channel, interlock and clock, because the defect
+            // this fixture now has to be able to reproduce lives in the seam between the two: what
+            // Supervisor.RestartBrowserAsync leaves behind is what BrowserStage.TickAsync reads
+            // next. A hand-rolled Channel.Forget() would assert the fix against a stand-in for the
+            // thing that caused it.
+            Supervisor = new Supervisor(new SupervisionServices
+            {
+                Channel = Channel,
+                Session = Session,
+                Memory = Memory,
+                Interlock = Interlock,
+                Hub = Hub,
+                Telemetry = Telemetry,
+                Clock = Clock,
+                Log = Log,
+                TimeZone = TimeZoneInfo.Utc,
+                DeviceId = "TEST-DEVI-CEID-0001",
+            });
         }
 
         public LocalChannel Channel { get; } = new();
+
+        public StubMemoryProbe Memory { get; } = new();
+
+        public Supervisor Supervisor { get; }
 
         public FakeUserSession Session { get; } = new();
 
