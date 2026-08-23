@@ -1032,6 +1032,16 @@ _ORIENTATION: dict[str, str] = {
         "cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be "
         "completed."
     ),
+    "cardRegister": (
+        "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is "
+        "on each one, when it last moved and what must not be disturbed. Read it before "
+        "touching a card: one of the three is the only surviving v1 system and "
+        "reference/v1-state-inventory.txt is a capture taken from the machine it ran, so "
+        "overwriting it destroys the parity target's origin permanently. "
+        "`fl.py cards check` reads whatever is in the workstation's reader and compares it "
+        "against what the register claims is in there - exit 2 means they disagree and the "
+        "register is not to be trusted until someone finds out which of the two is wrong."
+    ),
     "reasoningRecord": (
         "git log - every commit message carries why, not what. `git log --oneline` is the "
         "cheapest orientation available and the only place some findings exist at all (the "

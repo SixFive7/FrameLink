@@ -20,6 +20,8 @@ has lost its context finds out where the build stands.
               gap in coverage named
     array     the bench measurement of the XVF3800's amplifier pin: stop the agent, connect
               the array, read X0D31 before anything writes to it, start the agent again
+    cards     the SD card register: which of the three unmarked cards is where, what is on
+              each one, and a check of that record against the card in the reader
     status    what has been proven, what this session can do, what to do next
 
 Credentials
@@ -74,6 +76,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from flh import build as build_mod  # noqa: E402
+from flh import cards as cards_mod  # noqa: E402
 from flh import collect as collect_mod  # noqa: E402
 from flh import deploy as deploy_mod  # noqa: E402
 from flh import parity as parity_mod  # noqa: E402
@@ -343,6 +346,66 @@ def _parser() -> argparse.ArgumentParser:
         help=f"seconds `release` waits for InSync (default {xvf_mod.CONVERGE_TIMEOUT_S:.0f})",
     )
 
+    # --- cards --------------------------------------------------------------
+    p_cards = subparsers.add_parser(
+        "cards",
+        help="the SD card register: which unmarked card is where, and a check against reality",
+        description=(
+            "There are three physical microSD cards in this project and none of them is "
+            "marked, so which card is where can only be answered from a record. "
+            "tools/harness/cards.json is that record - committed, pointed at from "
+            "progress.json's orientation block, and readable by a session that remembers "
+            "nothing.\n\n"
+            "  list      the whole register: position, contents, image, agent version,\n"
+            "            handling, and whether the card can be recognised at all\n"
+            "  check     read whatever is in the workstation's reader and compare it against\n"
+            "            what the register CLAIMS is in there. This is the action that keeps\n"
+            "            the record honest; every disagreement is loud and exits 2\n"
+            "  identify  print what the workstation can actually see about the card in the\n"
+            "            reader, and with --card, capture it as that card's fingerprint\n"
+            "  record    record that a card moved. --why is required\n"
+            "  label     propose the marker file that would make a card self-identifying.\n"
+            "            Prints the exact bytes and writes nothing unless --write is given\n\n"
+            "Read-only apart from `label --write`, which writes one text file into a mounted "
+            "FAT volume and refuses unless `check` already agrees which card it is. Nothing "
+            "here flashes, formats, partitions or opens a physical drive handle.\n\n"
+            "Nothing readable through a USB card reader is unique to the physical card: the "
+            "reader passes no SD CID through, the MBR signature belongs to the image and the "
+            "filesystem serial to whoever formatted it. `check` therefore reports 'ambiguous' "
+            "rather than choosing, and the register's identityFields block says what each "
+            "field can and cannot prove - on Linux as well as on Windows.\n\n"
+            "Exit 0 when the register and reality agree, 2 when they do not, 3 when there is "
+            "no reader, no card or no such card id."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_cards.add_argument(
+        "action",
+        nargs="?",
+        default="list",
+        choices=("list", "check", "identify", "record", "label"),
+        help="what to do (default list)",
+    )
+    p_cards.add_argument("--card", default=None, help="card id from the register")
+    p_cards.add_argument(
+        "--kind",
+        choices=("reader", "frame", "desk", "unknown"),
+        default=None,
+        help="for `record`: what kind of place the card is now in; `reader` is the one `check` verifies",
+    )
+    p_cards.add_argument("--where", default=None, help="for `record`: where it is now, in words")
+    p_cards.add_argument("--why", default="", help="for `record`: what the move was for; required")
+    p_cards.add_argument(
+        "--force",
+        action="store_true",
+        help="for `identify --card`: overwrite a fingerprint that disagrees, having decided which card this is",
+    )
+    p_cards.add_argument(
+        "--write",
+        action="store_true",
+        help="for `label`: actually write the marker file. Without it the bytes are printed and nothing is written",
+    )
+
     # --- status -------------------------------------------------------------
     p_status = subparsers.add_parser(
         "status",
@@ -502,6 +565,38 @@ def main(argv: list[str] | None = None) -> int:
             # a harness failure - it is a result the operator has to see and decide about - so
             # it exits 2 rather than 0, and never masquerades as success.
             return 0 if succeeded else 2
+
+        if args.command == "cards":
+            with progress.activity("cards", action=args.action):
+                if args.action == "list":
+                    code = cards_mod.show()
+                elif args.action == "check":
+                    code = cards_mod.check()
+                elif args.action == "identify":
+                    code = cards_mod.identify(card_id=args.card, force=args.force)
+                elif args.action == "record":
+                    if not (args.card and args.kind and args.where):
+                        raise HarnessError(
+                            "`cards record` needs --card, --kind, --where and --why.",
+                            exit_code=1,
+                            remedy=(
+                                "e.g. python tools/harness/fl.py cards record --card blank "
+                                "--kind reader --where 'workstation USB reader' "
+                                "--why 'staged for the M2.5 flash'"
+                            ),
+                        )
+                    code = cards_mod.record(
+                        card_id=args.card, kind=args.kind, where=args.where, why=args.why
+                    )
+                else:
+                    if not args.card:
+                        raise HarnessError("`cards label` needs --card.", exit_code=1)
+                    code = cards_mod.label(card_id=args.card, write=args.write)
+            # A disagreement between the register and the card in the reader is not a harness
+            # failure - it is the finding this subcommand exists to produce - so it exits 2 and
+            # is logged as unsuccessful, which is what puts it in front of the next session.
+            progress.log("cards", code == 0, f"{args.action} -> exit {code}")
+            return code
 
         if args.command == "status":
             status.show(json_output=args.json)

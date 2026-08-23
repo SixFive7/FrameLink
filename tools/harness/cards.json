@@ -1,0 +1,211 @@
+{
+  "schema": "framelink.harness.cards/1",
+  "generatedBy": "tools/harness/fl.py cards",
+  "updatedUtc": "2026-08-23T16:28:05Z",
+  "readMeFirst": [
+    "This is the FrameLink SD card register. There are three physical microSD cards and none of them is marked, so this file is the only way to answer 'which card is where and what is on it' without a human squinting at a card. It is written by `python tools/harness/fl.py cards` and is pointed at from progress.json's orientation block.",
+    "Run `python tools/harness/fl.py cards check` first. It reads whatever card is in the workstation's USB reader and compares it against what this file claims is in there. Exit 0 means the register and reality agree. Exit 2 means they do not, and the register is then not to be trusted until someone works out which of the two is wrong.",
+    "The operator has committed to not moving a card unless asked to. That commitment is what keeps this file true; `cards check` is what catches it if the commitment ever slips. After any card is moved, record it: `fl.py cards record --card <id> --kind <kind> --where '<text>' --why '<reason>'`. A move that is not recorded is a register that lies.",
+    "identityFields explains what each fingerprint field distinguishes and how to read it on Windows and on Linux. Read it before trusting a match: most of these fields identify the IMAGE on a card, not the card itself, so two cards flashed from the same file are indistinguishable by everything except the marker file. `cards check` reports 'ambiguous' rather than guessing when that happens.",
+    "The v1 card is irreplaceable. It is the only surviving v1 system, and reference/v1-state-inventory.txt is a capture taken from the machine it ran - captures cannot be re-taken once their source is gone. Never flash it, never format it, never let a flashing tool resolve to it."
+  ],
+  "reader": {
+    "uniqueId": "USBSTOR\\DISK&VEN_REALSIL&PROD_RTSUERLUN0&REV_1.00\\0000:pc657",
+    "friendlyName": "Generic- USB3.0 CRW    -0",
+    "model": "SDXC Card",
+    "workstation": "pc657",
+    "note": "The reader is named by its USBSTOR device identity and never by drive letter or disk number - both are assigned at enumeration time and move. This is the same identity framelink-scratch/m25-image/flash-card.ps1 gates on. It contains the machine name, so on a different workstation this block must be re-established from `fl.py cards identify`, which lists every USB disk it can see."
+  },
+  "cards": [
+    {
+      "id": "v1",
+      "title": "The original v1 frame's system card",
+      "handling": "IRREPLACEABLE. Never flash it, never format it, never let a flashing tool resolve to it, and do not mount it writable. It is the only surviving v1 system, and reference/v1-state-inventory.txt is a capture taken from the machine it ran - captures cannot be re-taken once their source is gone.",
+      "location": {
+        "kind": "desk",
+        "where": "operator's desk, loose and unmarked",
+        "sinceUtc": null,
+        "statedBy": "operator, 2026-08-23 - stated, not observed by the harness"
+      },
+      "contents": {
+        "summary": "The v1 frame's complete system as it ran before this project began. This is the origin of the parity target: reference/v1-state-inventory.txt was captured from the machine that booted this card.",
+        "imageId": null,
+        "agentVersion": null,
+        "os": "Raspberry Pi OS, written by Raspberry Pi Imager - the captured cmdline carries ds=nocloud;i=rpi-imager-1776005232619",
+        "rootDevice": "/dev/mmcblk0p2, ext4, mounted rw,noatime (v1 inventory, GOVERNOR_ZRAM_TMPFS section)"
+      },
+      "fingerprint": {
+        "mbrSignature": "f870549c",
+        "capturedUtc": "2026-08-23T16:28:04Z",
+        "capturedBy": "derived from a committed capture, NOT read from the card",
+        "source": "reference/v1-state-inventory.txt line 20 - `root=PARTUUID=f870549c-02`, which is this card's own cmdline.txt as captured from the running v1 frame. A PARTUUID's prefix IS the MBR disk signature, so the value is the card's even though the card has never been put in a reader. The same string is asserted in tests/FrameLink.Tests/AgentReliabilityTests.cs, so it is regression-held."
+      },
+      "history": [
+        {
+          "utc": "2026-08-23T16:28:04Z",
+          "from": null,
+          "kind": "desk",
+          "where": "operator's desk, loose and unmarked",
+          "why": "Register created. Position is as stated by the operator on this date and was not observed by the harness; the fingerprint is derived from the committed v1 capture."
+        }
+      ]
+    },
+    {
+      "id": "frame1",
+      "title": "Frame #1's system card",
+      "handling": "In service and must not be disturbed. Frame #1 is the development mule every fl.py deploy, collect, parity and array run targets. Removing this card ends the uptime the convergence record is measured over.",
+      "location": {
+        "kind": "frame",
+        "where": "Frame #1 - 10.20.30.53, Home Assistant switch.wall_plug_25",
+        "sinceUtc": "2026-08-16",
+        "statedBy": "operator, 2026-08-23 - stated, not observed by the harness"
+      },
+      "contents": {
+        "summary": "Frame #1's running system: a stock Raspberry Pi OS image flashed around 2026-08-16, with everything above it installed by the FrameLink agent rather than baked into an image.",
+        "imageId": null,
+        "agentVersion": "changes on every `fl.py deploy` - read it from progress.json's artifacts.deployed rather than from here, which cannot track it",
+        "flashedUtc": "approximately 2026-08-16, as stated by the operator",
+        "liveState": "tools/harness/progress.json is written continuously and is authoritative for what this system is doing. This register deliberately does not duplicate it - a second copy of a moving number is a second copy that goes stale."
+      },
+      "fingerprint": {},
+      "fingerprintNote": "NOT CAPTURED - this card cannot be recognised in a reader, and `cards check` says so rather than pretending. Capturing it needs no card handling and does not disturb the frame: read /proc/cmdline over SSH and take the prefix of root=PARTUUID=, which IS the MBR disk signature. That needs FL_PW; do it at the next session that has one, and `fl.py cards identify` can then recognise this card if it ever reaches the reader.",
+      "history": [
+        {
+          "utc": "2026-08-23T16:28:04Z",
+          "from": null,
+          "kind": "frame",
+          "where": "Frame #1 - 10.20.30.53, Home Assistant switch.wall_plug_25",
+          "why": "Register created. Position is as stated by the operator on this date and was not observed by the harness."
+        }
+      ]
+    },
+    {
+      "id": "blank",
+      "title": "The unflashed spare",
+      "handling": "The only one of the three cards that may be written to. It has never been flashed, so nothing on it is worth keeping - but confirm with `fl.py cards check` before any flash, because a wrong answer here overwrites either the v1 system or a running frame.",
+      "location": {
+        "kind": "reader",
+        "where": "workstation pc657, USB card reader, disk 3, drive F:",
+        "sinceUtc": "2026-08-23T16:28:04Z",
+        "statedBy": "harness - observed on this date"
+      },
+      "contents": {
+        "summary": "Nothing. One factory exFAT partition with no label; 128,143,589,376 of 128,144,375,808 bytes free, the 786,432-byte difference being exFAT's own allocation bitmap and upcase table. Never flashed.",
+        "imageId": null,
+        "plannedImageId": "m25-2026-08-16",
+        "agentVersion": null,
+        "note": "The image exists and the flash has never been run. Flashing is framelink-scratch/m25-image/flash-card.ps1 from an elevated PowerShell; it is not part of this harness and `fl.py cards` cannot perform it."
+      },
+      "fingerprint": {
+        "mbrSignature": "b5fc69dd",
+        "capacityBytes": 128177930240,
+        "partitionStyle": "MBR",
+        "partitions": [
+          {
+            "index": 1,
+            "mbrType": 7,
+            "offsetBytes": 16777216,
+            "sizeBytes": 128161153024
+          }
+        ],
+        "volumeSerials": [
+          "2C32CEEB"
+        ],
+        "volumeLabels": [
+          ""
+        ],
+        "filesystems": [
+          "exFAT"
+        ],
+        "marker": null,
+        "capturedUtc": "2026-08-23T16:28:04Z",
+        "capturedBy": "tools/harness/flh/cards.py probe, read-only"
+      },
+      "history": [
+        {
+          "utc": "2026-08-23T16:28:04Z",
+          "from": null,
+          "kind": "reader",
+          "where": "workstation pc657, USB card reader, disk 3, drive F:",
+          "why": "Register created. This is the one position the harness observed directly: the fingerprint beside it was read from the card in the reader."
+        }
+      ]
+    }
+  ],
+  "images": {
+    "m25-2026-08-16": {
+      "summary": "The Fleet-Manager-generated FrameLink image for the M2.5 acceptance test - flash a card, boot it, watch a row appear in the adoption queue.",
+      "path": "C:/Users/jori/framelink-scratch/m25-image/framelink.img",
+      "sizeBytes": 2977955840,
+      "sha256": "8b18bd54aa33b8e64917df0d74e5caad0ae36d4e653e78e57a596348b95882c6",
+      "mbrSignature": "041bba91",
+      "partitions": [
+        {
+          "index": 1,
+          "mbrType": 12,
+          "offsetBytes": 8388608,
+          "sizeBytes": 536870912
+        },
+        {
+          "index": 2,
+          "mbrType": 131,
+          "offsetBytes": 545259520,
+          "sizeBytes": 2432696320
+        }
+      ],
+      "baseRelease": "2026-06-18",
+      "baseFileName": "2026-06-18-raspios-trixie-arm64-lite.img",
+      "baseSha256": "e235fd24fc5f039c08daba7d3abc04aecc7313f979d16d2a3fdad29dd44c33a9",
+      "agentVersion": "0.0.0+0384c01.dirty",
+      "controlUrl": "http://10.20.30.200:5199/",
+      "builtUtc": "2026-08-16T19:16:18Z",
+      "flashedBy": "C:/Users/jori/framelink-scratch/m25-image/flash-card.ps1, from an elevated PowerShell. It names its target by bus type, model, exact capacity and USBSTOR identity - never by drive letter or disk number - and refuses on zero matches or on more than one.",
+      "source": "framelink-scratch/m25-image/build-progress.log and base-image-prepare.log for the provenance; sizeBytes, sha256, mbrSignature and partitions were re-measured from the file itself on 2026-08-23 and agreed with the log.",
+      "warning": "The generator writes files INTO the base image and does not repartition, so this image carries the BASE image's MBR signature. Every card written from any image built on the 2026-06-18 base therefore carries 041bba91, and after a flash mbrSignature can no longer tell two such cards apart. That is what the marker file in `fl.py cards label` is for."
+    }
+  },
+  "identityFields": {
+    "mbrSignature": {
+      "what": "The four-byte MBR disk signature at offset 0x1B8, lower-case hex. This is the prefix of every PARTUUID on the card, so `root=PARTUUID=f870549c-02` in a cmdline.txt names signature f870549c.",
+      "distinguishes": "image",
+      "windows": "(Get-Disk -Number N).Signature   # decimal; '{0:x8}' -f it for hex",
+      "linux": "lsblk -no PTUUID /dev/sdX   # or blkid -s PTUUID -o value /dev/sdX"
+    },
+    "capacityBytes": {
+      "what": "Total capacity as the storage stack reports it. Use Get-Disk, not Win32_DiskDrive: the latter reports TotalSectors*512 rounded down to whole cylinders and came back 3,392,000 bytes smaller on the card measured here, which is enough to make a naive equality check fail against itself.",
+      "distinguishes": "class",
+      "windows": "(Get-Disk -Number N).Size",
+      "linux": "blockdev --getsize64 /dev/sdX"
+    },
+    "partitions": {
+      "what": "One entry per primary partition: MBR type byte, byte offset and byte length. A Raspberry Pi OS card is 0x0c (FAT32 LBA) then 0x83 (Linux); a factory card is one 0x07 exFAT partition.",
+      "distinguishes": "image",
+      "windows": "Get-Partition -DiskNumber N | Select MbrType, Offset, Size",
+      "linux": "sfdisk -d /dev/sdX   # or lsblk -bno NAME,START,SIZE,PARTTYPE /dev/sdX"
+    },
+    "volumeSerials": {
+      "what": "The filesystem volume serial of each mountable partition - exFAT/FAT store a 32-bit serial in the boot record, ext4 a UUID. Set by whoever formatted the filesystem, which for a never-flashed card is the factory.",
+      "distinguishes": "format",
+      "windows": "Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='F:'\" | Select VolumeSerialNumber",
+      "linux": "blkid -s UUID -o value /dev/sdXn   # FAT serials print as 2C32-CEEB"
+    },
+    "volumeLabels": {
+      "what": "The filesystem label of each mountable partition. Empty on the factory card; 'bootfs' and 'rootfs' on a Raspberry Pi OS card.",
+      "distinguishes": "format",
+      "windows": "Get-Volume -DriveLetter F | Select FileSystemLabel",
+      "linux": "blkid -s LABEL -o value /dev/sdXn"
+    },
+    "marker": {
+      "what": "The contents of FRAMELINK-CARD.txt in the card's FAT boot partition, if this harness has written one. The only field that is unique to a card by construction, because the value is chosen rather than observed.",
+      "distinguishes": "card",
+      "windows": "Get-Content F:\\FRAMELINK-CARD.txt",
+      "linux": "cat /boot/firmware/FRAMELINK-CARD.txt   # or from the mounted boot partition"
+    },
+    "sdCid": {
+      "what": "The SD CID register - manufacturer, OEM, product name, revision, serial and production date, burned in at manufacture and genuinely unique per card. NOT AVAILABLE through the USB reader on this workstation: the Realtek bridge reports an empty SerialNumber and passes no CID through. Readable only from a Pi, whose native SD controller exposes it. Recorded here so that a session on a frame knows it is worth capturing.",
+      "distinguishes": "card",
+      "windows": "not available through a USB card reader",
+      "linux": "cat /sys/block/mmcblk0/device/cid   # on the Pi itself, no root needed"
+    }
+  }
+}

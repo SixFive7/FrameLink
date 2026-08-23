@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-23T15:49:58Z",
+  "updatedUtc": "2026-08-23T16:31:04Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -336,6 +336,7 @@
     "resourceSpec": "reference/resource-catalog.md - the enumeration of all 80 device settings extracted from build guides 3-12 and the cross-guide section, one block per resource with its Observe, Act and Verify. This is what M3 migrated, and it is the spec each new resource is written against. The count is the file's own Total row, which is what the resources ledger below reads.",
     "parityTarget": "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, config contents and hashes, mixer values, firmware versions. This is what Mn+3 measures 'at parity' against, and the catalog's cross-check.",
     "parityHarness": "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes over SSH, then tools/FrameLink.Parity judges the result against the parity target, an expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be completed.",
+    "cardRegister": "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is on each one, when it last moved and what must not be disturbed. Read it before touching a card: one of the three is the only surviving v1 system and reference/v1-state-inventory.txt is a capture taken from the machine it ran, so overwriting it destroys the parity target's origin permanently. `fl.py cards check` reads whatever is in the workstation's reader and compares it against what the register claims is in there - exit 2 means they disagree and the register is not to be trusted until someone finds out which of the two is wrong.",
     "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",
     "repoRules": "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
     "harness": "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does and what it refuses to do; flh/config.py holds every host, path and default in one place.",
@@ -1082,6 +1083,36 @@
       "command": "collect",
       "ok": true,
       "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T154814Z-collect"
+    },
+    {
+      "utc": "2026-08-23T16:28:20Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "list -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:28:32Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:28:35Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "identify -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:28:43Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "label -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:31:04Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
     }
   ]
 }

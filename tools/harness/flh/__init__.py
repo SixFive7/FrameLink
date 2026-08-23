@@ -14,6 +14,7 @@ Module map
 :mod:`flh.config`    hosts, paths, the FL_PW / FL_HA_TOKEN contract, relay safety limits
 :mod:`flh.progress`  the resumable progress file (``tools/harness/progress.json``)
 :mod:`flh.build`     drives the emulated linux/arm64 container that produces the AOT binary
+:mod:`flh.cards`     the SD card register: which unmarked card is where, and a check against it
 :mod:`flh.deploy`    paramiko push + systemd unit install, idempotent, verified by the mule
 :mod:`flh.power`     Home Assistant smart-plug control with wrong-entity and wear guards
 :mod:`flh.collect`   the two allowlisted diagnostics: screenshot and journal tail
@@ -32,6 +33,7 @@ artifact whose correctness the whole resume story depends on.
 
 __all__ = [
     "build",
+    "cards",
     "collect",
     "config",
     "deploy",
