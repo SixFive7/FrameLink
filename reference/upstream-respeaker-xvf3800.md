@@ -195,12 +195,26 @@ same.
 corroboration is four independent readings and is recorded in [decision 91](../version2.md): Seeed's
 wiki states the 2-channel/6-channel split for the 2.0.x line; upstream's own 2.0.8 changelog *adds*
 the six-channel `ua-io16-6ch-sqr` profile against the base profile Frame #1 reports as
-`BLD_MSG ua-io16-sqr`; the 2.1.0 filenames spell both departures out; and byte-wise `v2.1.0` and
-`v2.1.0_48k2ch` are the closest pair in the directory at 30.03% differing, against 46.17% between
-`v2.1.0` and `v2.1.0_16k6ch`, which is what two builds sharing a channel topology and differing only
-in sample rate look like. The frame agrees from its own side —
-[the v1 state inventory](v1-state-inventory.txt) records this array's ALSA `Capture Channel Map` with
-`count 2`, enumerated by PipeWire as *Analog Stereo*.
+`BLD_MSG ua-io16-sqr`; the 2.1.0 filenames spell both departures out; and the maintainer names a
+profile outright in [issue 19](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/issues/19)
+— *"This v2.0.9_48k firmware is indeed built with the ua-io48-sqr configuration"* — which is the
+suffix-to-profile mapping stated by the person who builds them rather than inferred from a filename.
+The frame agrees from its own side — [the v1 state inventory](v1-state-inventory.txt) records this
+array's ALSA `Capture Channel Map` with `count 2`, enumerated by PipeWire as *Analog Stereo*.
+
+**A fifth reading used to stand here and has been withdrawn, because it was measured and it does not
+hold.** It read: `v2.1.0` and `v2.1.0_48k2ch` are the closest pair in the directory at 30.03%
+differing against 46.17% for `v2.1.0` vs `v2.1.0_16k6ch`, *"which is what two builds sharing a
+channel topology and differing only in sample rate look like."* **Measured 2026-08-24**, all 45
+pairwise differences across the ten USB images were recomputed, and the metric does not discriminate:
+`v2.0.9` vs `v2.0.9_48k` — the same kind of pair, rate-only, and the one the maintainer confirms is
+`ua-io16-sqr` against `ua-io48-sqr` — differs by **44.10%**, while `v2.0.7` vs `v2.0.9`, two
+*different versions of the same profile*, differs by only **28.31%**. Every pair in the directory
+falls between 28% and 48%, so a rate-only difference can be larger than a version-only one and the
+ordering carries no signal. The conclusion is unchanged and rests on the other four legs; what is
+gone is a number that looked like independent physical evidence and was noise. The related claim
+that a block from `0x62` to `0x33fa5` is identical across the line holds only for
+{`v2.0.9`, `v2.0.10` June, `v2.0.10` July} — every other pair diverges at offset `0x68`.
 
 There is also a second directory, `xmos_firmwares/i2s/`, holding seven more images on a completely
 separate `v1.0.x` version line. Nothing in this project uses them, and a probe pointed at a

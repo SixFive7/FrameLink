@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-23T16:31:04Z",
+  "updatedUtc": "2026-08-23T23:37:31Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -16,30 +16,15 @@
     "Orient before touching anything: version2.md section 5.1 is the milestone ladder, reference/resource-catalog.md is the resource spec M3 is migrating, reference/v1-state-inventory.txt is the parity target, `git log --oneline -40` is the reasoning record. The 'orientation' block in this file says what each one is for.",
     "dotnet run --project tests/FrameLink.Tests  - the only gate between a change and a release (version2.md section 7.2: no red test ships). Not `dotnet test`, which discovers zero tests under xunit.v3 on this SDK. `fl.py test` wraps it with telemetry off and a deadline.",
     "Ask the user for FL_PW and supply it inline (FL_PW='...' python tools/harness/fl.py <cmd>) to unlock deploy / collect / any SSH to the mule. Never store it.",
-    "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
-    "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199. The mule's agent is pointed at http://10.20.30.200:5199 and is retrying forever; its journal is a wall of connection warnings until this is up.",
-    "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
-    "THE FRONTIER (M3): the agent's graph carries 80 resources against the catalog's 79 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 80 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
-    "M2.5 is NOT done and cannot be finished at this desk: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is attached. Ask the user for one."
+    "THE FRONTIER (M3): the agent's graph carries 81 resources against the catalog's 80 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 81 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
+    "M2.5 is NOT done, and what is missing is the flash rather than the hardware: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and nothing generated has ever been written to a card. A reader has been attached since 2026-08-23 and a blank card is on the operator's desk - `fl.py cards list` is the register and says where each card is. Flash the blank card, put it in Frame #2, and watch the adoption queue."
   ],
   "blockers": [
     {
       "id": "fl-pw-unset",
       "what": "FL_PW is not set, so no command can reach the mule.",
       "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-23T15:49:58Z"
-    },
-    {
-      "id": "ha-token-unset",
-      "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
-      "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
-      "since": "2026-08-23T15:49:58Z"
-    },
-    {
-      "id": "operator-password-unset",
-      "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
-      "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
-      "since": "2026-08-23T15:49:58Z"
+      "since": "2026-08-23T23:37:31Z"
     }
   ],
   "milestones": [
@@ -112,7 +97,7 @@
       "stateFrom": "resources",
       "evidence": {
         "how": "derived-from-the-repository",
-        "what": "The agent's graph carries 80 resources against the catalog's 79, 1 net beyond it; 36 of 80 can still be shown to have been reboot-verified on real hardware, which is a floor and not a census. Both numbers are measured on every write, not recorded.",
+        "what": "The agent's graph carries 81 resources against the catalog's 80, 1 net beyond it; 36 of 81 can still be shown to have been reboot-verified on real hardware, which is a floor and not a census. Both numbers are measured on every write, not recorded.",
         "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. The state-diff harness now exists (`fl.py parity`, judged by tools/FrameLink.Parity) and is tested against fixtures, but it has never been run against a frame: no observation has ever been collected and no parity verdict has ever been issued. The other two bars have no harness."
       }
     },
@@ -146,9 +131,9 @@
       "title": "Native AOT linux-arm64 binary built in an emulated container",
       "state": "proven",
       "provenBy": "fl.py build",
-      "provenUtc": "2026-08-16T11:38:14Z",
+      "provenUtc": "2026-08-23T21:16:20Z",
       "provenCommand": "fl.py build",
-      "detail": "0.0.0+0384c01.dirty linux-arm64 10596688 bytes in framelink-build:arm64"
+      "detail": "0.0.0+ebc474a.dirty linux-arm64 10662576 bytes in framelink-build:arm64"
     },
     "test-runner": {
       "title": "Test suite runs and propagates its exit code",
@@ -170,9 +155,9 @@
       "title": "Binary and systemd unit reach the mule idempotently and the service restarts",
       "state": "proven",
       "provenBy": "fl.py deploy",
-      "provenUtc": "2026-08-16T11:38:40Z",
+      "provenUtc": "2026-08-23T21:18:12Z",
       "provenCommand": "fl.py deploy",
-      "detail": "0.0.0+0384c01.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
+      "detail": "0.0.0+ebc474a.dirty verified on 10.20.30.53 by remote sha256sum; unit active/enabled; elevation sudo -S (password on stdin)"
     },
     "power-cycle": {
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
@@ -186,23 +171,23 @@
       "title": "Screenshot and journal tail come back from the mule",
       "state": "proven",
       "provenBy": "fl.py collect",
-      "provenUtc": "2026-08-23T15:48:15Z",
+      "provenUtc": "2026-08-23T22:14:47Z",
       "provenCommand": "fl.py collect",
-      "detail": "screenshot via grim, journal 0 lines"
+      "detail": "screenshot via grim, journal 200 lines"
     },
     "closed-loop": {
       "title": "A code change reaches the mule and is verified with no human help (M0 done)",
       "state": "proven",
       "provenBy": "fl.py build + fl.py deploy",
-      "provenUtc": "2026-08-16T11:38:40Z",
+      "provenUtc": "2026-08-23T21:18:12Z",
       "provenCommand": "fl.py build && fl.py deploy && fl.py collect",
-      "detail": "fl-agent 0.0.0+0384c01.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
+      "detail": "fl-agent 0.0.0+ebc474a.dirty built on the workstation and verified present on 10.20.30.53 by its own sha256sum, with no human step."
     }
   },
   "resources": {
-    "catalogTotal": 79,
+    "catalogTotal": 80,
     "catalogTotalReadFrom": "reference/resource-catalog.md",
-    "implemented": 80,
+    "implemented": 81,
     "implementedReadFrom": "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
     "remaining": 0,
     "beyondCatalog": 1,
@@ -278,13 +263,14 @@
     {
       "id": "a-zero-countdown-reboots-the-frame-before-wireplumber-has-a-sink",
       "question": "With the ordering corrected, audio.wireplumber.playback-volume ran on hardware for the first time - and failed every cycle: `wpctl get-volume @DEFAULT_AUDIO_SINK@` answered an empty string and `wpctl set-volume` was refused with **\"Translate ID error: '-1' is not a valid ID (returned by default-nodes-api)\"**. Is @DEFAULT_AUDIO_SINK@ simply the wrong way to address the sink on this frame?",
-      "measured": "**No, and the first answer to this was wrong.** The refusal is real but it is a symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had settled far enough to have a default sink, so the token had nothing to translate to. The fast cycle then fed itself: the login session never finished starting, which put session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift too, each of which acted and rebooted in turn. 55 boots. Setting `repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its own default - was the whole fix. One further repair cycle and the frame reached **81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel - and held it: eight consecutive converged censuses, telemetry sequence 1281 through 1288, one every five minutes across 35 minutes, online throughout, with **no reboot between any of them**. That last part is the claim worth having, because everything this frame did wrong tonight it did by rebooting. Re-measured 90 minutes later, immediately before the deploy of 958ac9c and fe61154, from two records that do not share a source: the Fleet Manager's device-event history holds **no event of any kind after the `boot` at 2026-08-16T09:09:23Z** - no boot, no drift, and the 50 it does return are the 25 boot/25 drift pairs of the storm that preceded it - and census sequence 1296 at 10:25:05Z still read converged, 81 in sync, 0 drifted, 0 blocked, 0 reboots expected. **The frame's own process table is the stronger witness**, because it is not the server's word: chromium pid 1246 had been up continuously since 09:09:28Z and was still 5,306 s old at 10:37:54Z, so the 88 quiet minutes are attested by a process a reboot would have killed.",
-      "answer": "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` now answers `Volume: 1.00`, PCM,0 reads `60 [100%] [0.00dB] [on]` and holds across a boot for the first time in this project's history, and PCM,1 reads the same.",
+      "measured": "**No, and the first answer to this was wrong.** The refusal is real but it is a symptom of *when* the question was asked, not of *how*. `repair.countdownSeconds` was 0, so each repair rebooted the frame ~21 s after boot - before WirePlumber had settled far enough to have a default sink, so the token had nothing to translate to. The fast cycle then fed itself: the login session never finished starting, which put session.bash-profile-exec-labwc and camera.pipewire-node.framelink-cam into drift too, each of which acted and rebooted in turn. 55 boots. Setting `repair.countdownSeconds` to 60 - the value ReconcileOptions already carries as its own default - **was called the whole fix here, and it was not; see `corrected` below.** What it did do is cut 55 boots to 6, and one further repair cycle reached **81 of 81 in sync, converged, 0 drifted, 0 blocked**, with photographs on the panel - and held it: eight consecutive converged censuses, telemetry sequence 1281 through 1288, one every five minutes across 35 minutes, online throughout, with **no reboot between any of them**. That last part is the claim worth having, because everything this frame did wrong tonight it did by rebooting. Re-measured 90 minutes later, immediately before the deploy of 958ac9c and fe61154, from two records that do not share a source: the Fleet Manager's device-event history holds **no event of any kind after the `boot` at 2026-08-16T09:09:23Z** - no boot, no drift, and the 50 it does return are the 25 boot/25 drift pairs of the storm that preceded it - and census sequence 1296 at 10:25:05Z still read converged, 81 in sync, 0 drifted, 0 blocked, 0 reboots expected. **The frame's own process table is the stronger witness**, because it is not the server's word: chromium pid 1246 had been up continuously since 09:09:28Z and was still 5,306 s old at 10:37:54Z, so the 88 quiet minutes are attested by a process a reboot would have killed.",
+      "corrected": "**\"Was the whole fix\" is falsified, and the mechanism says why it had to be.** `repair.countdownSeconds` delays the *reboot*, not the *check*. It inserts a pause before the frame goes down and changes nothing about how early the next boot asks its questions - version2.md decision 78 says this outright of the same setting: it \"pauses before a reboot rather than changing anything after one\". So the resources were still asked at the same point in the boot, still got the same empty answers, and still counted them as drift. All that moved was the length of a cycle. Re-measured 2026-08-23 from Frame #1's own user journal, which still holds the boots the system journal has since rotated away: the cascades of 08-18 (`journalctl --list-boots` idx -11..-7) and 08-19 (idx -6..-1) run at **81-84 s per boot** - 03:03:27, 03:04:49, 03:06:10, 03:07:32, 03:08:56 on 08-19 - against decision 64's measured **21.0 s** cycle at countdown 0. That is the setting's whole effect: 55 boots became **6**, and 6 is still a cascade. It recurred on four consecutive nights after this finding was written, and on both cascade nights `audio.wireplumber.playback-volume` reached `attempts=3`, equal to the budget - the last rung before it gives up, with no margin.\n**The real cause was that a resource asked too early reports drift**, and the fix is `MediaGraphGate`: a WirePlumber that is running but has published no audio device and no default sink is `ObservationOutcome.Unevaluable`, so no attempt is spent, nothing is acted on, and nothing reboots. `audio.wireplumber.playback-volume` and `camera.pipewire-node.framelink-cam` are behind it. The window it covers is measured on the same journal: `wireplumber.service` started 03:03:27.642 and its device monitors were still loading at 03:03:31.049, 3.4 s later, while the session bus that opens `UserSessionGate` had existed since 03:03:27.571.\n**What this finding still establishes, unchanged:** @DEFAULT_AUDIO_SINK@ is the right way to address the sink; the refusal was about *when* the question was asked; and `default-routes` appearing after the first successful `wpctl set-volume` confirms decision 80. Only the sentence naming the countdown as the fix is withdrawn. **The gate has not run on hardware** - it is carried by the suite alone.",
+      "answer": "@DEFAULT_AUDIO_SINK@ is correct and works. `wpctl get-volume @DEFAULT_AUDIO_SINK@` now answers `Volume: 1.00`, PCM,0 reads `60 [100%] [0.00dB] [on]` and holds across a boot for the first time in this project's history, and PCM,1 reads the same. **The countdown was not what made that true and could not have been** - see `corrected`.",
       "rulesOut": "Renaming the sink, addressing it by id or node.name, a config fragment, and api.alsa.soft-mixer - none of them is needed. It also rules out reading a repair failure on a fast-cycling frame as a fact about the repair: three of the four resources that looked broken here were only ever being asked too early.",
       "consistentWith": "The finding above, and it closes the loop on it. Before the repair succeeded, ~/.local/state/wireplumber/ held only `stream-properties` - no stored route volume, so a default was being applied. **After the first successful `wpctl set-volume`, `default-routes` appeared in that directory.** That is decision 80's stated reasoning confirmed on hardware: setting the volume *through* WirePlumber is what makes it persist a stored one, so the value now survives a boot by WirePlumber's own mechanism rather than by the agent winning a race against it.",
       "whenUtc": "2026-08-16",
       "where": "mule framelink@10.20.30.53",
-      "recordedIn": "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim in its `change` field while it was failing. **The photograph itself is tools/harness/runs/20260816T091021Z-collect/screenshot.png**, a grim capture off the live Wayland surface at 09:10:21Z - 58 seconds after that last boot - and it is the first photograph this project has put on a panel under agent control. That is a measurement rather than a flourish: every earlier screenshot under runs/ is the console stage or the repair screen, and the largest of them (20260816T061834Z-collect, 194,701 bytes) is the composed-headline defect itself - 'Everything is working / This frame is adopted, up to date and showing your photos' printed directly above 'unit.chromium-kiosk.running-matches-content failed after 3 tries' and a Try again button, on a panel showing no photographs at all. runs/ is gitignored, so these paths are local-only evidence"
+      "recordedIn": "fleet setting repair.countdownSeconds 0 -> 60 (revision 9); the reconcile journal's ledger entry for audio.wireplumber.playback-volume carried the refusal text verbatim in its `change` field while it was failing. **The photograph itself is tools/harness/runs/20260816T091021Z-collect/screenshot.png**, a grim capture off the live Wayland surface at 09:10:21Z - 58 seconds after that last boot - and it is the first photograph this project has put on a panel under agent control. That is a measurement rather than a flourish: every earlier screenshot under runs/ is the console stage or the repair screen, and the largest of them (20260816T061834Z-collect, 194,701 bytes) is the composed-headline defect itself - 'Everything is working / This frame is adopted, up to date and showing your photos' printed directly above 'unit.chromium-kiosk.running-matches-content failed after 3 tries' and a Try again button, on a panel showing no photographs at all. runs/ is gitignored, so these paths are local-only evidence. **The correction above is recorded in src/FrameLink.Agent/Resources/MediaGraphGate.cs**, with the two tests that fail without it - AgentAudioTests.A_wireplumber_with_no_default_sink_yet_is_not_a_frame_that_is_too_quiet and AgentCameraTests.A_wireplumber_that_has_not_built_its_graph_yet_is_not_a_missing_camera - and its evidence is Frame #1's user journal, which is on the frame and not in this repository"
     },
     {
       "id": "the-fleet-list-told-the-truth-about-a-frame-for-the-first-time",
@@ -391,41 +377,45 @@
   "artifacts": {
     "agentBinary": {
       "path": "build/out/fl-agent",
-      "version": "0.0.0+0384c01.dirty",
+      "version": "0.0.0+ebc474a.dirty",
       "runtimeIdentifier": "linux-arm64",
-      "sha256": "b7f6f5a181ea521329bc6404723a510656f669e9decc2415f712d1d381a74b36",
-      "sizeBytes": 10596688,
+      "sha256": "fce86f82a34eff5d5a5c6b668be59cb76c2d2fd0c3aa2ffab7ec45f280862dfe",
+      "sizeBytes": 10662576,
       "image": "framelink-build:arm64",
-      "builtUtc": "2026-08-16T11:38:14Z"
+      "builtUtc": "2026-08-23T21:16:20Z"
     },
     "deployed": {
       "host": "10.20.30.53",
       "binary": "/usr/local/bin/fl-agent",
-      "version": "0.0.0+0384c01.dirty",
-      "sha256": "b7f6f5a181ea521329bc6404723a510656f669e9decc2415f712d1d381a74b36",
+      "version": "0.0.0+ebc474a.dirty",
+      "sha256": "fce86f82a34eff5d5a5c6b668be59cb76c2d2fd0c3aa2ffab7ec45f280862dfe",
       "isActive": "active",
       "isEnabled": "enabled",
       "sudoMode": "sudo -S (password on stdin)",
-      "deployedUtc": "2026-08-16T11:38:40Z"
+      "deployedUtc": "2026-08-23T21:18:12Z"
     },
     "lastCollection": {
-      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260823T154814Z-collect",
-      "capturedUtc": "2026-08-23T15:48:15Z",
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260823T221446Z-collect",
+      "capturedUtc": "2026-08-23T22:14:47Z",
       "screenshot": {
         "method": "grim",
-        "bytes": 870811,
+        "bytes": 892637,
         "waylandDisplay": "wayland-0",
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T154814Z-collect\\screenshot.png"
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T221446Z-collect\\screenshot.png"
       },
-      "journal": null
+      "journal": {
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T221446Z-collect\\journal-fl-agent.service.txt",
+        "unit": "fl-agent.service",
+        "lines": 200
+      }
     },
     "lastParityRun": null
   },
   "counters": {
-    "builds": 17,
-    "deploys": 12,
+    "builds": 19,
+    "deploys": 14,
     "testRuns": 13,
-    "collections": 29,
+    "collections": 31,
     "relayOperations": 3
   },
   "log": [
@@ -1113,6 +1103,366 @@
       "command": "cards",
       "ok": true,
       "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:31:55Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:33:21Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "list -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T16:34:14Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "list -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:36:19Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "check -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:36:20Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "identify -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:36:52Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "The register already has 'blank' in the reader."
+    },
+    {
+      "utc": "2026-08-23T17:36:52Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "record -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:36:54Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "check -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:37:25Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "record -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:37:27Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:41:23Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:48:57Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "gate -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:49:05Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "identify -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:49:15Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "gate -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:49:17Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "gate -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T17:49:27Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "gate -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:49:29Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "gate -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:49:31Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "gate -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:49:33Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "gate -> exit 2"
+    },
+    {
+      "utc": "2026-08-23T17:49:33Z",
+      "command": "cards",
+      "ok": false,
+      "summary": "--require names bogusfield, which is not an identity field."
+    },
+    {
+      "utc": "2026-08-23T18:00:29Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T18:02:11Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "gate -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T18:03:56Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "gate -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T18:21:19Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "gate -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T19:56:58Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "image -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T19:56:58Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "list -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T20:58:42Z",
+      "command": "build",
+      "ok": false,
+      "summary": "build.sh exited 255"
+    },
+    {
+      "utc": "2026-08-23T21:03:38Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "check -> exit 0"
+    },
+    {
+      "utc": "2026-08-23T21:05:17Z",
+      "command": "build",
+      "ok": false,
+      "summary": "build.sh exited 5"
+    },
+    {
+      "utc": "2026-08-23T21:07:38Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+ebc474a.dirty 26911736B e1a2ab5acd9a"
+    },
+    {
+      "utc": "2026-08-23T21:16:20Z",
+      "command": "build",
+      "ok": true,
+      "summary": "0.0.0+ebc474a.dirty 10662576B fce86f82a34e"
+    },
+    {
+      "utc": "2026-08-23T21:17:03Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+ebc474a.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-23T21:18:12Z",
+      "command": "deploy",
+      "ok": true,
+      "summary": "0.0.0+ebc474a.dirty -> 10.20.30.53 (changed)"
+    },
+    {
+      "utc": "2026-08-23T21:22:05Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T212205Z-collect"
+    },
+    {
+      "utc": "2026-08-23T22:14:47Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T221446Z-collect"
+    },
+    {
+      "utc": "2026-08-23T22:59:34Z",
+      "command": "array",
+      "ok": false,
+      "summary": "preflight: preflight only; nothing was run"
+    },
+    {
+      "utc": "2026-08-23T23:00:41Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent inactive, 1 array(s) attached"
+    },
+    {
+      "utc": "2026-08-23T23:00:51Z",
+      "command": "array",
+      "ok": true,
+      "summary": "staged 3 pinned images into $HOME/fl-flash/xmos_firmwares"
+    },
+    {
+      "utc": "2026-08-23T23:01:06Z",
+      "command": "array",
+      "ok": false,
+      "summary": "preflight: preflight only; nothing was run"
+    },
+    {
+      "utc": "2026-08-23T23:01:08Z",
+      "command": "array",
+      "ok": false,
+      "summary": "preflight: preflight only; nothing was run"
+    },
+    {
+      "utc": "2026-08-23T23:02:23Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:tool-missing: refused before anything started: tool.dfu-util"
+    },
+    {
+      "utc": "2026-08-23T23:02:25Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:no-array: refused before anything started: array.exactly-one"
+    },
+    {
+      "utc": "2026-08-23T23:02:27Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:two-arrays: refused before anything started: array.exactly-one"
+    },
+    {
+      "utc": "2026-08-23T23:02:28Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:image-corrupt: refused before anything started: image.target"
+    },
+    {
+      "utc": "2026-08-23T23:02:50Z",
+      "command": "array",
+      "ok": false,
+      "summary": "write the simulation stub failed on the mule (exit 127): bash: line 1: xxd: command not found"
+    },
+    {
+      "utc": "2026-08-23T23:03:27Z",
+      "command": "array",
+      "ok": true,
+      "summary": "simulate:success: simulated writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin in 2 s; the array reported 2 0 10 before and 2 0 10 after, within 0 s"
+    },
+    {
+      "utc": "2026-08-23T23:05:27Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:no-reenumerate: simulated writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin in 2 s; the array reported 2 0 10 before and 2 0 10 after, within 91 s"
+    },
+    {
+      "utc": "2026-08-23T23:06:16Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:success: refused before anything started: flash.marker"
+    },
+    {
+      "utc": "2026-08-23T23:06:46Z",
+      "command": "array",
+      "ok": true,
+      "summary": "cleared marker: 2026-08-23T23:05:29.1951280+00:00 SIMULATED (erase-out-of-range) - writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin (sha256 60fee5662534) to the microphone unit"
+    },
+    {
+      "utc": "2026-08-23T23:07:02Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:erase-out-of-range: simulated writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin in 2 s; the array reported 2 0 10 before and 2 0 10 after, within 91 s"
+    },
+    {
+      "utc": "2026-08-23T23:07:12Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:erase-out-of-range: simulated writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin in 2 s; the array reported 2 0 10 before and 2 0 10 after, within 6 s"
+    },
+    {
+      "utc": "2026-08-23T23:07:23Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:dfu-error: simulated writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin in 2 s; the array reported 2 0 10 before and 2 0 10 after, within 6 s"
+    },
+    {
+      "utc": "2026-08-23T23:07:46Z",
+      "command": "array",
+      "ok": true,
+      "summary": "simulate:interrupted: the write was interrupted and did not return, so the marker is still on the card and every later flash - agent or bench - is now refused until a person has looked at the unit"
+    },
+    {
+      "utc": "2026-08-23T23:08:18Z",
+      "command": "array",
+      "ok": false,
+      "summary": "simulate:success: refused before anything started: flash.marker"
+    },
+    {
+      "utc": "2026-08-23T23:08:18Z",
+      "command": "array",
+      "ok": true,
+      "summary": "cleared marker: 2026-08-23T23:07:41.5171910+00:00 SIMULATED (interrupted) - writing respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin (sha256 60fee5662534) to the microphone unit"
+    },
+    {
+      "utc": "2026-08-23T23:08:37Z",
+      "command": "array",
+      "ok": true,
+      "summary": "dfu-util -l, safe mode: False"
+    },
+    {
+      "utc": "2026-08-23T23:09:01Z",
+      "command": "array",
+      "ok": true,
+      "summary": "removed /home/framelink/fl-flash"
+    },
+    {
+      "utc": "2026-08-23T23:10:04Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent active, [INFO] This frame now reports itself as InSync(linux-arm64, endpoints resolved by boot-file)."
+    },
+    {
+      "utc": "2026-08-23T23:13:20Z",
+      "command": "array",
+      "ok": false,
+      "summary": "preflight: preflight only; nothing was run"
+    },
+    {
+      "utc": "2026-08-23T23:36:51Z",
+      "command": "cards",
+      "ok": true,
+      "summary": "list -> exit 0"
     }
   ]
 }

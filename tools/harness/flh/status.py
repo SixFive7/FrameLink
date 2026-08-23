@@ -70,6 +70,32 @@ _STATE_SOURCE = {
 }
 
 
+def _control_answers() -> bool:
+    """Ask the dev Fleet Manager whether it is serving, right now.
+
+    This used to be asserted rather than asked. The next-action list said flatly that the
+    Fleet Manager "is down" and told every session to start one by hand - true when it was
+    written, because starting it by hand was the only way to have one. The dev stack then
+    moved into a Docker container that comes up on its own and stays up, and the assertion
+    went on being emitted, wrongly, by the one command a resuming session is told to run
+    first. A derived field with no way to check itself does not go quiet when the world
+    moves; it keeps answering from the last question it understood. So: probe it.
+
+    Anything that answers HTTP counts, including a 401 or a 404 - the question is whether
+    something is serving on that address, not whether this process may talk to it.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(CONTROL_URL + "/", timeout=5) as response:  # noqa: S310
+            return response.status < 500
+    except urllib.error.HTTPError:
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def probe() -> dict[str, Any]:
     """Re-check everything the harness depends on, right now."""
     facts: dict[str, Any] = {}
@@ -121,7 +147,11 @@ def probe() -> dict[str, Any]:
         "answers on tcp/22" if ssh.is_alive(MULE_HOST) else "SILENT on tcp/22"
     )
     facts["home assistant"] = f"{HA_URL} entity {HA_ENTITY}"
-    facts["fleet manager"] = f"{CONTROL_URL} (dev; the mule's agent is pointed here)"
+    facts["fleet manager"] = f"{CONTROL_URL} " + (
+        "answering (dev; the mule's agent is pointed here)"
+        if _control_answers()
+        else "SILENT (dev; the mule's agent is pointed here and is retrying forever)"
+    )
 
     facts["agent project"] = (
         "present" if (REPO_ROOT / AGENT_PROJECT).is_dir() else f"{AGENT_PROJECT} DOES NOT EXIST YET"
@@ -255,12 +285,15 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
             "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator "
             "credential. Nothing can be adopted or watched reconciling without it."
         )
-    actions.append(
-        "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then "
-        f"dotnet run --project src/FrameLink.Control -- --urls {CONTROL_URL.replace('10.20.30.200', '0.0.0.0')}. "
-        f"The mule's agent is pointed at {CONTROL_URL} and is retrying forever; its journal is a "
-        "wall of connection warnings until this is up."
-    )
+    if "answering" not in str(facts.get("fleet manager", "")):
+        actions.append(
+            "Start the dev Fleet Manager, which is not answering: docker compose -f "
+            "deploy/fleet-manager/framelink.dev.yml up -d, with the credentials env file "
+            "supplied as that stack expects. It used to be started by hand with dotnet run, "
+            "and that still works for a one-off, but the container is what the frame has been "
+            f"talking to. The mule's agent is pointed at {CONTROL_URL} and retries forever; "
+            "its journal is a wall of connection warnings until this is up."
+        )
     if not os.environ.get("FL_HA_TOKEN"):
         actions.append(
             f"Ask the user for FL_HA_TOKEN (a long-lived token from {HA_URL}) to unlock "
@@ -310,10 +343,12 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
     # shipped with it: every audio.mixer.* Observe sits behind the session gate, and
     # audio.wireplumber.playback-volume owns the value at the layer that sets it.
     actions.append(
-        "M2.5 is NOT done and cannot be finished at this desk: the generator is built and "
-        "measured against the real base image, but its acceptance test is to flash a card and "
-        "watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is "
-        "attached. Ask the user for one."
+        "M2.5 is NOT done, and what is missing is the flash rather than the hardware: the "
+        "generator is built and measured against the real base image, but its acceptance test "
+        "is to flash a card and watch a row appear, and nothing generated has ever been written "
+        "to a card. A reader has been attached since 2026-08-23 and a blank card is on the "
+        "operator's desk - `fl.py cards list` is the register and says where each card is. "
+        "Flash the blank card, put it in Frame #2, and watch the adoption queue."
     )
     return actions
 
@@ -336,8 +371,10 @@ def show(*, json_output: bool = False) -> dict[str, Any]:
 
     current = data.get("currentMilestone")
     # "First row not done", not "what is being worked on". They differ right now and the
-    # difference is informative: M2.5 cannot be finished at a desk with no SD card reader, so
-    # M3 runs ahead of it. The evidence line under each row is where that is explained.
+    # difference is informative: M3 ran ahead of M2.5 because M2.5's acceptance test needs a
+    # card flashed and booted and nobody has done it, not because anything blocks it. It was
+    # blocked once - there was no SD card reader - and that reason outlived the condition by a
+    # week in three places. The evidence line under each row is where the current one lives.
     ui.step(f"Milestones (version2.md section 5.1) - first row not done is {current}")
     for milestone in data.get("milestones", []):
         glyph = _MILESTONE_GLYPH.get(milestone.get("state", ""), "[?]")
