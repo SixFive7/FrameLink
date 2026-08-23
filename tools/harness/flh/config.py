@@ -23,6 +23,7 @@ Optional, with defaults that match the current bench setup:
 
     FL_HOST         mule address                (default 10.20.30.53)
     FL_USER         mule username               (default framelink)
+    FL_CONTROL_URL  Fleet Manager base URL      (default http://10.20.30.200:5199)
     FL_HA_URL       Home Assistant base URL     (default http://10.20.30.250:8123)
     FL_HA_ENTITY    smart plug entity id        (default switch.wall_plug_25)
 """
@@ -91,6 +92,19 @@ UNIT_NAME = "fl-agent.service"
 # Writing it directly with `sudo tee` would put the heredoc on sudo's stdin, which is
 # exactly where the password has to go on an image with no NOPASSWD rule (ssh.py).
 REMOTE_UNIT_STAGE = "/tmp/fl-agent.service.staged"
+
+# --- fleet manager ---------------------------------------------------------
+# Where the update feed lives (version2.md section 2.8). The harness reads one route on it,
+# GET /agent/release/<rid>, which is unauthenticated by design and is the same route the
+# agent polls hourly - so what the harness sees is what the fleet converges on.
+#
+# The default is the LAN address rather than loopback, and that is not a stylistic choice.
+# A frame writes its Fleet Manager's address into endpoints.json when it is installed and
+# never rediscovers it, so http://10.20.30.200:5199 is literally the string frame #1 dials.
+# Reading the same address as the frame means a green feed check is evidence about the
+# fleet; reading 127.0.0.1 would answer a question nobody asked, and would go on answering
+# it happily on a workstation whose LAN address had changed underneath the fleet.
+CONTROL_URL = os.environ.get("FL_CONTROL_URL", "http://10.20.30.200:5199").rstrip("/")
 
 # --- home assistant --------------------------------------------------------
 # 8123 is Home Assistant's port, verified against the live instance 2026-08-15: GET /api/

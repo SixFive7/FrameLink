@@ -5,6 +5,19 @@ This is the half of the closed loop that turns "a binary exists on the workstati
 the mule's own ``sha256sum`` must equal the hash the build recorded, so *reaching* the
 mule is proven by the target rather than assumed by the sender.
 
+The served build decides, not this command
+-----------------------------------------
+Installing a binary on a frame does not make the frame run it. Section 2.8 has the agent
+**match** the version its Fleet Manager serves - upgrade or downgrade, at the next handshake
+and hourly after that - so a deploy whose binary is not also the served one is erased, and
+used to be erased silently. Measured 2026-08-23: six seconds, with the frame's own journal
+reading ``Converging from 0.0.0+ebc474a.dirty to the served version 0.0.0+0384c01.dirty``.
+This module therefore reads ``GET /agent/release/<rid>`` off the Fleet Manager *before* it
+touches the mule and refuses a deploy the feed will undo, naming which side is stale;
+``--allow-feed-drift`` proceeds anyway, loudly. When the feed cannot be read at all the
+deploy continues and says so - an unchecked feed is reported as unchecked rather than as
+agreement (:mod:`flh.feed`).
+
 Idempotency (CLAUDE.md section 0.1)
 -----------------------------------
 A second run with the same binary and the same unit does nothing at all - no upload, no
@@ -36,9 +49,10 @@ from __future__ import annotations
 from typing import Any
 
 from . import build as build_mod
-from . import progress, ssh, ui
+from . import feed, progress, ssh, ui
 from .config import (
     BINARY_NAME,
+    CONTROL_URL,
     REMOTE_BIN,
     REMOTE_STAGE,
     REMOTE_UNIT,
@@ -61,7 +75,80 @@ def unit_text() -> str:
     return UNIT_TEMPLATE.read_text(encoding="utf-8").replace("\r\n", "\n")
 
 
-def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20) -> dict[str, Any]:
+def check_feed(release: dict[str, Any], local_sha: str, *, allow_drift: bool) -> dict[str, Any]:
+    """Refuse a deploy the Fleet Manager is going to undo, and say which side is stale.
+
+    Returns the feed's own record for the outcome dict: what was served, whether it agreed,
+    and - when it could not be read at all - that fact rather than an assumption.
+    """
+    record: dict[str, Any] = {"feedUrl": feed.release_url(release["runtimeIdentifier"])}
+    try:
+        served = feed.served_release(release["runtimeIdentifier"])
+    except HarnessError as exc:
+        # Not fatal. The mule deploy is a real thing that happened whether or not a server
+        # answered, and a Fleet Manager that is down is converging nobody. But it is said
+        # out loud and recorded as unchecked, because the alternative is a report that reads
+        # like a verified deploy over a question nobody asked.
+        record.update({"feedChecked": False, "servedVersion": None, "feedNote": str(exc)})
+        ui.warn(f"the update feed could not be read: {exc}")
+        ui.warn("deploying anyway - nothing here knows what this frame will converge on.")
+        return record
+
+    agrees, why = feed.compare(release, local_sha, served)
+    record.update(
+        {
+            "feedChecked": True,
+            "servedVersion": served.get("version"),
+            "servedSha256": served.get("sha256"),
+            "feedAgrees": agrees,
+            "feedNote": why,
+        }
+    )
+
+    if agrees:
+        ui.ok(f"update feed agrees - {why}")
+        return record
+
+    if allow_drift:
+        ui.warn(f"update feed disagrees - {why}")
+        ui.warn(
+            f"continuing because --allow-feed-drift was given. This frame converges back onto "
+            f"{served.get('version')} at its next handshake, and hourly after that."
+        )
+        return record
+
+    raise HarnessError(
+        "The Fleet Manager serves a different agent than this deploy would install: "
+        f"{why.rstrip('.')}.",
+        exit_code=10,
+        remedy=(
+            f"Feed read at {CONTROL_URL} - override with FL_CONTROL_URL.\n"
+            "\n"
+            "version2.md section 2.8 makes the served build authoritative: the agent MATCHES the "
+            "served version, upgrade or downgrade, at its next handshake and hourly thereafter. "
+            "Installing this binary now would be undone - measured at six seconds on 2026-08-23, "
+            "with the agent's own journal narrating the downgrade.\n"
+            "\n"
+            "The agent is baked into the Fleet Manager image from build/out (see\n"
+            "deploy/fleet-manager/Dockerfile), so the image tag and the served agent are one\n"
+            "fact rather than two things to keep in step. Serve this build, then deploy:\n"
+            "\n"
+            "    bash deploy/fleet-manager/build-image.sh\n"
+            "    docker compose -p framelink -f deploy/fleet-manager/framelink.dev.yml up -d\n"
+            "\n"
+            "Or pass --allow-feed-drift to install anyway, which is worth doing only for a "
+            "binary you intend to watch before the fleet converges it away."
+        ),
+    )
+
+
+def deploy(
+    *,
+    force: bool = False,
+    restart: bool = True,
+    journal_lines: int = 20,
+    allow_feed_drift: bool = False,
+) -> dict[str, Any]:
     """Install the built binary and unit on the mule and report the resulting state."""
     # Checked before anything else so the first thing a credential-less session hears is
     # the credential problem, not a downstream consequence of it.
@@ -82,6 +169,11 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
             exit_code=6,
         )
 
+    # Before the mule is touched at all. A refusal that arrives after the binary is installed
+    # has already done the thing it was refusing, and an operator reading it has to work out
+    # what state the frame was left in.
+    feed_record = check_feed(release, local_sha, allow_drift=allow_feed_drift)
+
     wanted_unit = unit_text()
     outcome: dict[str, Any] = {
         "host": None,
@@ -92,6 +184,7 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         "unitChanged": False,
         "restarted": False,
         "sudoMode": None,
+        **feed_record,
     }
 
     with ssh.connect() as mule:
@@ -198,6 +291,10 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
                 "sha256": outcome["verifiedSha256"],
                 "is-active": outcome["isActive"],
                 "is-enabled": outcome["isEnabled"],
+                # Reported beside the installed version rather than instead of it, because
+                # these two being equal is the whole difference between a deploy that holds
+                # and one the fleet erases on its next tick.
+                "served": outcome.get("servedVersion") or "(feed not read)",
             }
         )
 
@@ -220,6 +317,13 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
             "isEnabled": outcome["isEnabled"],
             "sudoMode": outcome["sudoMode"],
             "deployedUtc": progress.utcnow(),
+            # A session with no memory reads this file to find out where things stand
+            # (section 5.5). "What is installed" without "what is served" is half an answer,
+            # and it is the half that stops being true first.
+            "feedUrl": outcome.get("feedUrl"),
+            "feedChecked": outcome.get("feedChecked", False),
+            "servedVersion": outcome.get("servedVersion"),
+            "feedAgrees": outcome.get("feedAgrees"),
         },
     )
     progress.bump("deploys")
@@ -228,7 +332,12 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
         by="fl.py deploy",
         detail=(
             f"{outcome['version']} verified on {outcome['host']} by remote sha256sum; "
-            f"unit {outcome['isActive']}/{outcome['isEnabled']}; elevation {outcome['sudoMode']}"
+            f"unit {outcome['isActive']}/{outcome['isEnabled']}; elevation {outcome['sudoMode']}; "
+            + (
+                f"feed serves {outcome['servedVersion']}"
+                if outcome.get("feedChecked")
+                else "feed not read"
+            )
         ),
     )
 
@@ -239,7 +348,13 @@ def deploy(*, force: bool = False, restart: bool = True, journal_lines: int = 20
             by="fl.py build + fl.py deploy",
             detail=(
                 f"{BINARY_NAME} {outcome['version']} built on the workstation and verified "
-                f"present on {outcome['host']} by its own sha256sum, with no human step."
+                f"present on {outcome['host']} by its own sha256sum, with no human step; "
+                + (
+                    "the Fleet Manager serves the same build, so it stays."
+                    if outcome.get("feedAgrees")
+                    else f"served build is {outcome.get('servedVersion') or 'unread'}, so this "
+                    "is not what the frame will be running once it next converges."
+                )
             ),
         )
     return outcome

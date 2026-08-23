@@ -59,6 +59,8 @@ Exit codes
     7  a relay safety guard refused the operation
     8  the relay did not confirm the state change
     9  wrong-entity abort: the relay switched but the frame stayed alive
+   10  the Fleet Manager serves a different agent than the one being deployed, so the
+       deploy would be converged away (section 2.8) - `deploy --allow-feed-drift` overrides
     n  for `test`, the test suite's own exit code is propagated unchanged
 """
 
@@ -101,6 +103,7 @@ def _parser() -> argparse.ArgumentParser:
             "Optional overrides:\n"
             "  FL_HOST       mule address             (default 10.20.30.53)\n"
             "  FL_USER       mule username            (default framelink)\n"
+            "  FL_CONTROL_URL Fleet Manager base URL  (default http://10.20.30.200:5199)\n"
             "  FL_HA_URL     Home Assistant base URL  (default http://10.20.30.250:8123)\n"
             f"  FL_HA_ENTITY  plug entity id           (default {HA_ENTITY})\n"
             "\n"
@@ -174,6 +177,11 @@ def _parser() -> argparse.ArgumentParser:
             "but can be renamed over), installs fl-agent.service if its content differs, enables "
             "and restarts the service, then proves the deploy by comparing the mule's own "
             "sha256sum against what was built.\n\n"
+            "Before any of that it reads the Fleet Manager's update feed and REFUSES a deploy "
+            "the feed is going to undo. Section 2.8 has the agent match the served version - "
+            "upgrade or downgrade - at its next handshake and hourly after, so installing a "
+            "binary the Fleet Manager does not serve is erased, measured at six seconds. The "
+            "refusal names which side is stale; --allow-feed-drift proceeds anyway.\n\n"
             "Idempotent: a second run with the same binary and unit uploads nothing, reloads "
             "nothing and restarts nothing. Requires FL_PW."
         ),
@@ -182,6 +190,11 @@ def _parser() -> argparse.ArgumentParser:
     p_deploy.add_argument("--force", action="store_true", help="re-upload, rewrite and restart even if unchanged")
     p_deploy.add_argument("--no-restart", action="store_true", help="install but do not restart the service")
     p_deploy.add_argument("--journal-lines", type=int, default=20, help="journal lines to show afterwards (default 20)")
+    p_deploy.add_argument(
+        "--allow-feed-drift",
+        action="store_true",
+        help="install even though the Fleet Manager serves a different agent, which it will converge away",
+    )
 
     # --- collect ------------------------------------------------------------
     p_collect = subparsers.add_parser(
@@ -517,7 +530,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "deploy":
             with progress.activity("deploy"):
                 outcome = deploy_mod.deploy(
-                    force=args.force, restart=not args.no_restart, journal_lines=args.journal_lines
+                    force=args.force,
+                    restart=not args.no_restart,
+                    journal_lines=args.journal_lines,
+                    allow_feed_drift=args.allow_feed_drift,
                 )
             changed = outcome["binaryChanged"] or outcome["unitChanged"]
             progress.log(

@@ -13,6 +13,14 @@ Native AOT toolchain, baked once and cached. ``--stock-image`` instead runs
 section 5.2 - where build.sh apt-installs that toolchain at runtime on every build. Both produce
 the same artifact; the first is minutes faster from the second build onwards.
 
+The emulator is checked here and cannot be checked anywhere else
+---------------------------------------------------------------
+An arm64 container on an amd64 workstation runs only while binfmt_misc holds a QEMU
+registration, and that registration is not part of Docker Desktop's saved state. When it is
+missing every command in the build path dies with ``exec format error`` - including
+``build.sh`` itself, which is why the check belongs on this side of the mount: a script the
+container cannot execute cannot report that the container could not execute it.
+
 Why the harness calls docker.exe directly rather than through a shell
 ---------------------------------------------------------------------
 Git Bash mangles container-absolute paths (``/src/build/build.sh`` becomes a Windows path)
@@ -84,6 +92,101 @@ def _run(argv: list[str], *, timeout: float, what: str) -> subprocess.CompletedP
         raise HarnessError(f"{what} timed out after {timeout:.0f}s", exit_code=6) from exc
 
 
+#: Everything an operator needs when the arm64 interpreter is gone, including the trap.
+EMULATION_REMEDY = (
+    "Register the QEMU interpreters inside the Docker VM:\n"
+    "    docker run --privileged --rm tonistiigi/binfmt --install arm64\n"
+    "\n"
+    "It is idempotent and survives an ordinary Docker Desktop restart, but not a rebuild of\n"
+    "the VM's disk - which is how it vanished on 2026-08-23, leaving `emulators: null` and\n"
+    "every arm64 container exiting with `exec format error`.\n"
+    "\n"
+    "Do not run it, or anything else that mounts /proc/sys/fs/binfmt_misc into a privileged\n"
+    "container, WHILE a build is running. Re-registering the handlers underneath a live\n"
+    "emulated container takes its interpreter away mid-compile, and the failure that follows\n"
+    "looks like a compiler fault rather than an infrastructure one."
+)
+
+
+def _looks_like_missing_emulator(*outputs: str) -> bool:
+    """Whether a docker failure is really "this machine cannot run that architecture".
+
+    Matched on ``exec format error`` and nothing else. The kernel emits it when it is handed
+    an ELF it has no interpreter for, which on this build path has exactly one cause. Wider
+    patterns were tried and dropped: containerd's "no such file or directory: unknown" is
+    what a genuinely missing entrypoint looks like too, and a confident remedy about
+    binfmt_misc for a typo'd path would send the reader to reinstall an emulator that was
+    never the problem.
+    """
+    return "exec format error" in " ".join(o or "" for o in outputs).lower()
+
+
+def _local_image_platform(image: str) -> str | None:
+    """``<os>/<arch>`` of an image already in the layer store, or None if it is not there."""
+    probe = _run(
+        [_docker(), "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image],
+        timeout=60,
+        what="image inspect",
+    )
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
+def require_platform_emulation(platform: str = BUILD_PLATFORM) -> str:
+    """Fail with a diagnosis when this machine cannot execute ``platform`` containers.
+
+    The agent build is a linux/arm64 container on an amd64 workstation, which works only
+    while binfmt_misc holds a QEMU registration for aarch64. That registration is not part of
+    Docker Desktop's own state and can disappear without anything saying so; when it does,
+    every command in the build path fails with ``exec format error`` - a message about file
+    formats, thirty lines into an emulated apt-get, for a problem that is neither about the
+    file nor about the build.
+
+    Returns a sentence describing what was actually checked, which the caller prints. It is
+    phrased that way on purpose: this probe can be *unable* to run, and reporting "verified"
+    when nothing was verified would be the same class of mistake it exists to prevent.
+
+    Deliberately NOT implemented by reading /proc/sys/fs/binfmt_misc from a container. That
+    directory has to be mounted to be read, and mounting it is precisely the operation that
+    wiped the registration mid-build; a diagnostic that can break the thing it diagnoses is
+    not worth the extra precision.
+    """
+    server_arch = _run(
+        [_docker(), "version", "--format", "{{.Server.Os}}/{{.Server.Arch}}"],
+        timeout=30,
+        what="docker version",
+    ).stdout.strip()
+    if server_arch and server_arch == platform:
+        return f"{platform} is the Docker host's own architecture - no emulation needed"
+
+    probe_image = next(
+        (image for image in (BUILD_IMAGE, STOCK_SDK_IMAGE) if _local_image_platform(image) == platform),
+        None,
+    )
+    if probe_image is None:
+        # Nothing local to test with, and pulling one just to ask the question would trade a
+        # fast honest "unknown" for a slow network round trip. The translation on the real
+        # failure below still catches it; this just cannot pre-empt it.
+        return f"{platform} emulation not verified - no {platform} image in the local store to probe with"
+
+    probe = _run(
+        [_docker(), "run", "--rm", "--platform", platform, probe_image, "/bin/true"],
+        timeout=120,
+        what="emulation probe",
+    )
+    if probe.returncode == 0:
+        return f"{platform} emulation verified by running {probe_image}"
+    if _looks_like_missing_emulator(probe.stdout, probe.stderr):
+        raise HarnessError(
+            f"This Docker host cannot execute {platform} containers - the QEMU emulator is not "
+            f"registered. Running {probe_image} failed with an exec format error.",
+            exit_code=4,
+            remedy=EMULATION_REMEDY,
+        )
+    # Some other docker failure. Not this function's business to decide what, and refusing
+    # the build over it would make an unrelated hiccup look like a missing emulator.
+    return f"{platform} emulation probe was inconclusive: {(probe.stderr or probe.stdout).strip()[:200]}"
+
+
 def require_docker_running() -> str:
     """Fail early and clearly if the Docker daemon is not up."""
     docker = _docker()
@@ -153,6 +256,13 @@ def ensure_image(*, rebuild: bool = False) -> None:
     )
     if result.returncode != 0:
         ui.block("docker build stderr", result.stderr[-4000:])
+        if _looks_like_missing_emulator(result.stdout, result.stderr):
+            raise HarnessError(
+                f"Building {BUILD_IMAGE} for {BUILD_PLATFORM} failed with an exec format error: "
+                "this Docker host has no QEMU emulator registered for that architecture.",
+                exit_code=4,
+                remedy=EMULATION_REMEDY,
+            )
         raise HarnessError(f"docker build failed (exit {result.returncode})", exit_code=6)
     ui.ok(f"{BUILD_IMAGE} ready")
 
@@ -174,6 +284,10 @@ def build(
     docker = _docker()
     server = require_docker_running()
     ui.info(f"docker server {server}")
+
+    # Asked before the project check, the image build and the three-minute emulated publish,
+    # because a missing emulator makes every one of them fail for a reason none of them names.
+    ui.info(require_platform_emulation())
 
     project_dir = REPO_ROOT / project
     if not project_dir.is_dir():
@@ -235,6 +349,23 @@ def build(
     if result.returncode != 0:
         if result.stderr:
             ui.block("build.sh stderr", result.stderr[-4000:])
+        if _looks_like_missing_emulator(result.stdout, result.stderr):
+            # build.sh never ran: the container could not start its own shell. Diagnosed here
+            # rather than inside the script, because a script that cannot be executed cannot
+            # check anything - which is why this belongs on the workstation side and the strip
+            # check in section 6 of build.sh does not.
+            progress.mark(
+                "build-path",
+                "blocked",
+                detail=f"no {BUILD_PLATFORM} emulator registered on this Docker host",
+            )
+            raise HarnessError(
+                f"The {BUILD_PLATFORM} build container could not execute: exec format error. "
+                "This Docker host has no QEMU emulator registered for that architecture, so "
+                "build.sh never started.",
+                exit_code=4,
+                remedy=EMULATION_REMEDY,
+            )
         detail = f"build.sh exited {result.returncode}"
         # A compiler error in the project under construction is not a fault in the build
         # path - the container ran, restored and invoked the compiler, which is the whole
@@ -261,6 +392,12 @@ def build(
                 5: "dotnet publish failed. The compiler output above is the diagnosis, and it is "
                    "a fault in the project being built, not in the build path.",
                 6: "Publish produced no ELF. PublishAot may have silently fallen back.",
+                7: "The ELF does not report the version the feed would advertise. build.sh's "
+                   "output names which string it found; the usual cause is "
+                   "IncludeSourceRevisionInInformationalVersion having been dropped.",
+                8: "The published ELF still carries its symbol and debug sections, so the "
+                   "strip did not run. build.sh lists every .dbg under build/out with its "
+                   "timestamp - delete the stale one and build again.",
             }.get(result.returncode),
         )
 

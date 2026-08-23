@@ -39,6 +39,7 @@
 #   5  dotnet publish failed
 #   6  publish succeeded but produced no ELF where one was expected
 #   7  the ELF does not report the version agent-release.json advertises
+#   8  the ELF still carries debug symbols, so the strip step did not run
 
 set -euo pipefail
 
@@ -191,7 +192,63 @@ done
 say "version verified in ELF: ${FL_VERSION}"
 
 # ---------------------------------------------------------------------------
-# 6. Emit the update-feed metadata. Shape is frozen by
+# 6. The binary that ships must actually be stripped.
+#
+#    -p:StripSymbols=true in section 3 is a *request*, and MSBuild's incremental logic
+#    can decide it has already been honoured when it has not. Measured 2026-08-23: an
+#    interrupted build left a week-old fl-agent.dbg in the artifacts tree, the next
+#    build treated the strip as up to date, and this script published a 26,911,736-byte
+#    ELF carrying 2.3 MB of .symtab, 10.0 MB of .strtab and 3.0 MB of .debug_* sections
+#    where a normal one is 10,662,576. Nothing failed and nothing warned - the run's
+#    output was line-for-line what a good build produces - while every frame in the
+#    fleet would have pulled two and a half times the bytes over section 2.8's hourly
+#    feed, from an artifact carrying the full symbol table of a private codebase.
+#
+#    Section names rather than a byte-count ceiling, deliberately. A size threshold is a
+#    guess that needs re-tuning every time the agent legitimately grows, and when it
+#    trips it cannot say what is wrong. Sections are exact: a stripped Native AOT ELF
+#    carries .shstrtab and a .gnu_debuglink naming the separated .dbg, and carries no
+#    .symtab and no .debug_* at all. That is a property of the strip having run, and it
+#    stays true whatever size the agent reaches.
+#
+#    .gnu_debuglink is reported rather than required. Its absence would mean the
+#    separation step added no link, which is worth seeing in the transcript; but it is
+#    not what proves the symbols are gone, so refusing a build over it would be refusing
+#    over the wrong fact.
+# ---------------------------------------------------------------------------
+command -v readelf >/dev/null 2>&1 || die "readelf is missing, so the strip check cannot run. It is in binutils, which the AOT publish needs too." 8
+
+BIN_SECTIONS="$(readelf -S -W "${OUT}/${FL_BINARY_NAME}")"
+CARRIED=""
+for section in .symtab .strtab .debug_info .debug_line .debug_str .debug_abbrev; do
+    if printf '%s' "${BIN_SECTIONS}" | grep -qE "[[:space:]]${section}[[:space:]]"; then
+        CARRIED="${CARRIED} ${section}"
+    fi
+done
+
+if [ -n "${CARRIED}" ]; then
+    {
+        echo "[build] ERROR: the published binary still carries debug symbols:${CARRIED}"
+        echo "[build]   ${FL_BINARY_NAME} is $(stat -c %s "${OUT}/${FL_BINARY_NAME}") bytes."
+        echo "[build] StripSymbols was requested and MSBuild decided it was already satisfied."
+        echo "[build] The known cause is a stale .dbg from an interrupted build, which makes the"
+        echo "[build] strip target look up to date. Every .dbg under /out, oldest first:"
+        find "${OUT}" -name '*.dbg' -printf '[build]   %TY-%Tm-%Td %TH:%TM %10s  %p\n' 2>/dev/null | sort
+        echo "[build] Delete the stale ones and build again. fl.py build re-uses ${ARTIFACTS_DIR}"
+        echo "[build] as an incremental cache on purpose, so a stale artifact survives until"
+        echo "[build] something removes it."
+    } >&2
+    exit 8
+fi
+
+if printf '%s' "${BIN_SECTIONS}" | grep -qE '[[:space:]]\.gnu_debuglink[[:space:]]'; then
+    say "symbols stripped: no .symtab, no .debug_*, .gnu_debuglink present"
+else
+    say "symbols stripped: no .symtab, no .debug_*, but no .gnu_debuglink either"
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Emit the update-feed metadata. Shape is frozen by
 #    src/FrameLink.Protocol/AgentRelease.cs; naming is camelCase, pinned in
 #    ProtocolJson.cs. SizeBytes exists so a truncated download fails before
 #    hashing, which is why both are emitted here rather than computed later.
