@@ -1559,7 +1559,6 @@ public static class AudioCatalog
             "Setting this frame's speaker to the level it was tested at.",
             [
                 SndUsbAudioIndexResource.ResourceName,
-                XvfFirmwareResource.ResourceName,
                 Pcm0SwitchResourceName,
 
                 // The measured edge, and the one the catalog had backwards. This control has a
@@ -1584,7 +1583,6 @@ public static class AudioCatalog
             "Turning up the second volume stage of this frame's speaker, the one that is not the obvious control.",
             [
                 SndUsbAudioIndexResource.ResourceName,
-                XvfFirmwareResource.ResourceName,
                 Pcm1SwitchResourceName,
             ]);
 
@@ -1607,11 +1605,11 @@ public static class AudioCatalog
             // resources below it.
             new XvfHostToolResource(tool, context.Files, installer),
 
-            // Position 54 — brick-capable, hand-recoverable, and deliberately ahead of the values
-            // it validates (open question 2).
-            new XvfFirmwareResource(tool, context.Files, context.Processes, context.Values, context.Clock),
-
-            // Positions 55–61.
+            // Positions 54–61. `firmware.xvf3800.version` used to sit at the head of this block,
+            // and decision 90 took it out of the graph entirely: a DFU flash is the only Act that
+            // could ever converge it, this product will never perform one unattended, and a
+            // resource with no Act that can succeed halts the pass instead of reporting. What it
+            // observed is now reported beside the loop by `ArrayFirmwareReporter`.
             new XvfAmplifierResource(tool, context.Files),
             pcm0Switch,
             pcm1Switch,

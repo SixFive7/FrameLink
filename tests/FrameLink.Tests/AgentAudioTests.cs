@@ -1,6 +1,8 @@
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
+using FrameLink.Agent.Telemetry;
+using FrameLink.Protocol;
 
 namespace FrameLink.Tests;
 
@@ -535,146 +537,210 @@ public sealed class AgentAudioTests
     }
 
     [Fact]
-    public async Task The_array_firmware_is_in_sync_at_the_version_the_v1_reference_records()
+    public void The_bcd_device_descriptor_decodes_to_the_version_the_control_tool_reports()
     {
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 10");
+        // Measured on two arrays 2026-08-20, which is the whole of the evidence for this decode:
+        // a factory board answering VERSION 2 0 6 reads 0206, and an upgraded one answering
+        // VERSION 2 0 10 reads 020a. `0a` is not a valid BCD digit pair, so the field is hex per
+        // nibble rather than binary-coded decimal, and the spelling produced here is xvf_host's own
+        // so the two readings compare with ordinal equality and nothing else.
+        Assert.Equal("2 0 6", XvfArrayUsb.Version("0206"));
+        Assert.Equal("2 0 10", XvfArrayUsb.Version("020a"));
+        Assert.Equal("2 0 10", XvfArrayUsb.Version("020A"));
 
-        var observation = await Observe(Audio(files, processes), XvfFirmwareResource.ResourceName);
+        // The consequence of one nibble each: 2.1.0 is predicted to read 0210 and has never been
+        // seen on hardware, and a minor or patch of 16 or more cannot be represented at all.
+        Assert.Equal("2 1 0", XvfArrayUsb.Version("0210"));
 
-        Assert.True(observation.InSync);
-        Assert.Equal("2 0 10", observation.Observed);
+        Assert.Null(XvfArrayUsb.Version(null));
+        Assert.Null(XvfArrayUsb.Version(string.Empty));
+        Assert.Null(XvfArrayUsb.Version("20a"));
+        Assert.Null(XvfArrayUsb.Version("02zz"));
     }
 
     [Fact]
-    public async Task Shipping_firmware_is_drift_because_the_volume_path_differs()
+    public void The_array_is_found_by_its_vendor_and_product_ids_and_nothing_else()
     {
+        using var files = new TemporaryFiles();
+
+        // A root hub and a keyboard on the same bus, with the array between them.
+        Usb(files, "1-0", "1d6b", "0003", "0615", "0000:00:14.0");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "0206", "101991441260500030");
+        Usb(files, "1-2", "046d", "c52b", "1203", string.Empty);
+
+        var array = Assert.Single(XvfArrayUsb.Attached(files.Files));
+
+        Assert.Equal("1-1", array.Path);
+        Assert.Equal("0206", array.BcdDevice);
+        Assert.Equal("101991441260500030", array.Serial);
+    }
+
+    [Fact]
+    public async Task The_reporter_names_both_readings_and_says_that_they_agree()
+    {
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+        Tool(files, processes, "VERSION 2 0 6");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "0206", "101991441260500030");
+
+        var reading = await Reporter(files, processes).ReadAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(reading);
+        Assert.Contains("bcdDevice 0206 = firmware 2 0 6", reading, StringComparison.Ordinal);
+        Assert.Contains("101991441260500030", reading, StringComparison.Ordinal);
+        Assert.Contains("VERSION answers 2 0 6, agreeing with the USB descriptor", reading, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_descriptor_answers_on_a_frame_that_has_no_control_tool()
+    {
+        // The point of the second reading: it needs no xvf_host, no root and no control transfer,
+        // so a frame whose tool is missing still says which firmware its array is running.
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "020a", "101991441260500069");
+
+        var reading = await Reporter(files, processes).ReadAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(reading);
+        Assert.Contains("bcdDevice 020a = firmware 2 0 10", reading, StringComparison.Ordinal);
+        Assert.Contains("is not installed", reading, StringComparison.Ordinal);
+        Assert.Empty(processes.Commands);
+    }
+
+    [Fact]
+    public async Task Two_readings_that_disagree_are_reported_as_disagreeing_rather_than_reconciled()
+    {
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+        Tool(files, processes, "VERSION 2 0 10");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "0206", "101991441260500030");
+
+        var reading = await Reporter(files, processes).ReadAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(reading);
+        Assert.Contains("which disagrees with the USB descriptor", reading, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_frame_with_no_array_says_so_and_a_machine_with_no_usb_says_nothing()
+    {
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+
+        // No /sys/bus/usb/devices at all — a workstation or a container. Nothing to say.
+        Assert.Null(await Reporter(files, processes).ReadAsync(TestContext.Current.CancellationToken));
+
+        // The directory exists and holds no array. That is a real observation, and it is the one an
+        // operator staring at a frame with no microphone unit needs.
+        Usb(files, "1-0", "1d6b", "0003", "0615", "0000:00:14.0");
+
+        var reading = await Reporter(files, processes).ReadAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotNull(reading);
+        Assert.Contains("No microphone unit is attached", reading, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_reporter_publishes_once_and_stays_quiet_until_the_array_changes()
+    {
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+        Tool(files, processes, "VERSION 2 0 6");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "0206", "101991441260500030");
+
+        var telemetry = new NullReconcileTelemetry();
+        var reporter = Reporter(files, processes, telemetry);
+
+        Assert.True(await reporter.TickAsync(TestContext.Current.CancellationToken));
+        Assert.False(await reporter.TickAsync(TestContext.Current.CancellationToken));
+
+        var published = Assert.Single(telemetry.Events);
+        Assert.Equal(DeviceEventKinds.ArrayFirmware, published.Kind);
+        Assert.Null(published.Resource);
+        Assert.Contains("2 0 6", published.Summary, StringComparison.Ordinal);
+
+        // Swap the board for the other one and the frame says so on the next tick.
+        Tool(files, processes, "VERSION 2 0 10");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "020a", "101991441260500069");
+
+        Assert.True(await reporter.TickAsync(TestContext.Current.CancellationToken));
+        Assert.Equal(2, telemetry.Events.Count);
+        Assert.Contains("2 0 10", telemetry.Events[1].Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_reporter_can_only_ever_read_the_array()
+    {
+        // The guarantee that replaces the old two-key flash interlock, and it is stronger than the
+        // interlock was: there is no authorisation to withhold because there is no code path that
+        // writes. VERSION is the only command this component can send.
+        using var files = new TemporaryFiles();
+        var processes = new RecordingProcessRunner();
+        Tool(files, processes, "VERSION 2 0 6");
+        Usb(files, "1-1", XvfArrayUsb.VendorId, XvfArrayUsb.ProductId, "0206", "101991441260500030");
+
+        await Reporter(files, processes).TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(
+            processes.Commands,
+            command => Assert.EndsWith(" " + XvfHost.VersionCommand, command, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Nothing_in_the_agent_can_start_a_dfu_flash()
+    {
+        // Decision 90's structural half, and it is a stronger guarantee than the two-key interlock
+        // it replaces. `dfu-util` used to be named in one private method behind an authorisation
+        // check; the assertion was that an unauthorised Act started no process. Now there is no
+        // authorisation to withhold, because there is no caller: every surviving mention of the
+        // name is either the apt package that puts the program on the frame for a person to run, or
+        // prose explaining that nothing runs it.
+        var agent = Path.Combine(GuiFreshnessTests.RepositoryRoot(), "src", "FrameLink.Agent");
+        var mentioning = new List<string>();
+
+        foreach (var file in Directory.EnumerateFiles(agent, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(file);
+
+            // The argument vector the flash used to build. Nothing may reconstruct it.
+            Assert.DoesNotContain("\"-a\", \"1\", \"-D\"", text, StringComparison.Ordinal);
+
+            foreach (var line in text.Split('\n'))
+            {
+                if (line.Contains("dfu-util", StringComparison.Ordinal)
+                    && !line.TrimStart().StartsWith("///", StringComparison.Ordinal)
+                    && !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
+                {
+                    mentioning.Add(Path.GetFileName(file) + ": " + line.Trim());
+                }
+            }
+        }
+
+        Assert.Equal(["PackageResources.cs: Package = \"dfu-util\","], mentioning);
+    }
+
+    [Fact]
+    public async Task A_frame_on_the_shipping_firmware_reaches_sync_instead_of_stopping_the_pass()
+    {
+        // The reason this change exists. A 2.0.6 array used to drift `firmware.xvf3800.version`,
+        // spend three attempts and three reboots, escalate, and stop the whole pass by decision 68
+        // — leaving the screen, the camera and the speaker Blocked behind a version number nobody
+        // was ever going to let the frame write.
         using var files = new TemporaryFiles();
         var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
         Tool(files, processes, "VERSION 2 0 6");
-
-        var observation = await Observe(Audio(files, processes), XvfFirmwareResource.ResourceName);
-
-        Assert.False(observation.InSync);
-        Assert.Equal("expected '2 0 10', observed '2 0 6'", observation.Delta);
-    }
-
-    [Fact]
-    public async Task An_unauthorised_frame_starts_no_process_at_all_when_the_firmware_is_wrong()
-    {
-        // The guarantee the operator asked for: a DFU flash can brick the mic array, and ordinary
-        // convergence must never perform one as a side effect. The assertion is not that dfu-util
-        // was not *successful* — it is that nothing ran.
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 6", withFirmwareImage: true);
 
         var block = Audio(files, processes);
-        processes.Commands.Clear();
 
-        var action = await Find(block, XvfFirmwareResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(processes.Commands);
-        Assert.DoesNotContain("dfu-util -R", processes.Commands);
-        Assert.Contains("refused to flash", action.Change, StringComparison.Ordinal);
-        Assert.Contains(XvfFirmwareResource.AuthorisationKey, action.Change, StringComparison.Ordinal);
-
-        // The refusal still names the exact command, because §2.5 carries the change text into the
-        // operator's notification — the escalation *is* the request for permission.
-        Assert.Contains("dfu-util -R -e -a 1 -D", action.Change, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task An_unadopted_frame_cannot_be_authorised_because_it_has_no_settings_at_all()
-    {
-        // §3.3 gives a pending device nothing — no configuration, no token, no commands — so the
-        // authorisation defaulting to absent means a frame nobody has adopted cannot flash even
-        // in principle.
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 6", withFirmwareImage: true);
-
-        var block = Audio(files, processes, FleetValues.None);
-        processes.Commands.Clear();
-
-        await Find(block, XvfFirmwareResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(processes.Commands);
-    }
-
-    [Fact]
-    public async Task An_authorisation_for_a_different_version_does_not_authorise_this_flash()
-    {
-        // The setting carries the version rather than a boolean, so a switch left on cannot
-        // silently authorise a different flash the day the pin moves.
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 6", withFirmwareImage: true);
-
-        foreach (var claimed in new[] { "true", "yes", "2.0.7", "1" })
-        {
-            var values = FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [XvfFirmwareResource.AuthorisationKey] = claimed,
-            });
-
-            var block = Audio(files, processes, values);
-            processes.Commands.Clear();
-
-            await Find(block, XvfFirmwareResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
-
-            Assert.Empty(processes.Commands);
-        }
-    }
-
-    [Fact]
-    public async Task An_authorised_flash_runs_dfu_util_with_guide_fours_own_arguments()
-    {
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 6", withFirmwareImage: true);
-
-        var values = FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [XvfFirmwareResource.AuthorisationKey] = XvfFirmwareResource.PinnedVersion,
-        });
-
-        var clock = new ManualClock();
-        var block = Audio(files, processes, values, clock: clock);
-        processes.Commands.Clear();
-
-        var action = await Find(block, XvfFirmwareResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
-
-        var image = XvfHost.FirmwarePath(XvfHost.AgentDirectory, XvfFirmwareResource.PinnedVersion);
-
-        Assert.Contains($"dfu-util -R -e -a 1 -D {image}", processes.Commands);
-        Assert.Contains("2.0.10", action.Gloss, StringComparison.Ordinal);
-
-        // The settle delay is part of the Act, not of Verify: the array re-enumerates on USB and
-        // a version read issued into that window answers for a device that is not there yet.
-        Assert.Contains(XvfFirmwareResource.Settle, clock.Delays);
-    }
-
-    [Fact]
-    public async Task An_authorised_flash_with_no_image_on_the_frame_still_refuses()
-    {
-        using var files = new TemporaryFiles();
-        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
-        Tool(files, processes, "VERSION 2 0 6");
-
-        var values = FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [XvfFirmwareResource.AuthorisationKey] = XvfFirmwareResource.PinnedVersion,
-        });
-
-        var block = Audio(files, processes, values);
-        processes.Commands.Clear();
-
-        var action = await Find(block, XvfFirmwareResource.ResourceName).ActAsync(TestContext.Current.CancellationToken);
-
-        Assert.Empty(processes.Commands);
-        Assert.Contains("is not on this frame", action.Change, StringComparison.Ordinal);
+        Assert.DoesNotContain(block, resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal));
+        Assert.True((await Observe(block, XvfAmplifierResource.ResourceName)).InSync);
     }
 
     [Fact]
@@ -1138,8 +1204,10 @@ public sealed class AgentAudioTests
         Assert.Equal(6, reference.Channels.Count);
         Assert.Equal(AudioCatalog.DefaultLevel, AlsaMixer.Ceiling.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
-        // The array's firmware, and the modprobe line, from the same capture.
-        Assert.Equal(XvfFirmwareResource.PinnedReply, XvfHost.Version(Section(inventory, "XVF3800_FIRMWARE")));
+        // The array's firmware, and the modprobe line, from the same capture. The version is read
+        // rather than compared against a pin: decision 90 removed the pin, so what the v1 frame
+        // happened to be running is now parity evidence and not a desired value.
+        Assert.Equal("2 0 10", XvfHost.Version(Section(inventory, "XVF3800_FIRMWARE")));
         Assert.Contains(SndUsbAudioIndexResource.OptionsLine, Section(inventory, "MODPROBE_D"), StringComparison.Ordinal);
         Assert.Contains("0 [" + AlsaCards.ArrayId, Section(inventory, "ALSA_CARDS"), StringComparison.Ordinal);
     }
@@ -1150,21 +1218,21 @@ public sealed class AgentAudioTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(AgentResourceGraphTests.Context(files));
 
-        Assert.Equal(
-            [XvfHostToolResource.ResourceName, "pkg.dfu-util"],
-            graph.Find(XvfFirmwareResource.ResourceName)!.DependsOn);
+        // Decision 90: the firmware resource is gone, and with it every edge that ran through it.
+        Assert.Null(graph.Find("firmware.xvf3800.version"));
 
         Assert.Equal(
-            [XvfFirmwareResource.ResourceName],
+            [XvfHostToolResource.ResourceName],
             graph.Find(XvfAmplifierResource.ResourceName)!.DependsOn);
 
-        // The two playback volumes each depend on the card pin, the firmware whose DAC path they
-        // are validated against, and their own switch — a muted stage is reported as muted rather
-        // than as a level that will not take effect.
+        // The two playback volumes each depend on the card pin and their own switch — a muted stage
+        // is reported as muted rather than as a level that will not take effect. The firmware edge
+        // they used to carry claimed the DAC path differs between 2.0.6 and 2.0.10, which nothing
+        // in this repository ever measured, and which cost a frame its whole pass when the claim
+        // could not be satisfied.
         Assert.Equal(
             [
                 SndUsbAudioIndexResource.ResourceName,
-                XvfFirmwareResource.ResourceName,
                 AudioCatalog.Pcm1SwitchResourceName,
             ],
             graph.Find(AudioCatalog.Pcm1VolumeResourceName)!.DependsOn);
@@ -1190,7 +1258,7 @@ public sealed class AgentAudioTests
             AudioCatalog.Pcm0VolumeResourceName,
             AudioCatalog.Pcm1VolumeResourceName,
             AudioCatalog.HeadsetCaptureResourceName,
-            XvfFirmwareResource.ResourceName,
+            XvfHostToolResource.ResourceName,
             SndUsbAudioIndexResource.ResourceName,
             HdmiAudioOffResource.ResourceName,
         })
@@ -1497,15 +1565,47 @@ public sealed class AgentAudioTests
         RecordingProcessRunner processes,
         string version,
         string gpo = "GPO_READ_VALUES 0 0 0 1 0",
-        bool executable = true,
-        bool withFirmwareImage = false)
+        bool executable = true)
     {
         SeedTool(files, processes, XvfHost.AgentDirectory, version, gpo, executable);
+    }
 
-        if (withFirmwareImage)
+    /// <summary>Puts one USB device on the bus, as sysfs publishes it.</summary>
+    private static void Usb(
+        TemporaryFiles files,
+        string path,
+        string vendor,
+        string product,
+        string bcd,
+        string serial)
+    {
+        var directory = XvfArrayUsb.DevicesPath + "/" + path;
+
+        // Trailing newline, because sysfs attributes carry one and the reader has to trim it.
+        files.Seed(directory + "/idVendor", vendor + Environment.NewLine);
+        files.Seed(directory + "/idProduct", product + Environment.NewLine);
+        files.Seed(directory + "/bcdDevice", bcd + Environment.NewLine);
+        files.Seed(directory + "/serial", serial + Environment.NewLine);
+    }
+
+    /// <summary>The observe-only reporter that replaced the firmware resource.</summary>
+    private static ArrayFirmwareReporter Reporter(
+        TemporaryFiles files,
+        RecordingProcessRunner processes,
+        NullReconcileTelemetry? telemetry = null)
+    {
+        var session = new FakeUserSession();
+
+        return new ArrayFirmwareReporter(
+            new XvfHost(files.Files, processes, session),
+            files.Files,
+            telemetry ?? new NullReconcileTelemetry(),
+            files.Store,
+            new ManualClock(),
+            new RecordingLog())
         {
-            files.Seed(XvfHost.FirmwarePath(XvfHost.AgentDirectory, XvfFirmwareResource.PinnedVersion), "not a real image");
-        }
+            DeviceId = "TEST-DEVICE",
+        };
     }
 
     private static void SeedTool(

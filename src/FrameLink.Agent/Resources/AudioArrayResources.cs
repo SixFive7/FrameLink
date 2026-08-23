@@ -402,6 +402,138 @@ public sealed class HdmiAudioOffResource : IResource
     }
 }
 
+/// <summary>One XVF3800 array, as the USB bus itself describes it.</summary>
+/// <param name="Path">The bus path the kernel gave it, e.g. <c>1-1</c>.</param>
+/// <param name="BcdDevice">The raw <c>bcdDevice</c> descriptor field, e.g. <c>020a</c>.</param>
+/// <param name="Serial">The unit serial the array reports, or an empty string.</param>
+public readonly record struct XvfArrayDevice(string Path, string BcdDevice, string Serial);
+
+/// <summary>
+/// The array's USB device descriptor, read straight out of sysfs.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>A second, independent reading of the firmware version that costs nothing.</b> The XVF3800
+/// encodes its firmware version in <c>bcdDevice</c>, so <c>/sys/bus/usb/devices/1-1/bcdDevice</c>
+/// answers the same question <c>xvf_host VERSION</c> does — without the control tool, without
+/// root, without a USB control transfer, and without any process at all. That matters in three
+/// separate cases: a frame whose tool is missing, a frame whose array chain is blocked behind
+/// something else, and any check taken while the loop is busy.
+/// </para>
+/// <para>
+/// <b>The encoding is measured, not assumed, and it is nibble-hex rather than BCD.</b> Two arrays
+/// on the bench 2026-08-20: firmware <c>2 0 6</c> reads <c>0206</c>, firmware <c>2 0 10</c> reads
+/// <c>020a</c>. <c>0x0a</c> is not a valid BCD digit pair, so the field is read as major in the
+/// first byte and minor and patch in the two nibbles of the second. The consequence of that shape
+/// is worth stating rather than discovering: a minor or patch of 16 or more cannot be represented
+/// at all, so a future <c>2.0.16</c> would be indistinguishable here from something else. Only the
+/// two readings above are measured; <c>2.1.0</c> is predicted to read <c>0210</c> and has not been
+/// seen.
+/// </para>
+/// <para>
+/// <b>Nothing here can write.</b> The whole surface is <see cref="ISystemFiles.ListDirectories"/>
+/// and <see cref="ISystemFiles.ReadText"/> under <c>/sys</c>, which is why this is the reading an
+/// observe-only reporter is built on.
+/// </para>
+/// </remarks>
+public static class XvfArrayUsb
+{
+    /// <summary>Where the kernel publishes one directory per USB device.</summary>
+    public const string DevicesPath = "/sys/bus/usb/devices";
+
+    /// <summary>Seeed's vendor id, as sysfs spells it.</summary>
+    public const string VendorId = "2886";
+
+    /// <summary>The XVF3800 4-Mic Array's product id, as sysfs spells it.</summary>
+    public const string ProductId = "001a";
+
+    /// <summary>Every attached array, in bus order.</summary>
+    /// <remarks>
+    /// <para>
+    /// An empty list has two meanings and the caller has to keep them apart: no array is plugged
+    /// in, or this machine has no USB sysfs at all. <see cref="Enumerable"/> answers the second.
+    /// </para>
+    /// <para>
+    /// <b>Directories and files are both walked, and that is not belt-and-braces.</b> Every entry
+    /// under <c>/sys/bus/usb/devices</c> is a <i>symlink</i> into <c>/sys/devices</c>, and whether
+    /// a symlink-to-a-directory comes back from <see cref="ISystemFiles.ListDirectories"/> or from
+    /// <see cref="ISystemFiles.ListFiles"/> depends on whether the enumerator resolves
+    /// <c>DT_LNK</c> — which is a runtime detail, on a filesystem no test on a workstation can
+    /// reproduce. The union of the two is exhaustive by construction, because the file predicate is
+    /// the negation of the directory one, so this reads the bus correctly either way. Getting it
+    /// wrong in the other direction would fail <i>silently</i>: every frame would report that it has
+    /// no microphone unit, which is a sentence an operator would believe.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<XvfArrayDevice> Attached(ISystemFiles files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+
+        var arrays = new List<XvfArrayDevice>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var entries = new List<string>(files.ListDirectories(DevicesPath));
+        entries.AddRange(files.ListFiles(DevicesPath));
+        entries.Sort(StringComparer.Ordinal);
+
+        foreach (var entry in entries)
+        {
+            if (!seen.Add(entry)
+                || !Matches(files, entry, "idVendor", VendorId)
+                || !Matches(files, entry, "idProduct", ProductId))
+            {
+                continue;
+            }
+
+            arrays.Add(new XvfArrayDevice(
+                entry[(entry.LastIndexOf('/') + 1)..],
+                Field(files, entry, "bcdDevice") ?? string.Empty,
+                Field(files, entry, "serial") ?? string.Empty));
+        }
+
+        return arrays;
+    }
+
+    /// <summary>Whether this machine publishes USB devices at all.</summary>
+    public static bool Enumerable(ISystemFiles files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        return files.DirectoryExists(DevicesPath);
+    }
+
+    /// <summary>
+    /// The firmware version a <c>bcdDevice</c> field carries, in <c>xvf_host</c>'s own spelling
+    /// (<c>2 0 10</c>), or null if the field is not four hex digits.
+    /// </summary>
+    public static string? Version(string? bcdDevice)
+    {
+        var text = bcdDevice?.Trim();
+        if (text is not { Length: 4 })
+        {
+            return null;
+        }
+
+        foreach (var character in text)
+        {
+            if (!Uri.IsHexDigit(character))
+            {
+                return null;
+            }
+        }
+
+        var major = Convert.ToInt32(text[..2], 16);
+        var minor = Convert.ToInt32(text[2].ToString(), 16);
+        var patch = Convert.ToInt32(text[3].ToString(), 16);
+
+        return string.Create(CultureInfo.InvariantCulture, $"{major} {minor} {patch}");
+    }
+
+    private static bool Matches(ISystemFiles files, string directory, string field, string expected) =>
+        string.Equals(Field(files, directory, field), expected, StringComparison.OrdinalIgnoreCase);
+
+    private static string? Field(ISystemFiles files, string directory, string name) =>
+        files.ReadText(directory + "/" + name)?.Trim();
+}
+
 /// <summary>
 /// Seeed's host-side control tool, wherever this frame keeps it.
 /// </summary>
@@ -444,7 +576,13 @@ public sealed class XvfHost
     /// <summary>Where guide 4's clone puts the tree, relative to the login user's home.</summary>
     public const string HomeSubdirectory = "xvf3800";
 
-    /// <summary>Where the DFU images sit inside the same tree.</summary>
+    /// <summary>Where the DFU images sit inside the same tree, for a person who has come to flash one.</summary>
+    /// <remarks>
+    /// Nothing in the agent reads this. It is kept as the one recorded fact about where upstream
+    /// puts the images, because decision 90's whole point is that the flash is an attended
+    /// operation and the operator performing it should not have to re-derive the path. The
+    /// installer fetches the six <c>host_control</c> files and never anything from here.
+    /// </remarks>
     public const string FirmwareSubdirectory = "xmos_firmwares/usb";
 
     /// <summary>The device-management command that reports the running firmware.</summary>
@@ -503,18 +641,36 @@ public sealed class XvfHost
     /// <summary>The binary itself, under <paramref name="root"/>.</summary>
     public static string ToolPath(string root) => ToolDirectory(root) + "/" + Binary;
 
-    /// <summary>The DFU image for <paramref name="version"/>, under <paramref name="root"/>.</summary>
-    public static string FirmwarePath(string root, string version)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(root);
-        ArgumentException.ThrowIfNullOrWhiteSpace(version);
-
-        return root.TrimEnd('/') + "/" + FirmwareSubdirectory
-            + "/respeaker_xvf3800_usb_dfu_firmware_v" + version + ".bin";
-    }
+    /// <summary>
+    /// One conversation with the array at a time, for the whole process.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The device is a singleton and the tool knows it.</b> <c>xvf_host</c> has no device
+    /// selector — its USB backend enumerates, opens whichever array comes first and claims HID
+    /// interface 3 — so a second invocation overlapping the first does not talk to a second device,
+    /// it loses the claim. The loser reads as <i>the array did not answer</i>, which is drift, which
+    /// costs an attempt and a reboot for a frame whose array was working the whole time.
+    /// </para>
+    /// <para>
+    /// One gate rather than one per instance, because the thing being serialised is the device and
+    /// not the object: the reconcile loop builds its own <see cref="XvfHost"/> inside the audio
+    /// block and <c>ArrayFirmwareReporter</c> builds another beside it, and an instance field would
+    /// serialise each of them against itself only. It is the process boundary that matters, because
+    /// there is exactly one agent process per frame and exactly one array per agent.
+    /// </para>
+    /// <para>
+    /// The wait is unbounded on purpose. The only thing that can hold it long is an
+    /// <c>xvf_host</c> that hangs, and <c>HostProcessRunner</c> already awaits that with no timeout
+    /// wherever it is called from — so a hung tool wedges the caller today, with or without this
+    /// gate, and a bounded wait here would buy nothing except a second way to report a working
+    /// array as absent.
+    /// </para>
+    /// </remarks>
+    private static readonly SemaphoreSlim Conversation = new(1, 1);
 
     /// <summary>Runs one command against the array, from the binary's own directory.</summary>
-    public Task<ProcessResult> RunAsync(
+    public async Task<ProcessResult> RunAsync(
         string root,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
@@ -532,7 +688,16 @@ public sealed class XvfHost
 
         vector.AddRange(arguments);
 
-        return _processes.RunAsync("env", vector, cancellationToken);
+        await Conversation.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            return await _processes.RunAsync("env", vector, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            Conversation.Release();
+        }
     }
 
     /// <summary>Whether the HID control interface answered at all.</summary>
@@ -655,10 +820,12 @@ public sealed class XvfHost
 /// </para>
 /// <para>
 /// <b>It is the root of the array chain</b>, so a frame with no tool leaves
-/// <c>firmware.xvf3800.version</c> and, through it, the playback mixer resources
-/// <c>Blocked(dependency)</c> — visibly waiting on this one thing rather than each failing on
-/// its own. That is §2.2's DAG doing its job, and it is why a refusal here has to be loud and
-/// has to name which file was wrong.
+/// <see cref="XvfAmplifierResource"/> <c>Blocked(dependency)</c> — visibly waiting on this one
+/// thing rather than failing on its own. That is §2.2's DAG doing its job, and it is why a
+/// refusal here has to be loud and has to name which file was wrong. The chain behind it is one
+/// resource shorter since decision 90: <c>firmware.xvf3800.version</c> sat between the two, and
+/// the playback mixer resources hung off that, so a frame that could not fetch six files used to
+/// leave both speaker volumes blocked behind a firmware version nobody was going to write.
 /// </para>
 /// </remarks>
 public sealed class XvfHostToolResource : IResource
@@ -728,11 +895,42 @@ public sealed class XvfHostToolResource : IResource
                 expected,
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{directory}: all {pin.Files.Count} files match the pin, and the array answered"))
+                    $"{directory}: all {pin.Files.Count} files match the pin, and the array answered — {Firmware(reply)}"))
             : new ResourceObservation(
                 false,
                 expected,
                 $"{directory}: the files match the pin, but the array did not answer — {Trim(reply.Combined)}");
+    }
+
+    /// <summary>
+    /// What the array said it is running, from both readings, for the observed text.
+    /// </summary>
+    /// <remarks>
+    /// <b>Information, never a comparison.</b> This resource asserts that the tool is installed and
+    /// that the array answers it; which firmware answered is a fact about the hardware that nothing
+    /// on the frame converges, so it travels here the same way the Mute button and the LED rail
+    /// travel in <see cref="XvfAmplifierResource"/>'s observed text — reported, never compared.
+    /// Since the reply is already in hand, naming the version costs one string, and it is the one
+    /// thing an operator reading "the array answered" immediately wants to know. The reading that
+    /// reaches the Fleet Manager on a converged frame is <c>ArrayFirmwareReporter</c>'s, because a
+    /// resource that is in sync publishes no observed text at all.
+    /// </remarks>
+    private string Firmware(ProcessResult reply)
+    {
+        var reported = XvfHost.Version(reply.StandardOutput) ?? XvfHost.Version(reply.Combined);
+        var descriptor = XvfArrayUsb.Attached(_files) is [var array, ..] ? array.BcdDevice : null;
+        var decoded = XvfArrayUsb.Version(descriptor);
+
+        var control = reported is null ? "no version in the reply" : $"{XvfHost.VersionCommand} {reported}";
+        var usb = descriptor is null or ""
+            ? "no USB descriptor"
+            : decoded is null ? $"bcdDevice {descriptor}" : $"bcdDevice {descriptor} = {decoded}";
+
+        var agreement = reported is not null && decoded is not null
+            ? string.Equals(reported, decoded, StringComparison.Ordinal) ? ", agreeing" : ", disagreeing"
+            : string.Empty;
+
+        return $"firmware {control}, {usb}{agreement}";
     }
 
     /// <inheritdoc/>
@@ -760,216 +958,19 @@ public sealed class XvfHostToolResource : IResource
 }
 
 /// <summary>
-/// <c>firmware.xvf3800.version</c> — the array runs the firmware this build was validated
-/// against.
-/// </summary>
-/// <remarks>
-/// <para>
-/// From guide 4 step 3. <b>Load-bearing for the mixer resources below it:</b> 2.0.6-era and
-/// 2.0.10 firmware expose and default the DAC volume path differently, which is why the catalog
-/// makes <c>audio.mixer.*</c> depend on this and why open question 2 places the flash just ahead
-/// of the audio block rather than in §5.5's last phase. The v1 reference's
-/// <c>XVF3800_FIRMWARE</c> capture reads <c>VERSION 2 0 10</c>, so the pin below is the parity
-/// value and not a preference.
-/// </para>
-/// <para>
-/// <b>Brick-capable, and it does not flash unless an operator has said so for this device and
-/// this version.</b> A DFU write can leave the mic array unusable; recovery is physical — hold
-/// Mute while re-plugging power for Safe Mode, then reflash — so §5.5's "schedule brick-capable
-/// resources last" is only half the mitigation. The other half is here: <see cref="ActAsync"/>
-/// reads <see cref="AuthorisationKey"/> and refuses unless it holds exactly
-/// <see cref="PinnedVersion"/>. Three properties make that a guarantee rather than a check:
-/// </para>
-/// <list type="number">
-/// <item><description>
-/// The default is <b>no authorisation</b>, so a frame nobody has configured cannot flash. §3.3
-/// gives a pending device no settings at all, which means an unadopted frame cannot be
-/// authorised even in principle.
-/// </description></item>
-/// <item><description>
-/// The authorisation carries the <i>version</i>, not a boolean. A switch left on would silently
-/// authorise a different flash the day this pin moves; a version has to be re-typed to mean
-/// something new.
-/// </description></item>
-/// <item><description>
-/// <c>dfu-util</c> is named in exactly one private method, which takes a
-/// <see cref="FlashAuthorisation"/> that only the check can construct. There is no path from an
-/// ordinary convergence pass to a flash that does not go through it, and a test asserts that an
-/// unauthorised Act starts no process at all.
-/// </description></item>
-/// </list>
-/// <para>
-/// A frame whose array is on the wrong firmware therefore walks §2.5's ladder and reaches the
-/// operator carrying the exact command it would have run — the escalation <i>is</i> the request
-/// for permission.
-/// </para>
-/// </remarks>
-public sealed class XvfFirmwareResource : IResource
-{
-    /// <summary>The catalog id.</summary>
-    public const string ResourceName = "firmware.xvf3800.version";
-
-    /// <summary>The version this build is validated against, as a person writes it.</summary>
-    public const string PinnedVersion = "2.0.10";
-
-    /// <summary>The same version in the tool's own spelling.</summary>
-    public const string PinnedReply = "2 0 10";
-
-    /// <summary>
-    /// Fleet setting (§3.4) that authorises one DFU flash, by version.
-    /// </summary>
-    /// <remarks>
-    /// Deliberately not in the catalog's value-source list for this resource, which reads "fixed
-    /// by the catalog". The <i>version</i> is fixed by the catalog; what this setting carries is
-    /// an operator's permission to perform an irreversible-in-practice write on a device they can
-    /// physically reach, which is not a value the catalog can hold on their behalf.
-    /// </remarks>
-    public const string AuthorisationKey = "audio.firmwareFlashAuthorised";
-
-    /// <summary>How long the array is given to re-enumerate on USB after a flash.</summary>
-    public static TimeSpan Settle { get; } = TimeSpan.FromSeconds(5);
-
-    private readonly XvfHost _tool;
-    private readonly ISystemFiles _files;
-    private readonly IProcessRunner _processes;
-    private readonly FleetValues _values;
-    private readonly IAgentClock _clock;
-
-    /// <summary>Creates the resource.</summary>
-    public XvfFirmwareResource(
-        XvfHost tool,
-        ISystemFiles files,
-        IProcessRunner processes,
-        FleetValues values,
-        IAgentClock clock)
-    {
-        ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(files);
-        ArgumentNullException.ThrowIfNull(processes);
-        ArgumentNullException.ThrowIfNull(values);
-        ArgumentNullException.ThrowIfNull(clock);
-
-        _tool = tool;
-        _files = files;
-        _processes = processes;
-        _values = values;
-        _clock = clock;
-    }
-
-    /// <inheritdoc/>
-    public string Name => ResourceName;
-
-    /// <inheritdoc/>
-    public IReadOnlyList<string> DependsOn =>
-        [XvfHostToolResource.ResourceName, PackageResource.Prefix + "dfu-util"];
-
-    /// <inheritdoc/>
-    public string Detected => "This frame's microphone and speaker unit is running a different version of its own software than the frame expects.";
-
-    /// <inheritdoc/>
-    public string WhyItMatters => "The speaker's volume settings behave differently between versions, so the frame can end up much too quiet.";
-
-    /// <inheritdoc/>
-    public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
-    {
-        if (!_files.FileExists(AlsaCards.CardsPath))
-        {
-            return new ResourceObservation(true, PinnedReply, "no sound hardware on this machine");
-        }
-
-        if (_tool.Root() is not { } root)
-        {
-            return new ResourceObservation(false, PinnedReply, $"{XvfHost.Binary} is not installed, so the array cannot be asked");
-        }
-
-        var reply = await _tool.RunAsync(root, [XvfHost.VersionCommand], cancellationToken).ConfigureAwait(false);
-        var version = XvfHost.Version(reply.StandardOutput) ?? XvfHost.Version(reply.Combined);
-
-        return new ResourceObservation(
-            string.Equals(version, PinnedReply, StringComparison.Ordinal),
-            PinnedReply,
-            version ?? $"the array did not report a version — {reply.Combined}");
-    }
-
-    /// <inheritdoc/>
-    public async ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // Nothing above this line has started a process, and nothing below it does either unless
-        // Authorise() hands back a value only it can make.
-        if (Authorise() is not { } authorisation)
-        {
-            return Refusal();
-        }
-
-        return await FlashAsync(authorisation, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <summary>An operator's permission to flash one image. Constructed only by the check.</summary>
-    private readonly record struct FlashAuthorisation(string Version, string ImagePath);
-
-    private FlashAuthorisation? Authorise()
-    {
-        if (!string.Equals(_values.Find(AuthorisationKey), PinnedVersion, StringComparison.Ordinal))
-        {
-            return null;
-        }
-
-        if (_tool.Root() is not { } root)
-        {
-            return null;
-        }
-
-        var image = XvfHost.FirmwarePath(root, PinnedVersion);
-        return _files.FileExists(image) ? new FlashAuthorisation(PinnedVersion, image) : null;
-    }
-
-    private ResourceAction Refusal()
-    {
-        var authorised = _values.Find(AuthorisationKey);
-        var image = _tool.Root() is { } root ? XvfHost.FirmwarePath(root, PinnedVersion) : "<no tool directory>";
-
-        var why = !string.Equals(authorised, PinnedVersion, StringComparison.Ordinal)
-            ? $"no operator has authorised it — set {AuthorisationKey} to '{PinnedVersion}' for this device"
-            : $"the image {image} is not on this frame";
-
-        return new ResourceAction(
-            $"refused to flash the array to {PinnedVersion}: {why}. The command it would run is: "
-                + $"dfu-util -R -e -a 1 -D {image}",
-            "This frame has not been given permission to update its microphone and speaker unit, so it has left it alone and asked instead.");
-    }
-
-    private async ValueTask<ResourceAction> FlashAsync(
-        FlashAuthorisation authorisation,
-        CancellationToken cancellationToken)
-    {
-        // The only place in the agent that names dfu-util. `-a 1` is the array's DFU Upgrade
-        // partition, `-e` detaches it into DFU mode, `-D` supplies the image and `-R` resets it
-        // back into normal operation afterwards.
-        var arguments = new[] { "-R", "-e", "-a", "1", "-D", authorisation.ImagePath };
-        var result = await _processes.RunAsync("dfu-util", arguments, cancellationToken).ConfigureAwait(false);
-
-        // Part of the Act, not of Verify: the array re-enumerates on USB and a version read
-        // issued into that window answers for a device that is not there yet.
-        await _clock.DelayAsync(Settle, cancellationToken).ConfigureAwait(false);
-
-        return new ResourceAction(
-            $"dfu-util {string.Join(' ', arguments)}"
-                + (result.Succeeded ? string.Empty : $" (refused: {result.Combined})"),
-            $"Updating the microphone and speaker unit to version {authorisation.Version}, which this frame's sound settings were tested against.");
-    }
-}
-
-/// <summary>
 /// <c>audio.xvf3800.gpo-x0d31-amp-enable</c> — the speaker amplifier is switched on.
 /// </summary>
 /// <remarks>
 /// <para>
-/// From guide 4 step 4. <c>X0D31</c> is active-low, so <c>0</c> means the amplifier is enabled,
-/// and firmware 2.0.10 boots it low — which makes the Act normally a no-op. It is still its own
+/// From guide 4 step 4. <c>X0D31</c> is active-low, so <c>0</c> means the amplifier is enabled.
+/// <b>Both firmware levels this project has seen boot it low</b> — measured on two arrays on the
+/// bench 2026-08-20, a factory <c>2 0 6</c> board and an upgraded <c>2 0 10</c> board, each
+/// reading <c>GPO_READ_VALUES 0 0 0 1 0</c> on a frame whose agent had been stopped before the
+/// array was attached. So the Act does not run on any array this project owns. It is still its own
 /// resource because it is independently verifiable and a future firmware could default
-/// differently, which is precisely the class of change §2.2's granularity rule exists for.
+/// differently, which is precisely the class of change §2.2's granularity rule exists for — and
+/// because Observe reads the pin rather than assuming it, the resource is worth exactly as much on
+/// a board that boots it high.
 /// </para>
 /// <para>
 /// <b>The same readback carries two diagnostics that are not settings.</b> The second value is
@@ -978,6 +979,32 @@ public sealed class XvfFirmwareResource : IResource
 /// LED ring rail. Neither is agent-settable, so neither is a resource; both travel in the
 /// observed text, where they reach telemetry and the repair screen without pretending to be
 /// something the loop can converge.
+/// </para>
+/// <para>
+/// <b>What upstream issue #18 does and does not say about this write, because somebody will ask.</b>
+/// That issue — <i>"Multiple issues after LED/GPO commands"</i>, opened 2026-05-18, still open,
+/// <b>zero comments and no maintainer response</b>, fetched verbatim rather than summarised — is
+/// the only report in existence associating <c>GPO_WRITE_VALUE</c> with a damaged array, and it
+/// does not isolate it. The reporter used <c>LED_EFFECT</c>, <c>led_color</c>, <c>led_speed</c>,
+/// <c>led_brightness</c>, <c>GPO_WRITE_VALUE</c>, <c>CLEAR_CONFIGURATION</c>,
+/// <c>SAVE_CONFIGURATION</c> and repeated DFU reflashes, on firmware 2.0.5, 2.0.6 and 2.0.7 —
+/// <b>every one of them older than the 2.0.9 in which upstream says the <c>SAVE_CONFIGURATION</c>
+/// corruption of issue #8 was fixed</b>. His device also still enumerates, still answers
+/// <c>VERSION 2 0 7</c> and still plays audio, so it is a device with a wrong DSP and codec
+/// configuration rather than a brick; he says so himself in asking how to reset the codec, and
+/// notes that a DFU reflash does not clear it — which is the DataPartition, the partition neither
+/// this agent nor its flash path ever writes. And his own <c>GPO_READ_VALUES</c> reads
+/// <c>0 0 0 1 0</c>, the same five values both of our healthy arrays read, so <c>X0D31=0</c> is
+/// not the damaged state.
+/// </para>
+/// <para>
+/// <b>Three properties keep this resource on the safe side of that report, and they are structural
+/// rather than incidental.</b> The agent issues <c>VERSION</c>, <c>GPO_READ_VALUES</c> and
+/// <c>GPO_WRITE_VALUE</c> and <i>nothing else</i>: <c>SAVE_CONFIGURATION</c> appears nowhere in
+/// this repository outside guide 4's prose, so a GPO write here is volatile and cannot reach the
+/// partition that survives a reflash. The Act runs only on drift (§2.3), so a board that boots the
+/// pin low is never written to at all. And the write is one pin to one value, not the LED and
+/// configuration traffic the issue actually describes.
 /// </para>
 /// </remarks>
 public sealed class XvfAmplifierResource : IResource
@@ -1014,7 +1041,15 @@ public sealed class XvfAmplifierResource : IResource
     public string Name => ResourceName;
 
     /// <inheritdoc/>
-    public IReadOnlyList<string> DependsOn => [XvfFirmwareResource.ResourceName];
+    /// <remarks>
+    /// The control tool, and nothing else. This edge used to run through
+    /// <c>firmware.xvf3800.version</c>, which left this resource — and the whole mixer block behind
+    /// it — <see cref="ResourceStatusKind.Blocked"/> on a frame whose array ran a firmware the
+    /// catalog had not pinned. Decision 90 took that resource out of the graph, and the pin it
+    /// carried with it: the amplifier is read and written the same way on every firmware level
+    /// this project has measured, so there was never a real dependency here, only a scheduling one.
+    /// </remarks>
+    public IReadOnlyList<string> DependsOn => [XvfHostToolResource.ResourceName];
 
     /// <inheritdoc/>
     public string Detected => "The amplifier inside this frame's speaker is switched off.";

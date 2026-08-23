@@ -1,41 +1,35 @@
-"""The one-shot amplifier-default measurement on an XVF3800 microphone array.
+"""Reading an XVF3800 microphone array without a running agent having touched it first.
 
-What this answers
------------------
+What this answered
+------------------
 ``reference/resource-catalog.md`` open question 13: **on the firmware a factory-fresh
 reSpeaker XVF3800 ships with (2.0.6), does the speaker amplifier boot on or off?**
+**Answered 2026-08-20: on.** A factory ``2 0 6`` array and an upgraded ``2 0 10`` array both
+read ``GPO_READ_VALUES 0 0 0 1 0``, three stable readings each, with the agent proven stopped
+before either was attached. ``X0D31`` is the amplifier-enable pin and it is active-low, so the
+third value being ``0`` means the amplifier is enabled at boot on both firmware levels.
 
-``X0D31`` is the amplifier-enable pin and it is active-low, so ``0`` means the amplifier is
-enabled. The agent's ``audio.xvf3800.gpo-x0d31-amp-enable`` resource asserts it - but only
-behind ``firmware.xvf3800.version``, which is behind ``tool.xvf-host.installed``, which
-fetches six files from GitHub. A frame that cannot reach GitHub therefore never asserts the
-pin, and the answer decides what such a frame *is*: merely untuned if the amplifier boots
-on, completely silent if it boots off. Nothing in the agent depends on the answer - Observe
-reads the pin rather than assuming it - which is exactly why the question has survived
-unmeasured, and why the measurement has to be taken deliberately.
+The module stays, because the property it establishes is not about that one question: a
+reading taken while the agent could have written to the array is a reading of an array the
+agent may have changed, and no later inspection can tell the two apart.
 
 The hazard this module is shaped around
 ---------------------------------------
-**A running frame changes the array before it can be read.** Two resources can write to it:
+**A running frame can change the array before it can be read.** One resource can write to it,
+and as of decision 90 it is the only one in the whole catalog:
 
 * ``audio.xvf3800.gpo-x0d31-amp-enable`` runs ``xvf_host GPO_WRITE_VALUE 31 0`` whenever it
-  observes the pin at anything other than ``0``. That is the one that destroys *this*
-  measurement, and it destroys it silently - afterwards the pin reads ``0`` and looks like a
-  factory default. It only runs when its dependency ``firmware.xvf3800.version`` is in sync,
-  so on a 2.0.6 array it is ``Blocked(dependency)`` and never observes at all
-  (``ReconcileLoop`` checks ``Blocker`` *before* Observe). That is a fact about today's
-  catalog, not a safety property to lean on: a fresh array that happens to ship at 2.0.10
-  clears the dependency immediately and the write lands on the first pass.
-* ``firmware.xvf3800.version`` runs ``dfu-util -R -e -a 1 -D <image>`` and pins every array
-  to 2.0.10, which would destroy the *opportunity* irreversibly. It refuses unless a fleet
-  setting ``audio.firmwareFlashAuthorised`` holds exactly ``2.0.10`` for this device **and**
-  the DFU image exists on the frame. Measured on the mule 2026-08-16: the setting is absent
-  from the agent's settings (revision 10, seven keys) and no
-  ``respeaker_xvf3800_usb_dfu_firmware*`` file exists anywhere on the root filesystem - the
-  installer fetches the six ``host_control`` files and no firmware image - so both locks are
-  shut. Neither is a reason to leave the agent running: a hot-plugged 2.0.6 array puts
-  ``firmware.xvf3800.version`` into drift, which spends its attempt budget, escalates, and
-  under 2.5 rung 4 stops the product on a frame that was showing photographs.
+  observes the pin at anything other than ``0``. That is the one that destroys a
+  first-reading, and it destroys it silently - afterwards the pin reads ``0`` and looks like a
+  factory default. Since decision 90 it depends on ``tool.xvf-host.installed`` directly, so on
+  a frame that has the tool it observes on the first pass and writes immediately if the pin is
+  high. There is no dependency standing in front of it any more, which makes stopping the
+  agent the whole of the protection rather than half of it.
+* **``firmware.xvf3800.version`` is gone** (decision 90). The agent no longer names
+  ``dfu-util`` in any code path, holds no flash authorisation and has no way to write firmware
+  at all; it reads the version and reports it. A hot-plugged 2.0.6 array no longer drifts
+  anything, spends no attempt budget and stops no pass - which is what makes attaching one to
+  a running frame merely inadvisable rather than destructive.
 
 So the procedure is: stop the agent, *then* connect the array, and prove that order held
 rather than trusting it. :func:`read` proves it from two clocks the operator does not

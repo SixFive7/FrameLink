@@ -85,6 +85,18 @@ public static class DeviceEventKinds
     public const string Converged = "converged";
 
     /// <summary>
+    /// Which firmware the microphone unit is running, reported rather than converged.
+    /// </summary>
+    /// <remarks>
+    /// Not produced by the loop and not about a resource, so <see cref="DeviceEvent.Resource"/> is
+    /// null on it. The array's firmware version is a fact about hardware that nothing on the frame
+    /// can change without a person present (decision 90), so it travels the events channel as an
+    /// observation — like <see cref="Boot"/>, and unlike <see cref="Drift"/>, which asserts that
+    /// something is wrong. Nothing alerts on it.
+    /// </remarks>
+    public const string ArrayFirmware = "array-firmware";
+
+    /// <summary>
     /// The frame's own screen cannot show anything, so the Fleet Manager is the only surface
     /// left (§2.7).
     /// </summary>

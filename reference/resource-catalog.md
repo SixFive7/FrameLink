@@ -68,13 +68,15 @@ writing `—`. Under this definition that is the same thing, and it is kept rath
 because their whole point is running ahead of adoption; see the carve-out at the head of that
 section.
 
-**Counts.** 72 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
-are listed in their own section. Total **80**.
+**Counts.** 71 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
+are listed in their own section. Total **79**. It was 80 until decision 90 took
+`firmware.xvf3800.version` out of the graph; what it observed is now reported beside the loop and is
+recorded under "Does not become a device resource" below.
 
 | Guide | Resources |
 | --- | ---: |
 | 3 — Hardware configuration | 2 |
-| 4 — Audio configuration | 14 |
+| 4 — Audio configuration | 13 |
 | 5 — Kiosk base | 14 |
 | 6 — Camera | 16 |
 | 7 — LiveKit server | 0 |
@@ -83,9 +85,9 @@ are listed in their own section. Total **80**.
 | 10 — SPA | 6 |
 | 11 — GPIO button | 2 |
 | 12 — systemd & reliability | 9 |
-| **Subtotal (guides 3–12)** | **72** |
+| **Subtotal (guides 3–12)** | **71** |
 | Cross-guide and v2-mandated | 8 |
-| **Total** | **80** |
+| **Total** | **79** |
 
 ---
 
@@ -224,17 +226,7 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fixed, under the same presence-plus-floor rule as the kiosk block; the reviewed version is in that block's table.
 - **Risk** — —
-
-**`firmware.xvf3800.version`**
-
-- **From** — [guide 4 step 3](../docs/4-audio-configuration.md#3-pin-the-array-firmware-to-v2-0-10)
-- **Sets** — the array running firmware `VERSION 2 0 10`.
-- **Observe** — `(cd <xvf dir> && sudo ./xvf_host VERSION)` → last line must read `VERSION 2 0 10`.
-- **Verify** — identical, after the array has re-enumerated on USB. A short settle delay is part of the Act, not of Verify; on a freshly booted frame the array is always enumerated.
-- **dependsOn** — `tool.xvf-host.installed`, `pkg.dfu-util`
-- **Value source** — fixed by the catalog (the version the build is validated against).
-- **Risk** — **brick-capable** (DFU). Recovery is a physical action at the frame: hold Mute while re-plugging power to enter Safe Mode, then reflash against the factory partition. The Pi itself still boots — see the ordering note in the sequencing section.
-- **Notes** — v1 reference is at `2 0 10` (inventory `XVF3800_FIRMWARE`). The guide's own captured smoke test shows `2 0 6` shipping firmware, so a fresh array *will* need flashing. The version pin is load-bearing for the mixer resources below: 2.0.6-era and 2.0.10 firmware expose and default the DAC volume path differently.
+- **Notes** — **Nothing in the agent runs this program any more** (decision 90): the DFU flash left the resource graph and the binary names `dfu-util` in no code path at all. It is kept, and it is not `pkg.git`'s situation: the flash is now an attended bench operation, so the tool has to be on the card when somebody arrives at the frame to perform one. That is a real consumer, and it is a person.
 
 **`audio.xvf3800.gpo-x0d31-amp-enable`**
 
@@ -242,10 +234,11 @@ attached to them:
 - **Sets** — GPO pin `X0D31` low (active-low = speaker amplifier enabled).
 - **Observe** — `(cd <xvf dir> && sudo ./xvf_host GPO_READ_VALUES)` → five values in the fixed order `X0D11, X0D30, X0D31, X0D33, X0D39`; the **third** must be `0`.
 - **Verify** — identical.
-- **dependsOn** — `firmware.xvf3800.version`
+- **dependsOn** — `tool.xvf-host.installed`
 - **Value source** — fixed.
 - **Risk** — —
-- **Notes** — On firmware 2.0.10 this boots low, so Act is normally a no-op — but it is still independently verifiable and a future firmware could default differently, which is exactly why it is its own resource. **The default on the shipping 2.0.6 firmware is genuinely unknown and is open question 13**; nothing here depends on the answer, because Observe reads the pin rather than assuming it. The same readback carries two diagnostics worth keeping: the **second** value is `X0D30`, the hardware Mute button (a `1` means someone pressed it, and mic capture is silent), and the **fourth** is `X0D33`, the LED ring rail (active-high). Neither is agent-settable; both belong in telemetry.
+- **Notes** — **Both firmware levels this project has seen boot the pin low, so the Act does not run on any array we own** — measured 2026-08-20 on two arrays, a factory `2 0 6` board and an upgraded `2 0 10` board, each reading `GPO_READ_VALUES 0 0 0 1 0` on a frame whose agent had been stopped before the array was attached. That closes open question 13. It is still independently verifiable and a future firmware could default differently, which is exactly why it is its own resource, and Observe reads the pin rather than assuming it. **Its `dependsOn` used to run through `firmware.xvf3800.version`** and now names the tool directly, because decision 90 removed that resource.
+- **Notes on the one write it can make** — Upstream issue #18 is the only report associating `GPO_WRITE_VALUE` with a damaged array, and it does not isolate it: the reporter used `LED_EFFECT`, three `led_*` commands, `GPO_WRITE_VALUE`, `CLEAR_CONFIGURATION`, `SAVE_CONFIGURATION` and repeated DFU reflashes on firmware 2.0.5–2.0.7, all older than the 2.0.9 in which upstream says issue #8's `SAVE_CONFIGURATION` corruption was fixed; the issue is open with **zero comments** and no maintainer response; his device still enumerates, still answers `VERSION 2 0 7` and still plays audio; and his own `GPO_READ_VALUES` reads `0 0 0 1 0`, the same five values a healthy array reads. The agent sends `VERSION`, `GPO_READ_VALUES` and `GPO_WRITE_VALUE` and nothing else — no `SAVE_CONFIGURATION` anywhere in the repository — so its GPO write is volatile and cannot reach the DataPartition that survives a reflash. The same readback carries two diagnostics worth keeping: the **second** value is `X0D30`, the hardware Mute button (a `1` means someone pressed it, and mic capture is silent), and the **fourth** is `X0D33`, the LED ring rail (active-high). Neither is agent-settable; both belong in telemetry.
 
 **`audio.mixer.pcm0-playback-volume`**
 
@@ -253,7 +246,7 @@ attached to them:
 - **Sets** — ALSA simple control `PCM,0` on card 0 at `60` (0.00 dB) on both channels.
 - **Observe** — `amixer -c 0 sget PCM,0` → `Front Left`/`Front Right: Playback 60 [100%] [0.00dB]`.
 - **Verify** — identical. Guide 4 step 6 *is* this Verify, run after a reboot.
-- **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `firmware.xvf3800.version`, `audio.mixer.pcm0-playback-switch`, `audio.wireplumber.playback-volume`
+- **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `audio.mixer.pcm0-playback-switch`, `audio.wireplumber.playback-volume`
 - **Value source** — fleet setting `audio.playbackVolume` ([§3.4](../version2.md) names audio volume explicitly), catalog default `60` = 0.00 dB. Do not permit values above 0 dB anywhere in the chain. The default is correct on an unadopted frame, so this resource does **not** declare `agent.adoption` — a fleet override arriving later is ordinary drift, per the `dependsOn` rule at the head of this document. Its two siblings below read the same way.
 - **Risk** — —
 - **Notes** — **The suspected WirePlumber revert is no longer suspected; this resource is where it was measured.** On the frame 2026-08-16 the resource set `60`, rebooted, verified — and the value observed afterwards was `Front Left=37 -23.00dB on, Front Right=37 -23.00dB on [wireplumber active, 1 stored device files]`. `37` is not noise: this control is **one step per decibel**, which three independent readings agree on (60 = 0.00 dB in the v1 inventory, 40 = the −20 dB `PCM,1` ships at, 37 = −23.00 dB here), so 37 is a *requested gain of −23 dB* by something that is not this resource. Two consequences the entry now carries. First, **Observe is gated on the login session** — the second owner lives inside it, and a reading taken before it starts is a reading of a value still being decided (see the suspected-revert list and [§2.4](../version2.md)). Second, the value is additionally owned at the layer that sets it, by `audio.wireplumber.playback-volume` below. Owning the ALSA control alone is measured to be insufficient. **And this resource is ordered *after* that one, which is the opposite of how the edge was first written.** The rescue was declared depending on the two mixer volumes, so it could not be acted on until this resource was `InSync` — a state this resource cannot reach while WirePlumber is asking for −23 dB. Measured on the frame 2026-08-16: `PCM,0` spent all three attempts, escalated, the escalation stopped the pass ([§2.6](../version2.md), decision 68), and the resource that exists to make it convergeable never executed once. `PCM,1` takes no such edge — it is a second hardware stage no route volume reaches and it was never observed away from `60`.
@@ -264,7 +257,7 @@ attached to them:
 - **Sets** — ALSA simple control `PCM,1` (second, mono gain stage) on card 0 at `60` (0.00 dB).
 - **Observe** — `amixer -c 0 sget PCM,1` → `Mono: Playback 60 [100%] [0.00dB]`.
 - **Verify** — identical.
-- **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `firmware.xvf3800.version`, `audio.mixer.pcm1-playback-switch`
+- **dependsOn** — `audio.modprobe.snd-usb-audio-index`, `audio.mixer.pcm1-playback-switch`
 - **Value source** — fleet setting `audio.playbackVolume` (same setting, applied to both stages).
 - **Risk** — —
 - **Notes** — **The highest-value resource in this guide.** Ships at `40/60` = −20 dB; measured at roughly **+18 dB at the speaker** when corrected. A frame with `PCM,0` correct and `PCM,1` at default is fully functional and merely quiet — the class of fault nobody reports and nobody finds. Separate resource from `PCM,0` because it is a genuinely separate gain stage with its own default, not a second view of the same control. **And it is the reason the mixer cannot simply be handed to WirePlumber**: a PipeWire route volume reaches one mixer element, so whatever happens to `PCM,0` this stage stays the agent's to own. Session-gated like its sibling. **Untested prediction worth checking on the next hardware run:** if the `PCM,0` revert is a route volume, this stage does *not* move with it — the measured delta names `PCM,0` only, which is consistent with that and does not establish it.
@@ -1039,6 +1032,27 @@ Each line names the guide content excluded and what supersedes it.
 - **Guide 12 step 2** (`~/chromium-watchdog.sh`) and **steps 3–4** (`chromium-watchdog.service`/`.timer`, `chromium-restart.service`/`.timer`) — superseded by agent supervision. The measured constants survive as fleet settings: tree RSS ceiling `1843200` kB, `MemAvailable` floor `358400` kB, five-minute interval, `OnCalendar=*-*-* 03:00:00` with `Persistent=true`. Their home is [§2.10](../version2.md), which names them `supervision.browserTreeRssCeilingKb`, `supervision.memAvailableFloorKb`, `supervision.memoryCheckInterval` and `supervision.dailyRestartTime`; see open question 4.
 - **v1 inventory items that follow:** user units `chromium-watchdog.service`/`.timer`, `chromium-restart.service`/`.timer`, `framelink-gpio.service`, `framelink-spa.service`; `~/chromium-watchdog.sh`.
 
+**Hardware facts nothing on the frame converges**
+
+- **The array's firmware version, formerly `firmware.xvf3800.version`** — removed by decision 90 and
+  reported instead by `ArrayFirmwareReporter`, beside the loop, on the same shape and for the same
+  reason as the package inventory: it observes and reports and never acts. §2.3's contract is
+  *Observe → Compare → Act (only on drift) → Verify*, and the only Act that could converge a firmware
+  version is a DFU write. A resource that cannot act does not quietly report success — it spends its
+  attempt budget, its reboots and an escalation, and by [decision 68](../version2.md) stops the whole
+  pass, so a frame carrying a factory 2.0.6 array would never converge its screen, its camera or its
+  speaker over a number nobody was going to let it write. The reading is taken twice: `bcdDevice`
+  from the USB descriptor, which needs no control tool, no root and no control transfer, and
+  `xvf_host VERSION` when the tool is installed. **Board revision is not readable at all** — it is in
+  neither the USB descriptors nor any of the 177 commands in the pinned `libcommand_map.so`, all of
+  whose identity commands (`VERSION`, `BLD_MSG`, `BLD_HOST`, `BLD_REPO_HASH`, `BLD_MODIFIED`,
+  `BOOT_STATUS`, `SERIAL_NUMBER`, `DFU_GETVERSION`) describe the firmware or the unit rather than the
+  board. It is silkscreen, so a fleet can never know it.
+- **v1 parity is unaffected and stays where it was.** `reference/v1-state-inventory.txt` records
+  `XVF3800_FIRMWARE` at `2 0 10`, and the parity harness's `audio.xvf3800.firmware` facet still
+  compares it. What changed is that a difference there is now a parity *finding* for a person to
+  read, rather than a desired value a frame will reboot three times trying to reach.
+
 **Verification-only steps (they become Observe/Verify implementations, not resources)**
 
 - Guide 4 step 6 (mixer readback after reboot) and step 7 (round-trip mic recording); guide 5 step 1 (`swapon --show`) and step 9 (three kiosk checks); guide 6 step 6 and step 7; guide 9 step 4; guide 10 step 5; guide 11 steps 4 and 5; guide 12 step 1 and step 9. Every `sudo reboot` is the reboot discipline itself, not a resource.
@@ -1074,13 +1088,16 @@ rule — validate before writing, back up both boot files, boot-count self-repai
 write discipline at the head of the Guide 3 section. See open question 1 for the decision and for
 the one part of it still outstanding.
 
-**Exception 2 — the brick-capable set is split by *recovery cost*, not by category.**
-`firmware.xvf3800.version` is a DFU flash that can brick the **mic array** — the Pi still boots, the
-frame is still reachable, and recovery is a physical Safe-Mode reflash at the device. The
-boot-partition and EEPROM writes can produce a device nothing remote can reach, which is the specific
-risk §5.5 names. Ordering DFU ahead of the boot writes honours §5.5's intent while resolving a real
-dependency: guide 4 states the mixer levels are validated against firmware 2.0.10, so
-`audio.mixer.*` genuinely depends on the flash. See open question 2.
+**Exception 2 is withdrawn, and the resource it existed for is gone.** It used to place
+`firmware.xvf3800.version` at position 54, ahead of the boot writes, on the reasoning that a DFU
+flash bricks only the **mic array** while a boot-partition or EEPROM write can produce a device
+nothing remote can reach. Decision 90 removed the resource: the only Act that could converge a
+firmware version is a DFU write, this product will never perform one unattended, and a resource whose
+Act cannot succeed does not report — it spends three attempts, three reboots and an escalation, and
+by decision 68 stops the whole pass. **There is now no brick-capable resource anywhere in the array
+chain**, and §5.5's ordering clause applies to the boot and EEPROM writes alone. Open question 2,
+which asked where to schedule the flash against the mixer values it was said to validate, is answered
+by there being nothing to schedule.
 
 | # | Phase | Resources (in order) |
 | ---: | --- | --- |
@@ -1091,10 +1108,9 @@ dependency: guide 4 states the mixer levels are validated against firmware 2.0.1
 | 23–37 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` · `identity.hostname` |
 | 38–47 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
 | 48–53 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
-| 54 | **Array firmware** (brick-capable, hand-recoverable) | `firmware.xvf3800.version` |
-| 55–62 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.wireplumber.playback-volume` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
-| 63–76 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
-| 77–80 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+| 54–61 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.wireplumber.playback-volume` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
+| 62–75 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
+| 76–79 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
 
 **`identity.hostname` moved out of the last phase, from 75 to 37.** It was scheduled there because
 the trap made its Act a `/boot/firmware` write; with the trap disproved the Act is `hostnamectl`
@@ -1107,14 +1123,17 @@ cancels out at the tail: removing one resource from the final phase and adding o
 five.
 
 **`audio.wireplumber.playback-volume` then moved everything after the audio phase by one, and the
-row labels above did not follow it.** It is the catalog's 80th entry, added when the mixer revert was
-measured (decision 80), and it lands inside the audio phase — so the two rows below it each start one
-later than they used to. The labels now say what the membership always said: the product layer is
-63–76 and the final phase 77–80, which is where `boot.config.camera-auto-detect`,
-`boot.config.dtoverlay-vc4-kms-v3d-noaudio`, `boot.cmdline.wifi-regdom` and `eeprom.config` actually
-sit, and the positions prose elsewhere in this document cites have been moved with them. The
-arithmetic is checkable rather than asserted: the rows' memberships sum to 80 with no gap and no
-overlap, and 80 is what `CatalogDocument.Parse` counts in this file.
+row labels above did not follow it.** It was added when the mixer revert was measured (decision 80),
+and it lands inside the audio phase — so the two rows below it each start one later than they used
+to. **Decision 90 then removed `firmware.xvf3800.version` from position 54 and moved everything after
+it back by one again**, which is why the audio phase now begins there. The labels say what the
+membership says: the product layer is 62–75 and the final phase 76–79, which is where
+`boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio`,
+`boot.cmdline.wifi-regdom` and `eeprom.config` actually sit, and the positions prose elsewhere in this
+document cites have been moved with them. The arithmetic is checkable rather than asserted: the rows'
+memberships sum to 79 with no gap and no overlap, and 79 is what `CatalogDocument.Parse` counts in
+this file — a test compares the two, so a row label that drifts from its membership fails the
+suite rather than sitting here being wrong.
 
 **What moving the display early costs elsewhere.** Three things get worse, and they are worth naming
 rather than smoothing over.
@@ -1406,11 +1425,18 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
    partition has **430 MB free**, which comfortably holds a backup pair of `config.txt` /
    `cmdline.txt`, a boot counter, and a `tryboot` candidate at once.
 
-2. **DFU firmware ordering versus the mixer values it validates.** Guide 4 states the volume settings
-   are validated against firmware 2.0.10 and that 2.0.6-era firmware exposes the DAC volume path
-   differently, so `audio.mixer.*` depends on `firmware.xvf3800.version` — which §5.5 wants last.
-   *Reading adopted:* split brick-capable by recovery cost (mic-array brick keeps the Pi bootable and
-   is hand-recoverable; boot-partition brick is not), and place DFU just ahead of the audio block.
+2. **DFU firmware ordering versus the mixer values it validates.**
+   **— ANSWERED 2026-08-23 by there being nothing left to order (decision 90).** The question was
+   where to schedule a DFU flash that §5.5 wants last and that `audio.mixer.*` was said to depend on;
+   the reading previously adopted split brick-capable resources by recovery cost and placed the flash
+   just ahead of the audio block. The resource is now gone, so the ordering problem is gone with it,
+   and the mixer resources have dropped the firmware edge. **The dependency it encoded was never
+   measured in this repository.** Guide 4 asserts that 2.0.6-era and 2.0.10 firmware expose and
+   default the DAC volume path differently; nothing here recorded a mixer reading on 2.0.6, and guide
+   4 step 3's own EXPECTED OUTPUT is still a `[Pending fresh-flash capture]` placeholder. The claim
+   may well be true — it is not evidence, and it cost a frame its whole pass. **What replaces it is
+   a measurement:** the mixer resources read the controls they own, on whatever firmware answers, and
+   a stage that is at the wrong level is drift like any other.
 
 3. **How does the agent obtain `xvf_host` and the firmware images?**
    **— DECIDED 2026-08-16, as a commit-pinned fetch of six files (decision 63).**
@@ -1546,7 +1572,14 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
     else's) — so the running frame is drifted and the catalog's desired value includes the parameter.
 
 13. **Is the speaker amplifier on by default on the *shipping* 2.0.6 array firmware?**
-    **This one needs a bench measurement and cannot be settled from any document.** Guide 4 step 4
+    **— ANSWERED 2026-08-20 on the bench: yes.** A factory 2.0.6 array (serial `…030`) and an
+    upgraded 2.0.10 array (serial `…069`) both read `GPO_READ_VALUES 0 0 0 1 0`, three stable
+    readings each, on a frame whose agent had been stopped before the array was attached so that the
+    pin could not have been written by anything. The third value is `0` and the pin is active-low, so
+    **the amplifier is on at boot on both firmware levels**. A factory-fresh array is therefore
+    untuned rather than silent, and the severity argument below — that `xvf_host` might be
+    load-bearing for a first-boot unit — does not apply. The original question and its reasoning
+    are kept below as the record of what was asked. Guide 4 step 4
     measured it on **2.0.10** only — "boots with `X0D31` low, so the amp is effectively enabled out of
     the box" — and the guide's step order means the first speaker test happened *after* the DFU
     flash, so it says nothing about a factory-fresh array. `research/camera-audio.md` asserts the
@@ -1558,7 +1591,7 @@ with their resolutions rather than removed, so the reasoning is not re-derived l
     deliberate. `audio.xvf3800.gpo-x0d31-amp-enable` **reads the pin and writes it when it is not
     `0`**, so it converges whichever way a fresh array boots; no code anywhere assumes a default.
     What the answer changes is the *severity* of a frame that cannot fetch `xvf_host`: the amp
-    resource sits behind `firmware.xvf3800.version`, which sits behind `tool.xvf-host.installed`, so
+    resource sat behind `firmware.xvf3800.version`, which sits behind `tool.xvf-host.installed`, so
     on a factory-fresh 2.0.6 array with no tool the pin is never asserted. If 2.0.6 boots with the
     amp enabled, that frame is merely untuned; if it boots with the amp disabled, that frame is
     **silent**, and the tool moves from nice-to-have to load-bearing for a first-boot unit.

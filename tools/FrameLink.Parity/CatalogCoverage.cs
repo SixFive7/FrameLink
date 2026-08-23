@@ -162,9 +162,6 @@ public static class CatalogEvidenceMap
         new("eeprom.config", false, "eeprom.config",
             "The bootloader EEPROM configuration, captured whole."),
 
-        new("firmware.xvf3800.version", false, "audio.xvf3800.firmware",
-            "The XVF3800_FIRMWARE block, which is exactly this resource's value."),
-
         new("gpio.button.line", false, null,
             "Nothing about the GPIO line was captured — the button is a runtime claim on a chip line, "
             + "and version2.md §5.3 records the hardware as still unsourced. Verified by the resource "

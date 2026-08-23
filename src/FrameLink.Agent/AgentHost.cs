@@ -265,6 +265,22 @@ public sealed class AgentHost
             HostProcessRunner.Instance,
             () => values.Get(LoginUserSession.SettingKey, string.Empty));
 
+        // Beside the loop for the same reason and by the same decision (90). Which firmware the
+        // microphone unit runs is a fact about hardware that nothing on this frame may change on
+        // its own, so it is observed and reported and never converged. Its own XvfHost, because the
+        // catalog builds one inside the audio block and neither owns the other — the gate that
+        // keeps the two of them off the device at the same time is on XvfHost itself.
+        var arrayFirmware = new ArrayFirmwareReporter(
+            new XvfHost(HostSystemFiles.Instance, HostProcessRunner.Instance, session),
+            HostSystemFiles.Instance,
+            outbox,
+            store,
+            _clock,
+            _log)
+        {
+            DeviceId = identity.DeviceId,
+        };
+
         // §2.1: the app is inside this binary, and §2.7 wants the repair screen on the same
         // origin. One server answers both, plus the local channel the page checks in over.
         var channel = new LocalChannel();
@@ -601,6 +617,7 @@ public sealed class AgentHost
             // switch between, which is every run off a frame.
             screen.RunAsync(shutdown.Token),
             packages.RunAsync(shutdown.Token),
+            arrayFirmware.RunAsync(shutdown.Token),
             button.RunAsync(shutdown.Token),
 
             // §2.7 item 9's console half. It polls a character device twenty times a second and

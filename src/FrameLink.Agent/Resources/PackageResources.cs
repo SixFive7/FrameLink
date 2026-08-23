@@ -362,14 +362,18 @@ public static class PackageCatalog
             Gloss = "Removing the old camera part so that this frame's own camera is the only one.",
         },
 
-        // Guide 4 step 3 — the firmware flasher for the microphone and speaker unit.
+        // Guide 4 step 3 — the firmware flasher for the microphone and speaker unit. Decision 90
+        // took the agent out of the flashing business entirely, so nothing in this binary runs this
+        // program any more; it is kept because the flash is now an attended bench operation and it
+        // has to be on the frame when somebody arrives to perform one. That is a real consumer,
+        // unlike pkg.git, whose last one went with decision 63.
         new AptPackageSpec
         {
             Package = "dfu-util",
             ReviewedVersion = "0.11-3",
-            Detected = "The tool that updates the microphone-and-speaker unit is missing.",
-            WhyItMatters = "Without it that unit cannot be brought to the version this frame is built around.",
-            Gloss = "Installing the tool that updates the microphone-and-speaker unit's own software.",
+            Detected = "The tool for updating the microphone-and-speaker unit is missing.",
+            WhyItMatters = "Without it nobody can update that unit's own software when they are here with the frame.",
+            Gloss = "Installing the tool somebody would use, standing at this frame, to update the microphone-and-speaker unit.",
         },
 
         // Guide 8 step 7, promoted to required by §3.6's diagnostics allowlist.

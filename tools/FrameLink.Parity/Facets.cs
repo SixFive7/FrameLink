@@ -17,8 +17,7 @@ namespace FrameLink.Parity;
 /// makes inspection the default and every class of mutation a separate ask; a parity check that
 /// wrote anything would be measuring a frame it had just changed. Exactly one is marked
 /// <see cref="ParityFacet.Elevated"/> and is skipped unless the operator asks for it: the array
-/// reports its firmware version only to a privileged USB control transfer, which is why the
-/// catalog's own Observe for it is written with <c>sudo</c>. Everything else a frame can be
+/// answers <c>VERSION</c> only to a privileged USB control transfer. Everything else a frame can be
 /// asked about here is world-readable, including the app's configuration, which is read back off
 /// the local origin over loopback rather than out of the agent's root-owned state directory.
 /// </para>
@@ -207,11 +206,16 @@ public static class ParityFacets
             Elevated = true,
             Coverage = FacetCoverage.Partial,
             Limitation =
-                "Needs root: xvf_host issues a privileged USB control transfer, which is why the "
-                + "catalog's own Observe for firmware.xvf3800.version is written with sudo. The "
-                + "collector is unprivileged by default, so this facet reports not-collected unless "
+                "Needs root: xvf_host issues a privileged USB control transfer. The collector is "
+                + "unprivileged by default, so this facet reports not-collected unless "
                 + "`fl.py parity --elevate` is given. The probe looks in the agent's own "
-                + "/var/lib/fl-agent/xvf3800 first and v1's ~/xvf3800/host_control/rpi_64bit second.",
+                + "/var/lib/fl-agent/xvf3800 first and v1's ~/xvf3800/host_control/rpi_64bit second. "
+                + "No catalog resource maps to this facet any more: decision 90 took the firmware "
+                + "version out of the resource graph, so what the v1 frame was running is parity "
+                + "evidence for a person to read rather than a value any frame will act on. The "
+                + "comparison is kept because a frame that quietly changed firmware is worth "
+                + "noticing; the unprivileged half of the same reading, /sys/.../bcdDevice, is what "
+                + "the agent itself reports and needs no elevation at all.",
             Probe =
                 "for d in /var/lib/fl-agent/xvf3800 \"$HOME\"/xvf3800/host_control/rpi_64bit; "
                 + "do [ -x \"$d/xvf_host\" ] || continue; (cd \"$d\" && ./xvf_host VERSION) && break; done",
