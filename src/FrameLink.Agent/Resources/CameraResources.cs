@@ -8,10 +8,12 @@ namespace FrameLink.Agent.Resources;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Two camera resources consult it and they ask different questions of the same text, which is
-/// why the parsing is here rather than inside either of them:
+/// Three callers consult it and they ask different questions of the same text, which is why the
+/// parsing is here rather than inside any of them:
 /// <see cref="WirePlumberCameraMonitorsResource"/> asks whether anything <i>extra</i> is being
-/// surfaced, and <see cref="CameraNodeResource"/> asks whether <c>FrameLinkCam</c> is there.
+/// surfaced, <see cref="CameraNodeResource"/> asks whether <c>FrameLinkCam</c> is there, and
+/// <see cref="MediaGraphGate"/> asks whether WirePlumber has built a graph to be asked about at
+/// all.
 /// </para>
 /// <para>
 /// <b>The format is transcribed from a real capture</b>, not from documentation: the
@@ -28,13 +30,24 @@ public static class WpctlStatus
     /// <summary>The section holding cameras.</summary>
     public const string Video = "Video";
 
+    /// <summary>The section holding sound.</summary>
+    public const string Audio = "Audio";
+
     /// <summary>The subsection holding things that produce pictures.</summary>
     public const string Sources = "Sources";
 
     /// <summary>The subsection holding camera hardware WirePlumber found by itself.</summary>
     public const string Devices = "Devices";
 
+    /// <summary>The subsection holding things that play sound.</summary>
+    public const string Sinks = "Sinks";
+
     private static readonly char[] Tree = [' ', '\t', '│', '├', '└', '─', '*'];
+
+    /// <summary>
+    /// <see cref="Tree"/> without the default marker, for reading the marker rather than the name.
+    /// </summary>
+    private static readonly char[] Branch = [' ', '\t', '│', '├', '└', '─'];
 
     /// <summary>
     /// The entries under one subsection of one section, in the order <c>wpctl</c> printed them.
@@ -44,11 +57,53 @@ public static class WpctlStatus
     /// <param name="subsection">Branch name without its colon, for example <see cref="Sources"/>.</param>
     public static IReadOnlyList<string> Entries(string status, string section, string subsection)
     {
+        var entries = new List<string>();
+
+        foreach (var entry in Scan(status, section, subsection))
+        {
+            entries.Add(entry.Name);
+        }
+
+        return entries;
+    }
+
+    /// <summary>
+    /// The name <c>wpctl</c> marks with <c>*</c> in one subsection — its default — or null.
+    /// </summary>
+    /// <remarks>
+    /// <b>The marker is a fact about WirePlumber and not about the entry.</b> <c>*</c> is what
+    /// <c>default-nodes-api</c> puts against the node <c>@DEFAULT_AUDIO_SINK@</c> resolves to, so
+    /// its absence under <c>Audio</c> / <c>Sinks</c> is the readable form of that token translating
+    /// to <c>-1</c>. <see cref="Entries"/> cannot answer this: <c>*</c> is one of the tree
+    /// characters it trims away, which is correct for a name and loses the only thing that
+    /// distinguishes the default from its siblings. <see cref="MediaGraphGate"/> is the caller.
+    /// </remarks>
+    /// <param name="status">Whole <c>wpctl status</c> output.</param>
+    /// <param name="section">Top-level section, for example <see cref="Video"/>.</param>
+    /// <param name="subsection">Branch name without its colon, for example <see cref="Sinks"/>.</param>
+    public static string? DefaultOf(string status, string section, string subsection)
+    {
+        foreach (var entry in Scan(status, section, subsection))
+        {
+            if (entry.IsDefault)
+            {
+                return entry.Name;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Every entry of one subsection, with whether <c>wpctl</c> marked it default.</summary>
+    private static IEnumerable<(bool IsDefault, string Name)> Scan(
+        string status,
+        string section,
+        string subsection)
+    {
         ArgumentNullException.ThrowIfNull(status);
         ArgumentNullException.ThrowIfNull(section);
         ArgumentNullException.ThrowIfNull(subsection);
 
-        var entries = new List<string>();
         var inSection = false;
         var inSubsection = false;
 
@@ -79,11 +134,9 @@ public static class WpctlStatus
 
             if (inSubsection && NameOf(content) is { } name)
             {
-                entries.Add(name);
+                yield return (raw.TrimStart(Branch).StartsWith('*'), name);
             }
         }
-
-        return entries;
     }
 
     /// <summary>The name in <c>54. FrameLinkCam    [vol: 1.00]</c>, or null if this is not an entry.</summary>
@@ -765,12 +818,18 @@ public sealed class CameraNodeResource : IResource
     public const string ResourceName = "camera.pipewire-node.framelink-cam";
 
     private readonly IUserSession _session;
+    private readonly ISystemFiles _files;
 
     /// <summary>Creates the resource.</summary>
-    public CameraNodeResource(IUserSession session)
+    /// <param name="session">The login user's session, where <c>wpctl</c> runs.</param>
+    /// <param name="files">The filesystem, for <see cref="MediaGraphGate"/>'s escape.</param>
+    public CameraNodeResource(IUserSession session, ISystemFiles files)
     {
         ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(files);
+
         _session = session;
+        _files = files;
     }
 
     /// <inheritdoc/>
@@ -811,6 +870,16 @@ public sealed class CameraNodeResource : IResource
                 false,
                 expected,
                 status.Combined.Length == 0 ? "wpctl said nothing" : $"wpctl failed: {status.Combined.Replace('\n', ' ')}");
+        }
+
+        // Below the failed-read branch and above the verdict, which is the only place it can go: a
+        // wpctl that would not run is drift, and a wpctl that ran before WirePlumber built the
+        // graph has answered about nothing. The gate reads the *audio* half of this same output on
+        // purpose — a resource that exists to assert this node cannot be gated on this node, so its
+        // readiness fact has to come from somewhere it makes no claim about (see MediaGraphGate).
+        if (MediaGraphGate.NotSettled(status.StandardOutput, _files, expected) is { } settling)
+        {
+            return settling;
         }
 
         var sources = WpctlStatus.Entries(status.StandardOutput, WpctlStatus.Video, WpctlStatus.Sources);

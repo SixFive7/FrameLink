@@ -140,7 +140,7 @@ public sealed class AgentSessionReadinessTests
 
         Assert.Equal(
             ObservationOutcome.Unevaluable,
-            (await new CameraNodeResource(Waiting()).ObserveAsync(None)).Outcome);
+            (await new CameraNodeResource(Waiting(), new MemorySystemFiles()).ObserveAsync(None)).Outcome);
 
         Assert.Equal(
             ObservationOutcome.Unevaluable,
@@ -186,7 +186,7 @@ public sealed class AgentSessionReadinessTests
             Default = new ProcessResult(1, string.Empty, "wpctl: command not found"),
         };
 
-        var observation = await new CameraNodeResource(session).ObserveAsync(None);
+        var observation = await new CameraNodeResource(session, new MemorySystemFiles()).ObserveAsync(None);
 
         Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
         Assert.Contains("wpctl", observation.Observed, StringComparison.Ordinal);

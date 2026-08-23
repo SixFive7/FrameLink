@@ -635,3 +635,103 @@ internal static class AgentStatusFactory
         DeviceId = deviceId,
     };
 }
+
+/// <summary>
+/// <c>wpctl status</c> as this project's own hardware prints it.
+/// </summary>
+/// <remarks>
+/// Shared because two blocks read the same output for different reasons — the camera block asks
+/// what <c>Video</c> / <c>Sources</c> holds, and <see cref="MediaGraphGate"/> asks whether
+/// <c>Audio</c> has been built at all — and a fixture copied into both is two fixtures that can
+/// drift apart.
+/// </remarks>
+internal static class WpctlCaptures
+{
+    /// <summary>
+    /// <c>wpctl status</c> captured off Frame #1 on 2026-08-23, converged, with the camera node up.
+    /// </summary>
+    /// <remarks>
+    /// A whole capture rather than the abridged ones above, because the gate reads two subsections
+    /// of it and a fixture that omits either would agree with the parser by construction. The
+    /// default markers are as <c>wpctl</c> printed them.
+    /// </remarks>
+    internal const string Settled =
+        "PipeWire 'pipewire-0' [1.4.2, framelink@framelink-mule, cookie:3177108782]\n"
+        + " └─ Clients:\n"
+        + "        33. WirePlumber                         [1.4.2, framelink@framelink-mule, pid:1069]\n"
+        + "        34. pipewire                            [1.4.2, framelink@framelink-mule, pid:1070]\n"
+        + "        52. gst-launch-1.0                      [1.4.2, framelink@framelink-mule, pid:1067]\n"
+        + "        58. xdg-desktop-portal                  [1.4.2, framelink@framelink-mule, pid:1401]\n"
+        + "\n"
+        + "Audio\n"
+        + " ├─ Devices:\n"
+        + " │      43. reSpeaker XVF3800 4-Mic Array       [alsa]\n"
+        + " │  \n"
+        + " ├─ Sinks:\n"
+        + " │  *   48. reSpeaker XVF3800 4-Mic Array Analog Stereo [vol: 1.00]\n"
+        + " │  \n"
+        + " ├─ Sources:\n"
+        + " │  *   45. reSpeaker XVF3800 4-Mic Array Analog Stereo [vol: 1.00]\n"
+        + " │  \n"
+        + " ├─ Filters:\n"
+        + " │  \n"
+        + " └─ Streams:\n"
+        + "\n"
+        + "Video\n"
+        + " ├─ Devices:\n"
+        + " │  \n"
+        + " ├─ Sinks:\n"
+        + " │  \n"
+        + " ├─ Sources:\n"
+        + " │  *   56. FrameLinkCam                       \n"
+        + " │  \n"
+        + " ├─ Filters:\n"
+        + " │  \n"
+        + " └─ Streams:\n"
+        + "\n"
+        + "Settings\n"
+        + " └─ Default Configured Devices:\n";
+
+    /// <summary>
+    /// The same frame in the seconds before WirePlumber has built anything.
+    /// </summary>
+    /// <remarks>
+    /// <b>Derived from <see cref="Settled"/>, not captured</b> — reproducing the state would
+    /// mean rebooting a converged frame, which nothing here is allowed to do. What it is derived
+    /// from <i>is</i> measured: the frame's user journal for the cascade of 2026-08-19 has
+    /// <c>wireplumber.service</c> started at 03:03:27.642 and its device monitors still loading at
+    /// 03:03:31.049, so a graph with no <c>Audio</c> device and no default sink is the state a pass
+    /// landing in that window asks about. The entries WirePlumber has not created yet are the only
+    /// difference; the skeleton, the tree characters and the section order are the capture's.
+    /// </remarks>
+    internal const string Unsettled =
+        "PipeWire 'pipewire-0' [1.4.2, framelink@framelink-mule, cookie:3177108782]\n"
+        + " └─ Clients:\n"
+        + "        33. WirePlumber                         [1.4.2, framelink@framelink-mule, pid:1069]\n"
+        + "        34. pipewire                            [1.4.2, framelink@framelink-mule, pid:1070]\n"
+        + "\n"
+        + "Audio\n"
+        + " ├─ Devices:\n"
+        + " │  \n"
+        + " ├─ Sinks:\n"
+        + " │  \n"
+        + " ├─ Sources:\n"
+        + " │  \n"
+        + " ├─ Filters:\n"
+        + " │  \n"
+        + " └─ Streams:\n"
+        + "\n"
+        + "Video\n"
+        + " ├─ Devices:\n"
+        + " │  \n"
+        + " ├─ Sinks:\n"
+        + " │  \n"
+        + " ├─ Sources:\n"
+        + " │  \n"
+        + " ├─ Filters:\n"
+        + " │  \n"
+        + " └─ Streams:\n"
+        + "\n"
+        + "Settings\n"
+        + " └─ Default Configured Devices:\n";
+}

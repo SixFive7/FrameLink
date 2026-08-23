@@ -875,12 +875,14 @@ public sealed class WirePlumberVolumeResource : IResource
     private readonly SessionAudio _session;
     private readonly IUserSession _shell;
     private readonly AlsaMixer _mixer;
+    private readonly ISystemFiles _files;
     private readonly MixerVolumeResource _stage;
 
     /// <summary>Creates the resource over the playback stage whose level it must agree with.</summary>
     /// <param name="session">The second owner's state, for the observed text and the gate.</param>
     /// <param name="shell">How <c>wpctl</c> is run inside the login user's session.</param>
     /// <param name="mixer">The card, for "is there any sound hardware here at all".</param>
+    /// <param name="files">The filesystem, for <see cref="MediaGraphGate"/>'s escape.</param>
     /// <param name="stage">
     /// The stereo playback resource. Taken as the resource rather than as a copy of its number so
     /// that a fleet override arriving mid-life moves both owners together — two copies of a desired
@@ -890,16 +892,19 @@ public sealed class WirePlumberVolumeResource : IResource
         SessionAudio session,
         IUserSession shell,
         AlsaMixer mixer,
+        ISystemFiles files,
         MixerVolumeResource stage)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(shell);
         ArgumentNullException.ThrowIfNull(mixer);
+        ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(stage);
 
         _session = session;
         _shell = shell;
         _mixer = mixer;
+        _files = files;
         _stage = stage;
     }
 
@@ -1010,6 +1015,16 @@ public sealed class WirePlumberVolumeResource : IResource
         if (await _session.NotSettledAsync(expected, cancellationToken).ConfigureAwait(false) is { } waiting)
         {
             return waiting;
+        }
+
+        // And ahead of the wpctl call for the same reason one rung down: a running WirePlumber that
+        // has not built its graph yet has no default sink, so @DEFAULT_AUDIO_SINK@ names nothing
+        // and there is no level to be right or wrong. Measured on the frame — this resource reached
+        // attempts=3 on two nights answering that question seconds after a boot.
+        if (await MediaGraphGate.NotSettledAsync(_shell, _files, expected, cancellationToken).ConfigureAwait(false)
+            is { } settling)
+        {
+            return settling;
         }
 
         var result = await _shell
@@ -1620,7 +1635,7 @@ public static class AudioCatalog
             // otherwise the stage spends its whole budget losing an argument nobody has had yet.
             // The declaration order is only the reading order; the DAG edge on pcm0Volume is what
             // actually enforces it.
-            new WirePlumberVolumeResource(session, context.Session, mixer, pcm0Volume),
+            new WirePlumberVolumeResource(session, context.Session, mixer, context.Files, pcm0Volume),
 
             pcm0Volume,
             pcm1Volume,

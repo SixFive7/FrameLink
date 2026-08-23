@@ -84,6 +84,12 @@ public sealed class AgentCameraTests
         + " │  \n"
         + " └─ Streams:\n";
 
+    /// <summary>The whole capture, shared with the audio block's tests.</summary>
+    private const string WpctlSettled = WpctlCaptures.Settled;
+
+    /// <summary>The same frame before WirePlumber has built anything.</summary>
+    private const string WpctlUnsettled = WpctlCaptures.Unsettled;
+
     /// <summary>What a frame whose WirePlumber fragment never loaded looks like.</summary>
     private const string WpctlWithStockCamera =
         "Video\n"
@@ -157,7 +163,7 @@ public sealed class AgentCameraTests
     public async Task The_camera_node_is_in_sync_only_when_it_is_the_one_camera()
     {
         var session = new FakeUserSession();
-        var resource = new CameraNodeResource(session);
+        var resource = new CameraNodeResource(session, NoSoundHardware());
 
         session.Answers["wpctl status"] = new ProcessResult(0, WpctlWithCamera, string.Empty);
         Assert.True((await resource.ObserveAsync(None)).InSync);
@@ -182,7 +188,7 @@ public sealed class AgentCameraTests
         // gst-launch is hung in shutdown and the node is gone, so the Act is a restart rather than
         // anything to do with the unit file.
         var session = new FakeUserSession();
-        var resource = new CameraNodeResource(session);
+        var resource = new CameraNodeResource(session, NoSoundHardware());
 
         var action = await resource.ActAsync(None);
 
@@ -194,7 +200,7 @@ public sealed class AgentCameraTests
     public async Task A_wpctl_that_cannot_be_run_is_drift_and_not_an_unevaluable_observation()
     {
         var session = new FakeUserSession { Default = new ProcessResult(127, string.Empty, "wpctl: command not found") };
-        var observation = await new CameraNodeResource(session).ObserveAsync(None);
+        var observation = await new CameraNodeResource(session, NoSoundHardware()).ObserveAsync(None);
 
         // Unevaluable is reserved for an authority off the device that did not answer. A local read
         // that failed has learned something real, and must escalate on the ordinary schedule.
@@ -532,6 +538,97 @@ public sealed class AgentCameraTests
 
         Assert.Equal(CameraUnitResource.UnitName, Supervisor.CameraUnitName);
     }
+
+    [Fact]
+    public void The_default_marker_is_read_off_the_line_the_name_is_trimmed_out_of()
+    {
+        // `*` is one of the tree characters Entries trims away, so the two questions cannot share
+        // an answer: DefaultOf has to see the raw line. `@DEFAULT_AUDIO_SINK@` resolves to exactly
+        // the entry carrying that marker, which is why its absence is a readable fact rather than
+        // an inference.
+        Assert.Equal(
+            "reSpeaker XVF3800 4-Mic Array Analog Stereo",
+            WpctlStatus.DefaultOf(WpctlSettled, WpctlStatus.Audio, WpctlStatus.Sinks));
+
+        Assert.Equal("FrameLinkCam", WpctlStatus.DefaultOf(WpctlSettled, WpctlStatus.Video, WpctlStatus.Sources));
+
+        // The stock-camera capture has two video sources and marks one. A parser that returned the
+        // first entry rather than the marked one would name imx708 (V4L2).
+        Assert.Equal("FrameLinkCam", WpctlStatus.DefaultOf(WpctlWithStockCamera, WpctlStatus.Video, WpctlStatus.Sources));
+
+        Assert.Null(WpctlStatus.DefaultOf(WpctlUnsettled, WpctlStatus.Audio, WpctlStatus.Sinks));
+        Assert.Null(WpctlStatus.DefaultOf(WpctlSettled, WpctlStatus.Video, WpctlStatus.Devices));
+    }
+
+    [Fact]
+    public async Task A_wireplumber_that_has_not_built_its_graph_yet_is_not_a_missing_camera()
+    {
+        // The measured cascade, one boot of it. `PipeWire is offering no camera at all` was the
+        // frame's own delta seconds after a boot, and it is drift, so it was acted on, and §2.4
+        // makes acting reboot — which starts the next boot, which asks too early again. Six reboots
+        // on the worst night.
+        var session = new FakeUserSession();
+        var resource = new CameraNodeResource(session, WithSoundHardware());
+
+        session.Answers["wpctl status"] = new ProcessResult(0, WpctlUnsettled, string.Empty);
+        var settling = await resource.ObserveAsync(None);
+
+        Assert.Equal(ObservationOutcome.Unevaluable, settling.Outcome);
+        Assert.Contains("has not published a media graph yet", settling.Observed, StringComparison.Ordinal);
+
+        // The delta says "could not be determined" rather than "observed", which is the half of the
+        // fix that reaches the operator: the other wording sends somebody hunting a camera fault
+        // that does not exist.
+        Assert.Contains("could not be determined", settling.Delta, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_camera_that_is_genuinely_missing_from_a_built_graph_is_still_drift()
+    {
+        // The trap this gate had to avoid: a resource whose job is to assert the camera node exists
+        // cannot be gated on the camera node existing, or it can never report anything. So the gate
+        // reads the audio half — and a graph WirePlumber has finished building, with an array in it
+        // and no camera, reports exactly what it did before.
+        var session = new FakeUserSession();
+        var resource = new CameraNodeResource(session, WithSoundHardware());
+
+        session.Answers["wpctl status"] = new ProcessResult(0, WpctlAudioOnly, string.Empty);
+        var missing = await resource.ObserveAsync(None);
+
+        Assert.Equal(ObservationOutcome.Drifted, missing.Outcome);
+        Assert.Contains("no camera at all", missing.Observed, StringComparison.Ordinal);
+
+        // And a settled graph with the node in it is in sync, gate or no gate.
+        session.Answers["wpctl status"] = new ProcessResult(0, WpctlSettled, string.Empty);
+        Assert.True((await resource.ObserveAsync(None)).InSync);
+    }
+
+    [Fact]
+    public async Task A_frame_with_no_sound_hardware_does_not_wait_behind_an_audio_fact()
+    {
+        // §5.3's virtual agents have no ALSA at all, so the graph's audio half is empty for ever
+        // and the gate would never open. The escape is LoginUserSession.ReadinessAsync's: report
+        // settled, and let the resource say what it genuinely finds.
+        var session = new FakeUserSession();
+        var resource = new CameraNodeResource(session, NoSoundHardware());
+
+        session.Answers["wpctl status"] = new ProcessResult(0, WpctlUnsettled, string.Empty);
+        var observation = await resource.ObserveAsync(None);
+
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+        Assert.Contains("no camera at all", observation.Observed, StringComparison.Ordinal);
+    }
+
+    /// <summary>A machine whose kernel is publishing an ALSA card.</summary>
+    private static MemorySystemFiles WithSoundHardware()
+    {
+        var files = new MemorySystemFiles();
+        files[AlsaCards.CardsPath] = " 0 [Array          ]: USB-Audio - reSpeaker XVF3800 4-Mic Array\n";
+        return files;
+    }
+
+    /// <summary>A machine with no ALSA at all — §5.3's virtual agent.</summary>
+    private static MemorySystemFiles NoSoundHardware() => new();
 
     private static string Sha256(string content) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLower(CultureInfo.InvariantCulture);

@@ -466,7 +466,7 @@ public static class DeviceCatalog
         new CameraUnitEnabledResource(context.Session),
         new PortalCameraPermissionResource(context.Session),
         new PortalCameraInterfaceResource(context.Session),
-        new CameraNodeResource(context.Session),
+        new CameraNodeResource(context.Session, context.Files),
     ];
 
     /// <summary>Builds the set and validates its ordering (§2.2).</summary>

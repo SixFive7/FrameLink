@@ -1490,6 +1490,51 @@ public sealed class AgentAudioTests
     }
 
     [Fact]
+    public async Task A_wireplumber_with_no_default_sink_yet_is_not_a_frame_that_is_too_quiet()
+    {
+        // The measured cascade's other half, and the resource that reached attempts=3 on both
+        // cascade nights — one rung from giving up. `wpctl get-volume @DEFAULT_AUDIO_SINK@` answers
+        // an empty string while the token translates to -1, and the empty answer read as drift, so
+        // it was acted on, and §2.4 makes acting reboot, and the next boot asks just as early.
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+
+        session.Answers["wpctl status"] = new ProcessResult(0, WpctlCaptures.Unsettled, string.Empty);
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var block = Audio(files, processes, session: session);
+        var observation = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.Equal(ObservationOutcome.Unevaluable, observation.Outcome);
+        Assert.Contains("has not published a media graph yet", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("could not be determined", observation.Delta, StringComparison.Ordinal);
+
+        // The gate is ahead of the read, so the question is not asked at all — which is what stops
+        // the Act that follows it being refused with "Translate ID error: '-1' is not a valid ID".
+        Assert.DoesNotContain("wpctl get-volume @DEFAULT_AUDIO_SINK@", session.Commands, StringComparer.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_built_graph_that_still_answers_nothing_is_drift_and_not_silence()
+    {
+        // The guard on the fix. Once WirePlumber has a device and a default sink, an empty answer
+        // has learned something real about this machine and must escalate on the ordinary schedule
+        // — this outcome must never become the place a real failure goes to be quiet.
+        using var files = new TemporaryFiles();
+        var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
+        var session = new FakeUserSession();
+
+        session.Answers["wpctl get-volume @DEFAULT_AUDIO_SINK@"] = new ProcessResult(0, string.Empty, string.Empty);
+
+        var block = Audio(files, processes, session: session);
+        var observation = await Observe(block, WirePlumberVolumeResource.ResourceName);
+
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+        Assert.Contains("carries no volume", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task One_fleet_setting_moves_both_owners_of_the_speaker_level_together()
     {
         // The whole reason this is a second resource rather than a second copy of a number. Two
@@ -1644,10 +1689,18 @@ public sealed class AgentAudioTests
         FakeUserSession? session = null,
         ManualClock? clock = null)
     {
+        var shell = session ?? new FakeUserSession();
+
+        // A frame whose WirePlumber has finished starting, unless the test says otherwise. Every
+        // test in this block is about a *settled* frame — a mixer value, a route volume, a stored
+        // state file — so the graph MediaGraphGate reads is scripted here rather than in each of
+        // them, and TryAdd leaves the one test that scripts an unbuilt graph alone.
+        shell.Answers.TryAdd("wpctl status", new ProcessResult(0, WpctlCaptures.Settled, string.Empty));
+
         var context = AgentResourceGraphTests.Context(files) with
         {
             Processes = processes,
-            Session = session ?? new FakeUserSession(),
+            Session = shell,
             Values = values ?? FleetValues.None,
             Clock = clock ?? new ManualClock(),
         };
