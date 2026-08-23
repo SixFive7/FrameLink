@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.cards/1",
   "generatedBy": "tools/harness/fl.py cards",
-  "updatedUtc": "2026-08-23T17:49:05Z",
+  "updatedUtc": "2026-08-23T19:56:58Z",
   "readMeFirst": [
     "This is the FrameLink SD card register. There are three physical microSD cards and none of them is marked, so this file is the only way to answer 'which card is where and what is on it' without a human squinting at a card. It is written by `python tools/harness/fl.py cards` and is pointed at from progress.json's orientation block.",
     "Run `python tools/harness/fl.py cards check` first. It reads whatever card is in the workstation's USB reader and compares it against what this file claims is in there. Exit 0 means the register and reality agree. Exit 2 means they do not, and the register is then not to be trusted until someone works out which of the two is wrong.",
@@ -20,7 +20,7 @@
     {
       "id": "v1",
       "title": "The original v1 frame's system card",
-      "handling": "IRREPLACEABLE. Never flash it, never format it, never let a flashing tool resolve to it, and do not mount it writable. It is the only surviving v1 system, and reference/v1-state-inventory.txt is a capture taken from the machine it ran - captures cannot be re-taken once their source is gone.",
+      "handling": "Imaged, not yet redundant. Image 'v1-card-2026-08-23' is a full raw byte-for-byte capture of this card - 128,177,930,240 bytes, every sector including unallocated space, sha256 46703e3bdab19d8b7c3f4d0a5543cd5ae8d0fcb62666ef3203fef3e6beab0ecd, verified by a second full read of the card through a new handle, hashed independently, compared against a third independent hash of the written file. It exists in exactly one place (pc657: C:\\Source\\SixFive7\\FrameLink\\archive\\v1-card-2026-08-23\\framelink-v1-card.img), and one file on one disk is a copy rather than a backup - so until a second medium holds it, this card is still the only durable copy of the v1 system. Never flash it, never format it, never let a flashing tool resolve to it, and do not mount it writable. Record the second copy with `fl.py cards image --image v1-card-2026-08-23 --add-copy '<where>'`; this text is derived from that list and will change on its own when it does.",
       "location": {
         "kind": "reader",
         "where": "workstation pc657, USB card reader, disk 3",
@@ -29,7 +29,7 @@
       },
       "contents": {
         "summary": "The v1 frame's complete system as it ran before this project began. This is the origin of the parity target: reference/v1-state-inventory.txt was captured from the machine that booted this card.",
-        "imageId": null,
+        "imageId": "v1-card-2026-08-23",
         "agentVersion": null,
         "os": "Raspberry Pi OS, written by Raspberry Pi Imager - the captured cmdline carries ds=nocloud;i=rpi-imager-1776005232619",
         "rootDevice": "/dev/mmcblk0p2, ext4, mounted rw,noatime (v1 inventory, GOVERNOR_ZRAM_TMPFS section)"
@@ -80,6 +80,14 @@
           "kind": "reader",
           "where": "workstation pc657, USB card reader, disk 3",
           "why": "Operator swapped the v1 card into the reader to harvest the v1 system before it is ever reused. Verified on arrival by fingerprint: mbrSignature f870549c matches the value derived from reference/v1-state-inventory.txt's root=PARTUUID=f870549c-02, and the card carries the expected FAT32 bootfs + Linux pair."
+        },
+        {
+          "utc": "2026-08-23T19:56:58Z",
+          "from": "workstation pc657, USB card reader, disk 3",
+          "kind": "reader",
+          "where": "workstation pc657, USB card reader, disk 3",
+          "imageId": "v1-card-2026-08-23",
+          "why": "Not a move. A full raw image of this card was taken read-only by tools/harness/image-v1-card.ps1 and recorded here. The card did not leave the reader and nothing was written to it."
         }
       ]
     },
@@ -215,6 +223,220 @@
       "flashedBy": "C:/Users/jori/framelink-scratch/m25-image/flash-card.ps1, from an elevated PowerShell. It names its target by bus type, model, exact capacity and USBSTOR identity - never by drive letter or disk number - and refuses on zero matches or on more than one.",
       "source": "framelink-scratch/m25-image/build-progress.log and base-image-prepare.log for the provenance; sizeBytes, sha256, mbrSignature and partitions were re-measured from the file itself on 2026-08-23 and agreed with the log.",
       "warning": "The generator writes files INTO the base image and does not repartition, so this image carries the BASE image's MBR signature. Every card written from any image built on the 2026-06-18 base therefore carries 041bba91, and after a flash mbrSignature can no longer tell two such cards apart. That is what the marker file in `fl.py cards label` is for."
+    },
+    "v1-card-2026-08-23": {
+      "summary": "A full raw image of card 'v1' - The original v1 frame's system card. Every sector of the card, unallocated space included, uncompressed and in card order, so it restores by being written back byte for byte.",
+      "kind": "capture",
+      "of": "v1",
+      "format": "raw, uncompressed, whole device including the MBR and all unallocated space",
+      "path": "C:\\Source\\SixFive7\\FrameLink\\archive\\v1-card-2026-08-23\\framelink-v1-card.img",
+      "sizeBytes": 128177930240,
+      "sha256": "46703e3bdab19d8b7c3f4d0a5543cd5ae8d0fcb62666ef3203fef3e6beab0ecd",
+      "mbrSignature": "f870549c",
+      "partitions": [
+        {
+          "index": 1,
+          "mbrType": 12,
+          "offsetBytes": 8388608,
+          "sizeBytes": 536870912
+        },
+        {
+          "index": 2,
+          "mbrType": 131,
+          "offsetBytes": 545259520,
+          "sizeBytes": 127632670720
+        }
+      ],
+      "capturedUtc": "2026-08-23T18:21:20Z",
+      "completedUtc": "2026-08-23T19:27:04Z",
+      "durationSeconds": 3944.3,
+      "capturedBy": "tools/harness/image-v1-card.ps1",
+      "workstation": "pc657",
+      "device": {
+        "path": "\\\\.\\PhysicalDrive3",
+        "number": 3,
+        "uniqueId": "USBSTOR\\DISK&VEN_REALSIL&PROD_RTSUERLUN0&REV_1.00\\0000:pc657",
+        "friendlyName": "Generic- USB3.0 CRW    -0",
+        "capacityBytes": 128177930240,
+        "shareMode": "Read",
+        "access": "Read"
+      },
+      "sourceFingerprint": {
+        "mbrSignature": "f870549c",
+        "capacityBytes": 128177930240,
+        "partitionStyle": "MBR",
+        "partitions": [
+          {
+            "index": 1,
+            "mbrType": 12,
+            "offsetBytes": 8388608,
+            "sizeBytes": 536870912
+          },
+          {
+            "index": 2,
+            "mbrType": 131,
+            "offsetBytes": 545259520,
+            "sizeBytes": 127632670720
+          }
+        ],
+        "volumeSerials": [
+          "EACA13DA"
+        ],
+        "volumeLabels": [
+          "bootfs"
+        ],
+        "filesystems": [
+          "FAT32"
+        ],
+        "marker": null
+      },
+      "verified": true,
+      "verification": {
+        "method": "a second full read of the card through a new handle, hashed independently, compared against a third independent hash of the written file",
+        "cardSha256FirstPass": "46703e3bdab19d8b7c3f4d0a5543cd5ae8d0fcb62666ef3203fef3e6beab0ecd",
+        "cardSha256SecondPass": "46703e3bdab19d8b7c3f4d0a5543cd5ae8d0fcb62666ef3203fef3e6beab0ecd",
+        "fileSha256": "46703e3bdab19d8b7c3f4d0a5543cd5ae8d0fcb62666ef3203fef3e6beab0ecd",
+        "allAgree": true,
+        "skipped": false,
+        "verifiedUtc": "2026-08-23T19:27:04Z"
+      },
+      "copies": [
+        {
+          "where": "pc657: C:\\Source\\SixFive7\\FrameLink\\archive\\v1-card-2026-08-23\\framelink-v1-card.img",
+          "medium": "workstation internal disk",
+          "recordedUtc": "2026-08-23T19:56:58Z"
+        }
+      ],
+      "restore": "It is a whole-disk image including the MBR, so it is written back to a card with any raw writer - `dd if=<image> of=/dev/sdX bs=4M status=progress` on Linux, or Raspberry Pi Imager's 'Use custom' on Windows - onto a card of at least 128,177,930,240 bytes. On Linux it also mounts without being restored: `losetup -Pfr --show <image>` attaches it read-only with its partitions.",
+      "recordedUtc": "2026-08-23T19:56:58Z",
+      "recordedFrom": "C:\\Users\\jori\\framelink-scratch\\v1-card-image\\framelink-v1-card.receipt.json",
+      "gate": {
+        "schema": "framelink.harness.cards.gate/1",
+        "checkedUtc": "2026-08-23T18:21:17Z",
+        "cardId": "v1",
+        "required": [
+          "mbrSignature",
+          "capacityBytes",
+          "partitions"
+        ],
+        "ok": true,
+        "refusals": [],
+        "usbDisks": [
+          {
+            "number": 3,
+            "uniqueId": "USBSTOR\\DISK&VEN_REALSIL&PROD_RTSUERLUN0&REV_1.00\\0000:pc657",
+            "friendlyName": "Generic- USB3.0 CRW    -0",
+            "model": "SDXC Card",
+            "capacityBytes": 128177930240,
+            "mbrSignature": "f870549c",
+            "operationalStatus": "Online",
+            "isReadOnly": false
+          }
+        ],
+        "readerMatch": "matched the register's reader uniqueId USBSTOR\\DISK&VEN_REALSIL&PROD_RTSUERLUN0&REV_1.00\\0000:pc657",
+        "disk": {
+          "number": 3,
+          "devicePath": "\\\\.\\PhysicalDrive3",
+          "uniqueId": "USBSTOR\\DISK&VEN_REALSIL&PROD_RTSUERLUN0&REV_1.00\\0000:pc657",
+          "friendlyName": "Generic- USB3.0 CRW    -0",
+          "model": "SDXC Card",
+          "capacityBytes": 128177930240,
+          "partitionStyle": "MBR",
+          "operationalStatus": "Online",
+          "isReadOnly": false
+        },
+        "registered": {
+          "mbrSignature": "f870549c",
+          "capacityBytes": 128177930240,
+          "partitionStyle": "MBR",
+          "partitions": [
+            {
+              "index": 1,
+              "mbrType": 12,
+              "offsetBytes": 8388608,
+              "sizeBytes": 536870912
+            },
+            {
+              "index": 2,
+              "mbrType": 131,
+              "offsetBytes": 545259520,
+              "sizeBytes": 127632670720
+            }
+          ],
+          "volumeSerials": [
+            "EACA13DA"
+          ],
+          "volumeLabels": [
+            "bootfs"
+          ],
+          "filesystems": [
+            "FAT32"
+          ],
+          "marker": null,
+          "source": "reference/v1-state-inventory.txt line 20 - `root=PARTUUID=f870549c-02`, which is this card's own cmdline.txt as captured from the running v1 frame. A PARTUUID's prefix IS the MBR disk signature, so the value is the card's even though the card has never been put in a reader. The same string is asserted in tests/FrameLink.Tests/AgentReliabilityTests.cs, so it is regression-held.",
+          "capturedUtc": "2026-08-23T17:49:05Z",
+          "capturedBy": "fl.py cards identify"
+        },
+        "observed": {
+          "mbrSignature": "f870549c",
+          "capacityBytes": 128177930240,
+          "partitionStyle": "MBR",
+          "partitions": [
+            {
+              "index": 1,
+              "mbrType": 12,
+              "offsetBytes": 8388608,
+              "sizeBytes": 536870912
+            },
+            {
+              "index": 2,
+              "mbrType": 131,
+              "offsetBytes": 545259520,
+              "sizeBytes": 127632670720
+            }
+          ],
+          "volumeSerials": [
+            "EACA13DA"
+          ],
+          "volumeLabels": [
+            "bootfs"
+          ],
+          "filesystems": [
+            "FAT32"
+          ],
+          "marker": null
+        },
+        "verdict": {
+          "agreed": [
+            "mbrSignature",
+            "volumeSerials",
+            "volumeLabels",
+            "partitions",
+            "capacityBytes"
+          ],
+          "differed": [],
+          "notRecorded": [
+            "marker"
+          ],
+          "matches": true,
+          "strength": "consistent"
+        },
+        "consistentWith": [
+          {
+            "cardId": "v1",
+            "strength": "consistent",
+            "agreed": [
+              "mbrSignature",
+              "volumeSerials",
+              "volumeLabels",
+              "partitions",
+              "capacityBytes"
+            ]
+          }
+        ],
+        "handling": "IRREPLACEABLE. Never flash it, never format it, never let a flashing tool resolve to it, and do not mount it writable. It is the only surviving v1 system, and reference/v1-state-inventory.txt is a capture taken from the machine it ran - captures cannot be re-taken once their source is gone.",
+        "contents": "The v1 frame's complete system as it ran before this project began. This is the origin of the parity target: reference/v1-state-inventory.txt was captured from the machine that booted this card."
+      }
     }
   },
   "identityFields": {
