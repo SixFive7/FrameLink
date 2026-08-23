@@ -67,8 +67,14 @@
         "flashedUtc": "approximately 2026-08-16, as stated by the operator",
         "liveState": "tools/harness/progress.json is written continuously and is authoritative for what this system is doing. This register deliberately does not duplicate it - a second copy of a moving number is a second copy that goes stale."
       },
-      "fingerprint": {},
-      "fingerprintNote": "NOT CAPTURED - this card cannot be recognised in a reader, and `cards check` says so rather than pretending. Capturing it needs no card handling and does not disturb the frame: read /proc/cmdline over SSH and take the prefix of root=PARTUUID=, which IS the MBR disk signature. That needs FL_PW; do it at the next session that has one, and `fl.py cards identify` can then recognise this card if it ever reaches the reader.",
+      "fingerprint": {
+        "mbrSignature": "c6a4cdf4",
+        "capacityBytes": 128177930240,
+        "sdCid": "1b534d4544325338305d5254f4a19b00",
+        "sdName": "ED2S8",
+        "sdSerial": "0x5d5254f4"
+      },
+      "fingerprintNote": "Captured 2026-08-23 over SSH from the running frame, disturbing nothing. mbrSignature is the prefix of root=PARTUUID=c6a4cdf4-02 in /proc/cmdline. The sdCid/sdName/sdSerial fields come from /sys/block/mmcblk0/device/ and are the SD card's OWN factory identity - unique to the physical card, unlike every other field here, which belongs to the image or to whoever formatted it. They are readable only from a Pi: this project's USB reader does not pass the CID through, so `cards identify` in the reader can never see them. They are recorded because they are the only field that would still identify this card after a reflash changed everything else about it.",
       "history": [
         {
           "utc": "2026-08-23T16:28:04Z",
@@ -76,6 +82,13 @@
           "kind": "frame",
           "where": "Frame #1 - 10.20.30.53, Home Assistant switch.wall_plug_25",
           "why": "Register created. Position is as stated by the operator on this date and was not observed by the harness."
+        },
+        {
+          "utc": "2026-08-23T16:52:00Z",
+          "from": "frame",
+          "kind": "frame",
+          "where": "Frame #1 - 10.20.30.53, Home Assistant switch.wall_plug_25",
+          "why": "Not a move. Fingerprint captured over SSH from the running frame - PARTUUID from /proc/cmdline and the card's own CID from sysfs. The card did not leave the frame and the frame was not disturbed."
         }
       ]
     },
