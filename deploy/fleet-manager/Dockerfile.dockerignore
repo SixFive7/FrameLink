@@ -45,3 +45,21 @@ docs
 research
 reference
 *.md
+
+# The v1 card image. 120 GB of it, measured 2026-08-24.
+#
+# This one is not tidiness and it is not an optimisation - without it `docker build` cannot
+# complete at all, because the context is uploaded to the daemon before the first instruction
+# runs. .gitignore already covers archive/, but Docker has never read .gitignore, and BuildKit
+# reads THIS file in preference to a context-root .dockerignore, so a rule written anywhere
+# else would not apply to this image. The directory was created after the last image build,
+# which is why nothing noticed.
+archive
+
+# Intermediates of the *agent* build. build/out is deliberately in the context - it is where
+# the agent binaries the Fleet Manager serves are staged - but only build/out/<rid>/ is ever
+# read, by the staging loop in the Dockerfile. artifacts/ is 167 MB of MSBuild output
+# including a 50 MB .o and a 16 MB .dbg, and publish/ is another 27 MB of the same ELF under
+# a different name; both are uploaded on every image build and opened by none of it.
+build/out/artifacts
+build/out/publish
