@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.cards/1",
   "generatedBy": "tools/harness/fl.py cards",
-  "updatedUtc": "2026-08-23T16:28:05Z",
+  "updatedUtc": "2026-08-23T17:37:25Z",
   "readMeFirst": [
     "This is the FrameLink SD card register. There are three physical microSD cards and none of them is marked, so this file is the only way to answer 'which card is where and what is on it' without a human squinting at a card. It is written by `python tools/harness/fl.py cards` and is pointed at from progress.json's orientation block.",
     "Run `python tools/harness/fl.py cards check` first. It reads whatever card is in the workstation's USB reader and compares it against what this file claims is in there. Exit 0 means the register and reality agree. Exit 2 means they do not, and the register is then not to be trusted until someone works out which of the two is wrong.",
@@ -22,10 +22,10 @@
       "title": "The original v1 frame's system card",
       "handling": "IRREPLACEABLE. Never flash it, never format it, never let a flashing tool resolve to it, and do not mount it writable. It is the only surviving v1 system, and reference/v1-state-inventory.txt is a capture taken from the machine it ran - captures cannot be re-taken once their source is gone.",
       "location": {
-        "kind": "desk",
-        "where": "operator's desk, loose and unmarked",
-        "sinceUtc": null,
-        "statedBy": "operator, 2026-08-23 - stated, not observed by the harness"
+        "kind": "reader",
+        "where": "workstation pc657, USB card reader, disk 3",
+        "sinceUtc": "2026-08-23T17:37:25Z",
+        "statedBy": "operator"
       },
       "contents": {
         "summary": "The v1 frame's complete system as it ran before this project began. This is the origin of the parity target: reference/v1-state-inventory.txt was captured from the machine that booted this card.",
@@ -47,6 +47,13 @@
           "kind": "desk",
           "where": "operator's desk, loose and unmarked",
           "why": "Register created. Position is as stated by the operator on this date and was not observed by the harness; the fingerprint is derived from the committed v1 capture."
+        },
+        {
+          "utc": "2026-08-23T17:37:25Z",
+          "from": "operator's desk, loose and unmarked",
+          "kind": "reader",
+          "where": "workstation pc657, USB card reader, disk 3",
+          "why": "Operator swapped the v1 card into the reader to harvest the v1 system before it is ever reused. Verified on arrival by fingerprint: mbrSignature f870549c matches the value derived from reference/v1-state-inventory.txt's root=PARTUUID=f870549c-02, and the card carries the expected FAT32 bootfs + Linux pair."
         }
       ]
     },
@@ -97,10 +104,10 @@
       "title": "The unflashed spare",
       "handling": "The only one of the three cards that may be written to. It has never been flashed, so nothing on it is worth keeping - but confirm with `fl.py cards check` before any flash, because a wrong answer here overwrites either the v1 system or a running frame.",
       "location": {
-        "kind": "reader",
-        "where": "workstation pc657, USB card reader, disk 3, drive F:",
-        "sinceUtc": "2026-08-23T16:28:04Z",
-        "statedBy": "harness - observed on this date"
+        "kind": "desk",
+        "where": "operator's desk, loose and unmarked",
+        "sinceUtc": "2026-08-23T17:36:52Z",
+        "statedBy": "operator"
       },
       "contents": {
         "summary": "Nothing. One factory exFAT partition with no label; 128,143,589,376 of 128,144,375,808 bytes free, the 786,432-byte difference being exFAT's own allocation bitmap and upcase table. Never flashed.",
@@ -141,6 +148,13 @@
           "kind": "reader",
           "where": "workstation pc657, USB card reader, disk 3, drive F:",
           "why": "Register created. This is the one position the harness observed directly: the fingerprint beside it was read from the card in the reader."
+        },
+        {
+          "utc": "2026-08-23T17:36:52Z",
+          "from": "workstation pc657, USB card reader, disk 3, drive F:",
+          "kind": "desk",
+          "where": "operator's desk, loose and unmarked",
+          "why": "Swapped out of the reader to make room for the v1 card. Still never flashed."
         }
       ]
     }
