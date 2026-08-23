@@ -1192,6 +1192,19 @@ release on a permanently unreachable probe, and leaving it out would have made a
 indistinguishable from one nobody has. It watches a *path*, never a branch, because the artifact
 moving and the repository moving are different events and only the first one is news.
 
+**That upstream's defects are written down rather than rediscovered every time somebody meets
+them.** `reference/upstream-respeaker-xvf3800.md` is the durable record: zero releases and zero
+tags in 35 commits, one firmware filename published twice with 43% of its bytes changed, no licence
+file in any commit, a firmware source repository that does not exist in public and reports itself
+built from a modified tree, nine images in one directory where the suffix names the departure and
+the default is unnamed, a prebuilt control tool whose command map has not been rebuilt since
+2025-07-04 and is therefore missing four commands the firmware has since gained, and what the three
+upstream issues this repository cites actually say as against how they are usually summarised. It
+carries the rules those findings force — pin by commit and digest, probe the file path, treat the
+version string as a label rather than an identity, corroborate before believing a filename — and
+the places where this repository's own notes claim more than they measured. Every fact in it was
+re-measured against the live upstream on 2026-08-24.
+
 **No build, test or publish invokes it, and that is the point.** An upstream publishing something
 overnight must not interrupt ordinary work, so the probes live outside every automated path and a
 test asserts that no build file mentions the tool. What *does* run on every build is the offline
