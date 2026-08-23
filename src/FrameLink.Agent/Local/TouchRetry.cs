@@ -4,6 +4,24 @@ using FrameLink.Agent.State;
 
 namespace FrameLink.Agent.Local;
 
+/// <summary>
+/// Something more urgent than the retry, asking for the same hold.
+/// </summary>
+/// <param name="Purpose">What a completed hold would do, for the journal.</param>
+/// <param name="Hold">How long the finger stays down, which need not be the retry's three seconds.</param>
+/// <param name="Confirm">What a completed hold does.</param>
+/// <remarks>
+/// <b>One reader, more than one meaning, and the precedence written down rather than assumed.</b>
+/// The panel has one evdev node and the agent opens it once; a second watcher on the same device
+/// would be a second input path, a second poll loop and a second published state, and the two would
+/// eventually disagree about whether a finger was down. So the reader stays exactly as it was and
+/// what a completed hold <i>means</i> is resolved here: an ask outranks the retry, always, because
+/// an ask is on the screen and the retry is not — a person holding the panel is answering the
+/// sentence in front of them, and there must be no arrangement of state in which the frame does
+/// something other than what it just said it would do.
+/// </remarks>
+public sealed record TouchAsk(string Purpose, TimeSpan Hold, Action Confirm);
+
 /// <summary>Everything the touch retry needs.</summary>
 public sealed record TouchRetryServices
 {
@@ -32,6 +50,18 @@ public sealed record TouchRetryServices
 
     /// <summary>What a completed hold does.</summary>
     public required Action Retry { get; init; }
+
+    /// <summary>
+    /// Something on the screen that outranks the retry right now, or null (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// Null on every frame with nothing to ask, which is every frame nearly all of the time. When it
+    /// is not null the frame is showing a firmware screen, the hold answers <i>that</i>, and the
+    /// hold's length comes from the ask rather than from <see cref="TouchRetry.HoldDuration"/> —
+    /// five seconds to agree to a write that cannot be undone, against three to try a resource
+    /// again.
+    /// </remarks>
+    public Func<TouchAsk?>? Ask { get; init; }
 }
 
 /// <summary>
@@ -130,13 +160,13 @@ public sealed class TouchRetry
                     + "This is said once rather than on every look.");
             }
 
-            Publish(null, null);
+            Publish(null, HoldDuration, null);
             return false;
         }
 
         if (_services.Input.Open(device) is not { } reader)
         {
-            Publish(null, null);
+            Publish(null, HoldDuration, null);
             return false;
         }
 
@@ -152,7 +182,7 @@ public sealed class TouchRetry
             + string.Create(CultureInfo.InvariantCulture, $"{(int)HoldDuration.TotalSeconds} s")
             + " asks a stopped frame to try again.");
 
-        Publish(device, null);
+        Publish(device, HoldDuration, null);
         return true;
     }
 
@@ -201,17 +231,32 @@ public sealed class TouchRetry
             _since ??= now;
         }
 
-        var offered = _services.Offered();
+        // An ask outranks the retry and brings its own duration with it. Resolved once, here, so the
+        // bar being drawn, the length being counted and the action being taken are all the same
+        // decision — a screen that counted three seconds and then did something a five-second
+        // sentence had promised would be worse than no affordance at all.
+        var ask = _services.Ask?.Invoke();
+        var hold = ask?.Hold ?? HoldDuration;
+        var offered = ask is not null || _services.Offered();
 
-        if (_down && offered && !_fired && _since is { } began && now - began >= HoldDuration)
+        if (_down && offered && !_fired && _since is { } began && now - began >= hold)
         {
             _fired = true;
             Holds++;
-            _services.Log.Info("Somebody held this frame's screen; asking it to try again.");
-            _services.Retry();
+
+            if (ask is not null)
+            {
+                _services.Log.Info($"Somebody held this frame's screen: {ask.Purpose}.");
+                ask.Confirm();
+            }
+            else
+            {
+                _services.Log.Info("Somebody held this frame's screen; asking it to try again.");
+                _services.Retry();
+            }
         }
 
-        Publish(_device, offered && _down && !_fired ? _since : null);
+        Publish(_device, hold, offered && _down && !_fired ? _since : null);
     }
 
     /// <summary>Watches the touchscreen until cancelled.</summary>
@@ -250,7 +295,7 @@ public sealed class TouchRetry
         _down = false;
         _fired = false;
         _since = null;
-        Publish(null, null);
+        Publish(null, HoldDuration, null);
     }
 
     /// <summary>
@@ -263,9 +308,9 @@ public sealed class TouchRetry
     /// <see cref="TouchRetryState.HoldingSince"/> and the instant it is rendering, which is what
     /// makes the whole renderer a pure function of its arguments.
     /// </remarks>
-    private void Publish(TouchDevice? device, DateTimeOffset? holdingSince)
+    private void Publish(TouchDevice? device, TimeSpan hold, DateTimeOffset? holdingSince)
     {
-        var next = new TouchRetryState(device?.Node, HoldDuration, holdingSince);
+        var next = new TouchRetryState(device?.Node, hold, holdingSince);
 
         if (next == State)
         {

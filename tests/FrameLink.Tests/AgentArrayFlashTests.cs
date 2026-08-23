@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
+using FrameLink.Agent.Stage;
 using FrameLink.Agent.Telemetry;
 using FrameLink.Agent.State;
 using FrameLink.Agent.Update;
@@ -386,8 +388,17 @@ public sealed class AgentArrayFlashTests
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
 
+        // Only the write itself. The hardware gate reads the unit through the control tool before
+        // the window opens and the verify reads it again after the window has closed, so a hook that
+        // fired on every command would be answering about the wrong instants.
         var markerDuringWrite = false;
-        fixture.Processes.Before = _ => markerDuringWrite = fixture.Files.Store.Exists(ArrayFlashWindow.MarkerFileName);
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                markerDuringWrite = fixture.Files.Store.Exists(ArrayFlashWindow.MarkerFileName);
+            }
+        };
 
         await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
 
@@ -406,7 +417,13 @@ public sealed class AgentArrayFlashTests
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
-        fixture.Processes.Before = _ => throw new OperationCanceledException("the agent is restarting");
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                throw new OperationCanceledException("the agent is restarting");
+            }
+        };
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
             () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
@@ -475,7 +492,10 @@ public sealed class AgentArrayFlashTests
 
         await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
 
-        var command = Assert.Single(fixture.Processes.Commands);
+        var command = Assert.Single(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+
         Assert.Equal(
             "dfu-util -R -e -a 1 -D " + XvfFirmwareInstaller.PathOf(fixture.Pin.Target),
             command);
@@ -499,7 +519,9 @@ public sealed class AgentArrayFlashTests
 
         Assert.True(first.Flashed);
         Assert.False(first.Succeeded);
-        Assert.Single(fixture.Processes.Commands);
+        Assert.Single(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
         Assert.Contains("somebody has to look at the unit", first.Summary, StringComparison.Ordinal);
     }
 
@@ -816,6 +838,1032 @@ public sealed class AgentArrayFlashTests
         var current = await fixture.Reporter().ReadAsync(TestContext.Current.CancellationToken);
         Assert.Contains("That is the firmware this fleet converges on", current!, StringComparison.Ordinal);
     }
+
+    // ---------------------------------------------------------------------------------------
+    // The interlock that is a person: nothing is written until somebody at the frame agrees
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task An_authorised_flash_writes_nothing_until_somebody_at_the_frame_agrees()
+    {
+        // The whole feature in one assertion. Mains loss during the write is the one hazard no
+        // software interlock on this frame can reach — the frame cannot hold its own power on — so
+        // the last gate is a human being who has been told that and has said they will not unplug
+        // it. Everything else about this frame permits a write: the image is verified, the recovery
+        // pair is on the card, the tool is installed, the unit is recognised and the operator has
+        // authorised it.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, outcome.Refusal);
+        Assert.False(outcome.Flashed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+
+        // Deferred, never spent. An operator's decision does not expire because the household was
+        // out, so the authorisation is still armed and nothing is on the card.
+        Assert.Null(fixture.Consumed);
+        Assert.Equal(ArrayFlashPhase.Asking, fixture.Screen?.Phase);
+    }
+
+    [Fact]
+    public async Task A_hold_at_the_frame_is_what_lets_the_write_start()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        // The genuine path: the same method the console's completed hold and the browser's button
+        // both call, answering whatever the agent currently has on the panel.
+        Assert.True(fixture.HoldTheScreen());
+
+        var outcome = await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Flashed);
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(fixture.Authorisation, fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task The_approval_screen_says_what_is_happening_and_what_must_not_happen()
+    {
+        // The wording *is* the feature. It is read by a family member with no computer experience,
+        // and it is the only mitigation that exists for the one hazard nothing else can guard —
+        // so it has to convey what is about to happen, roughly how long it lasts, that taking the
+        // power away can destroy the microphone, and that they should not do that. A sentence they
+        // cannot act on is the same as no interlock.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
+        var text = fixture.ScreenText;
+
+        Assert.Contains("microphone", prompt.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("two minutes", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("stay switched on", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("broken for good", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("power", text, StringComparison.OrdinalIgnoreCase);
+
+        // And it offers a way to say yes, with the hold the console counts out.
+        Assert.Equal("Yes — go ahead", prompt.Affordance);
+        Assert.Equal(ArrayFlashApproval.ApprovalHold, prompt.Hold);
+        Assert.Contains("5 seconds", ArrayFlashVoice.HoldLine(prompt), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task No_screen_a_family_member_reads_carries_jargon_or_a_version_number()
+    {
+        // No version numbers in a headline, no tool names, no digests. A person weighing "should I
+        // leave this alone for two minutes" gains nothing from `2 1 0` and loses the sentence that
+        // matters to the noise around it.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        var asking = fixture.ScreenText;
+
+        fixture.HoldTheScreen();
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        var finished = fixture.ScreenText;
+
+        foreach (var text in new[] { asking, finished })
+        {
+            Assert.DoesNotContain("dfu", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("sha256", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("bcdDevice", text, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("USB", text, StringComparison.Ordinal);
+            Assert.DoesNotContain(fixture.Pin.Target.Version, text, StringComparison.Ordinal);
+            Assert.DoesNotContain(fixture.Pin.Target.Name, text, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task An_approval_covers_the_write_it_was_given_for_and_no_other()
+    {
+        // Somebody agreed to *this* write. An operator who then points the frame at a different
+        // authorisation has changed what was agreed to, and the household has to be asked again —
+        // otherwise a yes given once becomes a standing permission nobody granted.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(ticket: "first", approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.True(fixture.HoldTheScreen());
+
+        fixture.Authorise(ticket: "second", approved: false);
+        var outcome = await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, outcome.Refusal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task An_agreement_does_not_outlive_the_process_that_took_it()
+    {
+        // Deliberately nothing durable. A stored "somebody said yes" would outlive the person who
+        // said it, and what the write needs is somebody in the room now — so a restart between the
+        // hold and the write loses the approval and asks again, which is the safe way to fail.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        await fixture.Flash(reuseWindow: true).TickAsync(TestContext.Current.CancellationToken);
+        Assert.True(fixture.HoldTheScreen());
+
+        fixture.RestartApproval();
+        var outcome = await fixture.Flash(reuseWindow: true).TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, outcome.Refusal);
+        Assert.Equal(ArrayFlashPhase.Asking, fixture.Screen?.Phase);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task A_household_is_never_asked_about_a_write_that_would_have_been_refused_anyway()
+    {
+        // The question is the last gate and not the first. Asking somebody to stand by a frame that
+        // then refuses for a missing image teaches them the question means nothing, which is exactly
+        // how an interlock made of human attention stops working.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Damage(fixture.Pin.Target);
+        fixture.Authorise(approved: false);
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ImageNotVerified, outcome.Refusal);
+        Assert.Null(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task A_call_takes_the_question_off_the_screen()
+    {
+        // The prompt covers whatever the panel was showing, and what it may not cover is somebody's
+        // conversation. The flash already defers on a call; this is the screen half of that, and
+        // without it a question would sit on top of a call for as long as the tick interval.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(fixture.Screen);
+
+        fixture.CallActive = true;
+        var outcome = await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.CallInProgress, outcome.Refusal);
+        Assert.Null(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task A_question_on_the_screen_is_not_a_reason_to_re_read_the_device()
+    {
+        // The screen has to come off quickly when a call starts, and a full tick is not the way to
+        // notice that: it re-hashes six megabytes of pinned images and starts three control-tool
+        // processes against the device the reconciler is also reading. So the fast cadence runs one
+        // cheap check, and the check does exactly one thing.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        var afterAsking = fixture.Processes.Commands.Count;
+
+        Assert.False(flash.StandDown());
+        Assert.NotNull(fixture.Screen);
+        Assert.Equal(afterAsking, fixture.Processes.Commands.Count);
+
+        fixture.CallActive = true;
+
+        Assert.True(flash.StandDown());
+        Assert.Null(fixture.Screen);
+        Assert.Equal(afterAsking, fixture.Processes.Commands.Count);
+    }
+
+    [Fact]
+    public async Task A_screen_that_went_up_too_early_stops_being_wrong_about_the_frame()
+    {
+        // Both facts a screen is composed from can arrive after it goes up. The panel is found by a
+        // watch of its own with no ordering against the first look at the authorisation, so a screen
+        // composed a moment too early tells a household its screen cannot be touched while they are
+        // touching it — and then offers them nothing to press.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.DetachPanel();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("cannot be touched", fixture.ScreenText, StringComparison.Ordinal);
+        Assert.Null(fixture.Screen?.Affordance);
+
+        fixture.AttachPanel();
+        Assert.False(flash.StandDown());
+
+        Assert.DoesNotContain("cannot be touched", fixture.ScreenText, StringComparison.Ordinal);
+        Assert.Equal("Yes — go ahead", fixture.Screen?.Affordance);
+        Assert.True(fixture.HoldTheScreen());
+    }
+
+    [Fact]
+    public async Task A_recovery_screen_names_the_operator_once_the_link_has_said_who_that_is()
+    {
+        // Decision 71's sentence, on the one screen whose last instruction is "tell somebody". The
+        // details arrive over the link, so a screen that went up before the first push named nobody
+        // — and the frame that needs this sentence most is a frame whose microphone has stopped
+        // answering, which is not a frame anybody should have to guess about.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                throw new OperationCanceledException("the power went off");
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
+
+        fixture.Processes.Before = null;
+        fixture.DetachArrays();
+
+        var flash = fixture.Flash();
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("Douwe", fixture.ScreenText, StringComparison.Ordinal);
+
+        fixture.Hub.Publish(status => status with
+        {
+            Contact = new OperatorContact
+            {
+                Name = "Douwe",
+                Contact = "06 12 34 56 78",
+                UpdatedUtc = fixture.Clock.UtcNow,
+            },
+        });
+
+        Assert.False(flash.StandDown());
+        Assert.Contains("Douwe", fixture.ScreenText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_unchanged_question_is_not_republished_to_the_two_stages()
+    {
+        // A record's generated equality compares the lines by reference, so two identical screens
+        // are unequal whenever they were built by two calls — which is every call. Publishing on
+        // that repaints the console and re-sends the page a frame on every tick, for a screen whose
+        // content is fixed from the moment it goes up.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var publishes = 0;
+        using var subscription = fixture.Hub.Subscribe(_ => publishes++);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, publishes);
+
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, publishes);
+    }
+
+    [Fact]
+    public async Task The_frame_stops_asking_after_a_while_and_asks_again_later()
+    {
+        // A question nobody answers must not hold a household's photographs for the rest of the
+        // week. It is a product bound rather than a safety one: the authorisation stays armed, the
+        // refusal keeps reaching the Fleet Manager, and the frame asks again after the rest.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(fixture.Screen);
+
+        fixture.Clock.UtcNow += ArrayFlashApproval.AskWindow + TimeSpan.FromMinutes(1);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(fixture.Screen);
+        Assert.Null(fixture.Consumed);
+
+        fixture.Clock.UtcNow += ArrayFlashApproval.RestWindow + TimeSpan.FromMinutes(1);
+        var again = await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, again.Refusal);
+        Assert.Equal(ArrayFlashPhase.Asking, fixture.Screen?.Phase);
+    }
+
+    [Fact]
+    public async Task A_frame_with_no_touchscreen_writes_nothing_and_names_the_way_round_it()
+    {
+        // Nobody can agree at a frame with no panel to agree on, so nothing is written — and the
+        // refusal has to name the one route that exists rather than leaving an operator to guess
+        // why an authorised frame never did anything.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.DetachPanel();
+        fixture.Authorise(approved: false);
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, outcome.Refusal);
+        Assert.Null(fixture.Consumed);
+        Assert.Contains(ArrayFirmwareFlash.UnattendedPrefix, outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("TEST-DEVICE", outcome.Summary, StringComparison.Ordinal);
+
+        // The screen says so too, and offers nothing, because there is nothing it could offer.
+        Assert.Contains("cannot be touched", fixture.ScreenText, StringComparison.Ordinal);
+        Assert.Null(fixture.Screen?.Affordance);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // What the panel says while it is writing, and what it says afterwards
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_panel_says_do_not_unplug_for_the_whole_of_the_write()
+    {
+        // The person who agreed to it two minutes ago may not be the person who walks past now, so
+        // the warning is repeated for the length of the write rather than only at the moment it was
+        // agreed to — and the screen offers nothing, because this is the one moment when there is
+        // nothing a person may usefully do.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        ArrayFlashPrompt? during = null;
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                during = fixture.Screen;
+            }
+        };
+
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var prompt = Assert.IsType<ArrayFlashPrompt>(during);
+        Assert.Equal(ArrayFlashPhase.Writing, prompt.Phase);
+        Assert.Contains("do not unplug", prompt.Headline, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("break the microphone for good", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
+        Assert.Null(prompt.Affordance);
+    }
+
+    [Fact]
+    public async Task A_finished_write_says_whether_it_worked_and_that_it_is_safe_to_unplug()
+    {
+        // The frame asked somebody to stand guard; it owes them the moment they are released. And
+        // the operator asked for a way to say "OK, carry on" rather than a silent resumption.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        await fixture.Flash(reuseWindow: true).TickAsync(TestContext.Current.CancellationToken);
+
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
+        Assert.Equal(ArrayFlashPhase.Succeeded, prompt.Phase);
+        Assert.Contains("It worked", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
+        Assert.Contains("safe to unplug", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
+        Assert.Equal("OK", prompt.Affordance);
+
+        // And it stays there until somebody takes it, rather than vanishing before it is read.
+        Assert.True(fixture.HoldTheScreen());
+        Assert.Null(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task A_write_that_did_not_work_says_so_plainly_and_still_releases_the_person()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.ReEnumerate = false;
+        fixture.Processes.Result = new ProcessResult(74, string.Empty, "dfu-util: Cannot open DFU device");
+
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
+        Assert.Equal(ArrayFlashPhase.Failed, prompt.Phase);
+        Assert.True(prompt.Alarming);
+
+        var body = string.Join(" ", prompt.Lines);
+        Assert.Contains("did not finish", prompt.Headline, StringComparison.Ordinal);
+        Assert.Contains("safe to unplug", body, StringComparison.Ordinal);
+        Assert.Contains("Nothing you did caused this", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_finished_screen_nobody_answers_goes_away_on_its_own()
+    {
+        // The completion screen waits for a person, and a frame flashed under the operator bypass
+        // has no person to wait for. Without a bound it would hold a household's photographs for
+        // ever over a write that had already finished.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.NotNull(fixture.Screen);
+
+        fixture.Clock.UtcNow += ArrayFlashApproval.CompletionLinger + TimeSpan.FromMinutes(1);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(fixture.Screen);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The operator's bypass: scoped to one attempt on one device, and warned
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task The_operator_bypass_skips_the_local_step_for_the_device_it_names()
+    {
+        // A frame may be somewhere nobody can stand, so the local step has to be skippable — with
+        // an acknowledgement of the risk carried in the authorisation itself.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.AuthoriseUnattended("TEST-DEVICE");
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Flashed);
+        Assert.True(outcome.Succeeded);
+    }
+
+    [Fact]
+    public async Task A_bypass_naming_another_frame_skips_nothing_here()
+    {
+        // The property that makes this "one device" rather than "a fleet default". §3.4's settings
+        // are fleet defaults with per-device overrides, so a bypass that were merely a word would
+        // switch the local approval off across the whole fleet the moment somebody set it at fleet
+        // level. Naming the device means a fleet-wide push bypasses on exactly one frame.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.AuthoriseUnattended("SOME-OTHER-FRAME");
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, outcome.Refusal);
+        Assert.Null(fixture.Consumed);
+        Assert.Equal(ArrayFlashPhase.Asking, fixture.Screen?.Phase);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_bypass_is_spent_by_the_same_write_that_spends_the_authorisation()
+    {
+        // Single-use, through the mechanism that already achieves it rather than through a second
+        // one. The whole authorisation string — bypass included — is written to the card before
+        // dfu-util starts, and an authorisation equal to the recorded one is refused for ever, so
+        // there is no flag anywhere that can be left switched on.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.AuthoriseUnattended("TEST-DEVICE");
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(fixture.Authorisation, fixture.Consumed);
+        Assert.Contains(ArrayFirmwareFlash.UnattendedPrefix, fixture.Consumed!, StringComparison.Ordinal);
+
+        // A second look at the same setting writes nothing, however many times it is taken.
+        fixture.Roll("2 0 6");
+        var again = await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AlreadyConsumed, again.Refusal);
+        Assert.Single(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_unattended_write_carries_its_warnings_into_the_trail()
+    {
+        // Six months later, "was anybody standing there?" is the first question anybody asks about
+        // a unit that came back wrong. An event that cannot answer it makes the answer unknowable,
+        // so the trail records both that nobody was asked and exactly what was accepted instead.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.AuthoriseUnattended("TEST-DEVICE");
+
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var written = Assert.Single(fixture.Telemetry.Events, e => e.Kind == DeviceEventKinds.ArrayFlash);
+        Assert.Contains("Nobody at the frame was asked", written.Summary, StringComparison.Ordinal);
+
+        foreach (var warning in ArrayFirmwareFlash.UnattendedWarning)
+        {
+            Assert.Contains(warning, written.Summary, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public async Task An_attended_write_records_that_somebody_agreed_to_it()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        fixture.HoldTheScreen();
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        var written = Assert.Single(fixture.Telemetry.Events, e =>
+            e.Kind == DeviceEventKinds.ArrayFlash && e.Summary.Contains("Wrote", StringComparison.Ordinal));
+
+        Assert.Contains("Somebody standing at the frame agreed to it", written.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain("Nobody at the frame was asked", written.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_bypass_token_is_a_sentence_nobody_types_by_accident_and_needs_a_device()
+    {
+        // It states what is being accepted rather than abbreviating it, and it is worthless without
+        // a device id after it — a bare token that bypassed everywhere is precisely the fleet-wide
+        // switch this design exists to make impossible.
+        Assert.Contains("unattended", ArrayFirmwareFlash.UnattendedPrefix, StringComparison.Ordinal);
+        Assert.Contains("mains", ArrayFirmwareFlash.UnattendedPrefix, StringComparison.Ordinal);
+        Assert.EndsWith("=", ArrayFirmwareFlash.UnattendedPrefix, StringComparison.Ordinal);
+        Assert.True(ArrayFirmwareFlash.UnattendedPrefix.Length > 40);
+
+        var bare = ArrayFlashAuthorisation.Parse("abc:ticket " + ArrayFirmwareFlash.UnattendedPrefix);
+        Assert.Null(bare.UnattendedDeviceId);
+        Assert.False(bare.BypassesLocalApproval("TEST-DEVICE"));
+
+        var named = ArrayFlashAuthorisation.Parse(
+            "abc:ticket " + ArrayFirmwareFlash.UnattendedPrefix + "TEST-DEVICE");
+
+        Assert.True(named.BypassesLocalApproval("TEST-DEVICE"));
+        Assert.False(named.BypassesLocalApproval("ANOTHER-DEVICE"));
+        Assert.True(named.BypassNamesAnotherDevice("ANOTHER-DEVICE"));
+
+        // And the warnings it accepts are carried on the frame, beside the code that acts on it.
+        Assert.NotEmpty(ArrayFirmwareFlash.UnattendedWarning);
+        Assert.Contains(
+            ArrayFirmwareFlash.UnattendedWarning,
+            warning => warning.Contains("Mains loss", StringComparison.Ordinal));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // A wedged board: what the frame can see, and the way back it puts on its own screen
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_board_that_never_came_back_gets_the_way_back_on_the_frame_s_own_screen()
+    {
+        // The detectable case, and the reason it has to be a screen: an array that will not
+        // enumerate cannot beep, cannot answer the control tool and has no other way to say
+        // anything. The evidence is durable — a marker a previous process left, and an empty bus.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                throw new OperationCanceledException("the power went off");
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
+
+        fixture.Processes.Before = null;
+        fixture.DetachArrays();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
+
+        Assert.Equal(ArrayFlashRefusal.PreviousFlashUnfinished, outcome.Refusal);
+        Assert.Equal(ArrayFlashPhase.Wedged, prompt.Phase);
+
+        // The vendor's own Safe Mode gesture, in the order a pair of hands does it.
+        var body = string.Join(" ", prompt.Lines);
+        Assert.Contains("Take the power away", body, StringComparison.Ordinal);
+        Assert.Contains("Mute button", body, StringComparison.Ordinal);
+        Assert.Contains("put the power back on", body, StringComparison.Ordinal);
+        Assert.Contains("red light that blinks", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_board_that_is_still_answering_is_not_told_it_is_wedged()
+    {
+        // The honest half of the boundary. A unit that enumerates has not been proven well — this
+        // agent has no reading that separates a good flash from a bad one beyond a version a
+        // misbehaving unit can still report correctly — so the screen says a write was interrupted
+        // and says the frame cannot tell, rather than claiming either.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                throw new OperationCanceledException("the agent is restarting");
+            }
+        };
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
+
+        fixture.Processes.Before = null;
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
+        Assert.Equal(ArrayFlashPhase.Unfinished, prompt.Phase);
+
+        var body = string.Join(" ", prompt.Lines);
+        Assert.Contains("cannot tell", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Mute button", body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_recovery_route_records_the_two_details_that_are_easy_to_miss()
+    {
+        // Both were established once by a previous workstream and would otherwise be rediscovered
+        // by whoever is holding the board. The first reads as a failure and is not; reacting to it
+        // by retrying is the documented route from a recoverable board to an unrecoverable one.
+        var steps = string.Join(" ", ArrayFlashRecovery.OperatorSteps);
+
+        Assert.Contains("96%", steps, StringComparison.Ordinal);
+        Assert.Contains("expected outcome, not a failure", steps, StringComparison.Ordinal);
+        Assert.Contains("Power-cycle", steps, StringComparison.Ordinal);
+        Assert.Contains("fails at 0%", steps, StringComparison.Ordinal);
+
+        // And the erase comes before the power cycle, which comes before the next write. Out of
+        // order, the download fails at 0% and the person doing it has no idea why.
+        var erase = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
+            step => step.Contains("Erase", StringComparison.Ordinal));
+        var cycle = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
+            step => step.Contains("Power-cycle", StringComparison.Ordinal));
+        var write = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
+            step => step.Contains("Write the pinned fallback", StringComparison.Ordinal));
+
+        Assert.True(erase >= 0 && erase < cycle && cycle < write);
+
+        // And the latch a person clears by hand is named, because nothing else lets the frame flash
+        // again and a route that ends with a frame nobody can use is not a route.
+        Assert.Contains(ArrayFlashWindow.MarkerFileName, steps, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The hardware gate: refuse loudly rather than proceed hopefully
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_unit_running_firmware_this_build_has_never_seen_is_refused()
+    {
+        // The closest thing to a hardware gate that exists. A unit on firmware nobody here has ever
+        // seen is evidence of a unit outside what this build was written against — and the correct
+        // answer to that is a refusal that says so, not a 933 KB write placed on a hope.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Attach("1-1", "0300", "…030");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("never been told about", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_unit_built_for_another_audio_topology_is_refused()
+    {
+        // The strongest real gate in the set. Upstream publishes six-channel and 48 kHz builds under
+        // names one character apart, and writing the two-channel image onto a unit configured for
+        // six changes the frame's audio topology underneath every mixer setting in the catalog.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains(XvfFirmwarePin.Profile, outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("ua-io16-6ch-sqr", outcome.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_unit_whose_two_readings_disagree_is_refused()
+    {
+        // The descriptor and the control interface are independent routes to one fact and this
+        // build reads both anyway. A unit on which they disagree is a unit nothing here can
+        // describe, and the honest answer to "which is true" is that nobody knows.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(version: "2 0 10");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("readings disagree", outcome.Summary, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_frame_that_cannot_read_the_unit_refuses_rather_than_hoping()
+    {
+        // An unreadable identity is a refusal and not a shrug: writing without knowing which build a
+        // unit is configured for is exactly the hopeful proceeding the gate exists to stop. It also
+        // names something the reconciler can fix, since the tool is an ordinary resource.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.RemoveTool();
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("control tool is not installed", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task A_recognised_unit_reaches_the_trail_with_every_field_that_could_be_read()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        var flash = fixture.Flash();
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayGateVerdict.Recognised, flash.Verdict);
+
+        var identity = Assert.IsType<ArrayIdentity>(flash.Identity);
+        Assert.Equal(XvfArrayUsb.VendorId, identity.VendorId);
+        Assert.Equal(XvfArrayUsb.ProductId, identity.ProductId);
+        Assert.Equal("2 0 6", identity.DescriptorVersion);
+        Assert.Equal("2 0 6", identity.ControlVersion);
+        Assert.Equal(XvfFirmwarePin.Profile, identity.BuildConfiguration);
+        Assert.Equal("3f08f630b41b8bce11cb2f45857ba49f22f9d507", identity.BuildRepositoryHash);
+
+        var written = Assert.Single(fixture.Telemetry.Events, e =>
+            e.Kind == DeviceEventKinds.ArrayFlash && e.Summary.Contains("Wrote", StringComparison.Ordinal));
+
+        Assert.Contains(identity.Describe(), written.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_gate_never_claims_to_read_a_board_revision()
+    {
+        // Upstream issue #32 reports the target firmware not booting on a V1.1 board, so a revision
+        // gate is the first thing anybody would reach for — and it cannot be written. The revision
+        // is not in the USB descriptors and not in any of the 177 commands of the pinned command
+        // map, every identity one of which describes the firmware or the unit. It is silkscreen.
+        // A field that pretended to carry it would be the most dangerous kind of fiction here.
+        var fields = typeof(ArrayIdentity)
+            .GetProperties()
+            .Select(property => property.Name)
+            .ToList();
+
+        Assert.DoesNotContain(fields, name => name.Contains("Revision", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(fields, name => name.Contains("Board", StringComparison.OrdinalIgnoreCase));
+
+        // And the refusal says so out loud, so nobody reads a refusal as "the board is wrong".
+        var explanation = ArrayHardwareGate.Explain(ArrayGateVerdict.UnknownFirmware, null);
+        Assert.Contains("board revision is not readable in software at all", explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_known_firmware_set_is_what_this_repository_has_pinned_or_observed()
+    {
+        // A list a human edits, which is the property that makes it a gate rather than a guess: it
+        // can only ever say what has already been established, so a version nobody here has seen
+        // refuses by construction rather than by somebody remembering to add a case.
+        Assert.Contains(XvfFirmwarePin.Current.Target.Version, ArrayHardwareGate.KnownFirmware);
+        Assert.Contains(XvfFirmwarePin.Current.Fallback.Version, ArrayHardwareGate.KnownFirmware);
+        Assert.Contains("2 0 10", ArrayHardwareGate.KnownFirmware);
+        Assert.DoesNotContain("2 0 9", ArrayHardwareGate.KnownFirmware);
+    }
+
+    [Fact]
+    public void A_build_configuration_is_read_through_the_padding_the_tool_prints()
+    {
+        // BLD_MSG, BLD_HOST and BLD_MODIFIED arrive NUL-padded to fixed widths and the tool prints
+        // them raw, so they look like trailing spaces and are not. A value carrying its padding
+        // compares unequal to the same value read anywhere else, which would make the gate refuse
+        // every unit it was ever pointed at.
+        const string Reply = "Found device\nBLD_MSG ua-io16-sqr\0\0\0\0\0\0\0\0\0\0\n";
+
+        Assert.Equal(
+            "ua-io16-sqr",
+            ArrayHardwareGate.Field(Reply, ArrayHardwareGate.BuildConfigurationCommand));
+
+        Assert.Null(ArrayHardwareGate.Field(Reply, ArrayHardwareGate.BuildHashCommand));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Both surfaces, one set of words
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_firmware_screen_is_shown_on_a_frame_with_nothing_wrong_with_it()
+    {
+        // The one field on the status that outranks the ladder at the surface. Every other narration
+        // is hidden on a converged frame, because a converged frame shows photographs — and this
+        // screen appears *only* on frames with nothing wrong with them, so a page that consulted
+        // ProductRuns first would never draw it at all.
+        var status = AgentStatusFactory.Green() with
+        {
+            ArrayFlash = ArrayFlashVoice.Asking(answerable: true, contact: null),
+        };
+
+        var frame = BrowserStage.Compose(status, DateTimeOffset.UnixEpoch);
+
+        Assert.True(frame.ProductRuns);
+        Assert.Equal("asking", frame.FlashPhase);
+        Assert.Equal(status.ArrayFlash.Headline, frame.FlashHeadline);
+        Assert.Equal(status.ArrayFlash.Lines, frame.FlashLines);
+        Assert.Equal("Yes — go ahead", frame.FlashAffordance);
+    }
+
+    [Fact]
+    public void Neither_surface_composes_a_word_of_its_own_about_a_write()
+    {
+        // Decision 83's rule, applied before there is a second implementation to disagree with: the
+        // console and the page render the same record rather than each working out what to say. The
+        // failure this prevents is the one nobody notices, because it appears on whichever surface
+        // the panel is not currently showing.
+        var status = AgentStatusFactory.Green() with
+        {
+            ArrayFlash = ArrayFlashVoice.Wedged(answerable: true, contact: null),
+        };
+
+        var page = BrowserStage.Compose(status, DateTimeOffset.UnixEpoch);
+        var console = StageRenderer.Render(status, DateTimeOffset.UnixEpoch, 0, 160, 60, colour: false);
+
+        Assert.Equal(status.ArrayFlash.Headline, page.FlashHeadline);
+        Assert.Contains(status.ArrayFlash.Headline, console, StringComparison.Ordinal);
+        Assert.Contains("Mute button", console, StringComparison.Ordinal);
+
+        // And the console gives the whole screen over to it rather than putting it below the
+        // ordinary narration, which is where a person would read past the part that matters.
+        Assert.DoesNotContain(ReconcileVoice.RepairingHeadline, console, StringComparison.Ordinal);
+        Assert.DoesNotContain(status.Condition.Headline, console, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_accent_reads_as_waiting_on_a_person_rather_than_as_a_healthy_frame()
+    {
+        // A frame asking somebody not to unplug it is green by the ladder's reckoning, and green is
+        // exactly the wrong signal across a room: the whole point of the screen is that something
+        // needs a person. Both surfaces take the same composed accent by name (decision 83).
+        var green = AgentStatusFactory.Green();
+
+        var asking = green with { ArrayFlash = ArrayFlashVoice.Asking(true, null) };
+        var writing = green with { ArrayFlash = ArrayFlashVoice.Writing() };
+        var done = green with { ArrayFlash = ArrayFlashVoice.Finished(succeeded: true, true, null) };
+        var bad = green with { ArrayFlash = ArrayFlashVoice.Finished(succeeded: false, true, null) };
+
+        Assert.Equal("green", StagePalette.NameOf(StagePalette.For(green)));
+        Assert.Equal("blue", StagePalette.NameOf(StagePalette.For(asking)));
+        Assert.Equal("blue", StagePalette.NameOf(StagePalette.For(writing)));
+        Assert.Equal("green", StagePalette.NameOf(StagePalette.For(done)));
+        Assert.Equal("red", StagePalette.NameOf(StagePalette.For(bad)));
+
+        Assert.Equal("blue", BrowserStage.Compose(asking, DateTimeOffset.UnixEpoch).Accent);
+    }
+
+    [Fact]
+    public void The_console_labels_the_hold_bar_with_what_the_hold_will_actually_do()
+    {
+        // The bar is drawn from the touch state and labelled from the screen, and a bar labelled
+        // "Try again" counting out a firmware approval is decision 77's defect in words instead of
+        // in coordinates: an affordance that answers something other than what it appears to.
+        var began = DateTimeOffset.UnixEpoch;
+        var status = AgentStatusFactory.Green() with
+        {
+            ArrayFlash = ArrayFlashVoice.Asking(answerable: true, contact: null),
+            Touch = new TouchRetryState("/dev/input/event4", ArrayFlashApproval.ApprovalHold, began),
+        };
+
+        var console = StageRenderer.Render(
+            status, began + TimeSpan.FromSeconds(2), 0, 160, 60, colour: false);
+
+        Assert.Contains("Yes", console, StringComparison.Ordinal);
+        Assert.Contains("keep holding", console, StringComparison.Ordinal);
+        Assert.DoesNotContain("Try again", console, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_shipped_page_draws_the_write_before_it_consults_the_ladder()
+    {
+        // Asserted against the shipped source because that file is the whole of what reaches the
+        // panel. Every other narration on that surface is hidden on a converged frame, and this
+        // screen appears only on converged frames — so a page that checked `productRuns` first
+        // would compose a perfect message and render none of it, which is the exact shape of the
+        // defect that once served a new stage to a browser that never drew it.
+        var page = AgentButtonTests.Asset("frame-stage.js");
+
+        var flash = page.IndexOf("stage.flashHeadline", StringComparison.Ordinal);
+        var runs = page.IndexOf("if (stage.productRuns)", StringComparison.Ordinal);
+
+        Assert.True(flash >= 0 && runs >= 0);
+        Assert.True(flash < runs);
+
+        // It renders the words it is sent rather than any of its own, and its button sends the one
+        // kind whose meaning is decided by whatever the agent currently has on the panel.
+        Assert.Contains("stage.flashLines", page, StringComparison.Ordinal);
+        Assert.Contains("stage.flashAffordance", page, StringComparison.Ordinal);
+        Assert.Contains(PageMessage.KindArrayFlash, page, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_write_in_progress_offers_nothing_on_either_surface()
+    {
+        // The one screen with nothing a person may usefully do. A button on it invites exactly the
+        // interruption the whole feature exists to prevent.
+        var status = AgentStatusFactory.Green() with { ArrayFlash = ArrayFlashVoice.Writing() };
+
+        Assert.Null(BrowserStage.Compose(status, DateTimeOffset.UnixEpoch).FlashAffordance);
+        Assert.Equal(string.Empty, ArrayFlashVoice.HoldLine(status.ArrayFlash));
+    }
+
+    [Fact]
+    public async Task A_hold_and_a_button_press_mean_whatever_the_screen_currently_says()
+    {
+        // One entry point for both surfaces and both meanings. Which of "yes, go ahead" and "OK, put
+        // this away" a press means is decided by what is on the panel rather than by which caller
+        // arrived, so a page that had fallen behind cannot approve a write at a screen that had
+        // moved on — and a press can never mean something the sentence above it did not say.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var flash = fixture.Flash(reuseWindow: true);
+
+        // Nothing on the screen: a press does nothing at all.
+        Assert.False(fixture.Approval.Answer("the browser stage"));
+
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.True(fixture.Approval.Answer("the browser stage"));
+
+        await flash.TickAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(ArrayFlashPhase.Succeeded, fixture.Screen?.Phase);
+
+        // The same press again, under a different screen, now means "put it away".
+        Assert.True(fixture.Approval.Answer("a hold on the panel"));
+        Assert.Null(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task A_unit_already_on_the_target_spends_the_authorisation_even_if_it_is_unrecognised()
+    {
+        // Ordering, and it is deliberate. The gate runs *after* the already-at-target check, so an
+        // unrecognised unit that needs no write still spends the authorisation — which is what keeps
+        // "a later array swap cannot be flashed by nobody's decision" true. A gate that ran first
+        // would leave the authorisation armed on a frame whose array somebody then changed.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Roll("2 1 0");
+        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AlreadyAtTarget, outcome.Refusal);
+        Assert.Equal(fixture.Authorisation, fixture.Consumed);
+    }
 }
 
 /// <summary>A frame with a synthetic pin, a synthetic bus and a recording <c>dfu-util</c>.</summary>
@@ -834,6 +1882,7 @@ internal sealed class FlashFixture : IDisposable
     private readonly Dictionary<string, byte[]> _payloads = new(StringComparer.Ordinal);
     private readonly FakeUserSession _session = new();
     private ArrayFlashWindow? _window;
+    private ArrayFlashApproval? _approval;
 
     public FlashFixture()
     {
@@ -902,6 +1951,12 @@ internal sealed class FlashFixture : IDisposable
 
     public bool RestartPending { get; set; }
 
+    /// <summary>The frame's own screen, which is where the local approval is taken.</summary>
+    public AgentStatusHub Hub { get; } = new(AgentStatusFactory.Green());
+
+    /// <summary>The interlock that is a person.</summary>
+    public ArrayFlashApproval Approval => _approval ??= new ArrayFlashApproval(Hub, Clock, new RecordingLog());
+
     /// <summary>Whether the array comes back on the bus reporting the target after a write.</summary>
     public bool ReEnumerate { get; set; } = true;
 
@@ -909,6 +1964,12 @@ internal sealed class FlashFixture : IDisposable
     public string Authorisation { get; private set; } = string.Empty;
 
     /// <summary>A frame that could flash if somebody authorised one: images in place, array on 2.0.6.</summary>
+    /// <remarks>
+    /// It also seeds the control tool and a working touchscreen, because both are now part of what
+    /// "could flash" means: the hardware gate refuses a unit whose build configuration it cannot
+    /// read, and the local approval cannot be given on a frame with no panel to give it on. A frame
+    /// missing either is a case with its own test rather than the background of every other one.
+    /// </remarks>
     public async Task ReadyToFlashAsync()
     {
         Seed(AlsaCards.CardsPath, CardsWithArray);
@@ -919,7 +1980,92 @@ internal sealed class FlashFixture : IDisposable
         Assert.Equal(XvfFirmwareInstallResult.Installed, installed);
 
         Attach(BusPath, "0206", "…030");
+        SeedTool();
+        AttachPanel();
     }
+
+    /// <summary>Puts the control tool on the frame and scripts what the unit answers through it.</summary>
+    /// <param name="profile">What <c>BLD_MSG</c> reports. Defaults to the profile the pin is for.</param>
+    /// <param name="version">
+    /// What <c>VERSION</c> reports, or null to answer whatever the synthetic bus currently shows —
+    /// which is what a real unit does, and what keeps the gate's two-readings-agree check honest
+    /// across a test that rolls the array.
+    /// </param>
+    public void SeedTool(string? profile = XvfFirmwarePin.Profile, string? version = null)
+    {
+        var directory = XvfHost.ToolDirectory(XvfHost.AgentDirectory);
+        Files.Seed(directory + "/" + XvfHost.Binary, "#!/bin/false\n");
+
+        const string Banner = "Device (USB)::device_init() -- Found device VID: 10374 PID: 26 interface: 3\n";
+        var prefix = $"env -C {directory} LD_LIBRARY_PATH={directory} {directory}/{XvfHost.Binary} ";
+
+        Processes.Script = line =>
+        {
+            if (!line.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            var command = line[prefix.Length..].Trim();
+
+            if (string.Equals(command, XvfHost.VersionCommand, StringComparison.Ordinal))
+            {
+                var reported = version ?? Running() ?? "2 0 6";
+                return new ProcessResult(0, Banner + XvfHost.VersionCommand + " " + reported + "\n", string.Empty);
+            }
+
+            if (string.Equals(command, ArrayHardwareGate.BuildConfigurationCommand, StringComparison.Ordinal))
+            {
+                // NUL-padded to a fixed width, exactly as the real tool prints it. The parser has to
+                // strip that; a fixture that sent a clean string would never exercise it.
+                return profile is null
+                    ? new ProcessResult(0, Banner, string.Empty)
+                    : new ProcessResult(
+                        0,
+                        Banner + ArrayHardwareGate.BuildConfigurationCommand + " " + profile + new string('\0', 39) + "\n",
+                        string.Empty);
+            }
+
+            if (string.Equals(command, ArrayHardwareGate.BuildHashCommand, StringComparison.Ordinal))
+            {
+                return new ProcessResult(
+                    0,
+                    Banner + ArrayHardwareGate.BuildHashCommand + " 3f08f630b41b8bce11cb2f45857ba49f22f9d507\n",
+                    string.Empty);
+            }
+
+            return null;
+        };
+    }
+
+    /// <summary>Takes the control tool away, so the unit's build configuration cannot be read.</summary>
+    public void RemoveTool()
+    {
+        Files.Files.DeleteFile(XvfHost.ToolDirectory(XvfHost.AgentDirectory) + "/" + XvfHost.Binary);
+        Processes.Script = null;
+    }
+
+    /// <summary>The firmware version the synthetic bus currently shows.</summary>
+    public string? Running() =>
+        XvfArrayUsb.Version(Files.Files.ReadText(XvfArrayUsb.DevicesPath + "/" + BusPath + "/bcdDevice"));
+
+    /// <summary>Says this frame has a working touchscreen, which is what makes it answerable.</summary>
+    public void AttachPanel() =>
+        Hub.Publish(status => status with
+        {
+            Touch = new TouchRetryState("/dev/input/event4", ArrayFlashApproval.ApprovalHold, null),
+        });
+
+    /// <summary>Says this frame has no touchscreen, so nobody at it can agree to anything.</summary>
+    public void DetachPanel() => Hub.Publish(status => status with { Touch = TouchRetryState.None });
+
+    /// <summary>Somebody at the frame holds the screen, taking whatever it is offering.</summary>
+    /// <remarks>
+    /// The genuine path: it goes through the same method the console's completed hold and the
+    /// browser's button both call, and it answers whatever the agent currently has on the panel
+    /// rather than asserting an approval into place.
+    /// </remarks>
+    public bool HoldTheScreen() => Approval.Answer("a hold on the panel");
 
     public void Seed(string path, string content) => Files.Seed(path, content);
 
@@ -985,13 +2131,58 @@ internal sealed class FlashFixture : IDisposable
     }
 
     /// <summary>Writes an authorisation naming the pinned target's digest.</summary>
-    public void Authorise(string ticket = "bench-2026-08-23")
+    /// <param name="ticket">Whatever the operator wrote after the colon.</param>
+    /// <param name="approved">
+    /// Whether somebody at the frame has already agreed to it.
+    /// </param>
+    /// <remarks>
+    /// <b>Approved by default, and the default is stated here rather than assumed in twenty tests.</b>
+    /// Every test about some other interlock wants a frame where the household has already said yes,
+    /// so that what it is asserting is the interlock it names. The tests about the local approval
+    /// itself pass <c>approved: false</c> and drive the screen through
+    /// <see cref="HoldTheScreen"/> — which is the real path — so removing the approval requirement
+    /// breaks those and nothing else silently covers for it.
+    /// </remarks>
+    public void Authorise(string ticket = "bench-2026-08-23", bool approved = true)
     {
         Authorisation = Pin.Target.Sha256 + ":" + ticket;
+        Settings[ArrayFirmwareFlash.AuthorisationKey] = Authorisation;
+
+        if (approved)
+        {
+            Approval.Approve(Authorisation, "the fixture, standing in for somebody at the frame");
+        }
+    }
+
+    /// <summary>An authorisation carrying the operator's unattended bypass for one device.</summary>
+    public void AuthoriseUnattended(string deviceId, string ticket = "bench-2026-08-23")
+    {
+        Authorisation = Pin.Target.Sha256 + ":" + ticket + " "
+            + ArrayFirmwareFlash.UnattendedPrefix + deviceId;
         Settings[ArrayFirmwareFlash.AuthorisationKey] = Authorisation;
     }
 
     public void ClearMarker() => Files.Store.Delete(ArrayFlashWindow.MarkerFileName);
+
+    /// <summary>What is on the frame's screen right now, or null.</summary>
+    public ArrayFlashPrompt? Screen => Hub.Current.ArrayFlash;
+
+    /// <summary>The whole screen as one string, for asserting on what it actually says.</summary>
+    public string ScreenText => Screen is { } prompt
+        ? prompt.Headline + "\n" + string.Join("\n", prompt.Lines) + "\n" + (prompt.Affordance ?? string.Empty)
+        : string.Empty;
+
+    /// <summary>The authorisation this frame has durably recorded as spent, or null.</summary>
+    public string? Consumed => Files.Store.ReadText(ArrayFirmwareFlash.ConsumedFileName)?.Trim();
+
+    /// <summary>
+    /// A new agent process, as far as the approval is concerned. The screen is cleared with it.
+    /// </summary>
+    public void RestartApproval()
+    {
+        _approval = null;
+        Hub.Publish(status => status with { ArrayFlash = null });
+    }
 
     /// <summary>A flash over this frame. A fresh window each time, which is what a restart leaves.</summary>
     public ArrayFirmwareFlash Flash(bool reuseWindow = false)
@@ -1016,6 +2207,7 @@ internal sealed class FlashFixture : IDisposable
             Processes = Processes,
             Installer = Images,
             Window = _window ??= new ArrayFlashWindow(Files.Store, Clock),
+            Approval = Approval,
             Telemetry = Telemetry,
             Store = Files.Store,
             Clock = Clock,
@@ -1049,6 +2241,15 @@ internal sealed class FlashProcessRunner : IProcessRunner
 
     public ProcessResult Result { get; set; } = new(0, "Done!", string.Empty);
 
+    /// <summary>Answers one command line, or null to fall through to the default.</summary>
+    /// <remarks>
+    /// A function rather than a dictionary because the control tool's answers have to move with the
+    /// synthetic bus: the hardware gate reads the firmware version through the descriptor *and*
+    /// through the tool and refuses when the two disagree, so a fixture that scripted a fixed
+    /// version would make every test that rolls the array read as a disagreeing unit.
+    /// </remarks>
+    public Func<string, ProcessResult?>? Script { get; set; }
+
     /// <summary>Runs before the command's result is produced, with the command line.</summary>
     public Action<string>? Before { get; set; }
 
@@ -1070,7 +2271,7 @@ internal sealed class FlashProcessRunner : IProcessRunner
             return Task.FromResult(Result);
         }
 
-        return Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+        return Task.FromResult(Script?.Invoke(line) ?? new ProcessResult(0, string.Empty, string.Empty));
     }
 }
 

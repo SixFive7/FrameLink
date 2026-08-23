@@ -1,3 +1,4 @@
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Protocol;
@@ -195,6 +196,29 @@ public sealed record AgentStatus
 
     /// <summary>§2.10's annotation, when supervision has acted.</summary>
     public SupervisionAnnotation? Supervision { get; init; }
+
+    /// <summary>
+    /// What the frame's own screen is saying about a firmware write, or null (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It sits beside the ladder rather than on it, for §2.6's reason.</b> The rungs answer one
+    /// question — does the product run? — and a firmware write does not change the answer: nothing
+    /// has drifted, the frame is exactly what the operator declared, and a frame on the wrong
+    /// firmware runs the product perfectly well. What it changes is what is <i>on the panel</i>, and
+    /// only for as long as a person is being asked something or a write is in flight. Making it a
+    /// rung would stop the product over a number, which is the failure decision 90 removed.
+    /// </para>
+    /// <para>
+    /// <b>It is the one thing on this record that overrides
+    /// <see cref="ProductRuns"/> at the surface.</b> A converged frame runs the product, so both
+    /// stages hide their narration — and the one screen that must appear on a frame with nothing
+    /// wrong with it is the one asking somebody not to unplug it for the next two minutes. Both
+    /// surfaces therefore render this whatever the rung says, and neither composes a word of it
+    /// (decision 83): the sentences are chosen once, in <see cref="Firmware.ArrayFlashVoice"/>.
+    /// </para>
+    /// </remarks>
+    public ArrayFlashPrompt? ArrayFlash { get; init; }
 
     /// <summary>
     /// Who to contact about this fleet, as the Fleet Manager last said (§2.7 item 8, decision 71).

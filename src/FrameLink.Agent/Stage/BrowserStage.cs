@@ -1,4 +1,5 @@
 using System.Globalization;
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Resources;
@@ -278,8 +279,35 @@ public sealed class BrowserStage
                 : null,
             DeviceId = status.DeviceId,
             SupervisionOverlay = status.Supervision?.Overlay,
+
+            // Decision 91. Sent already worded, like everything else on this frame, and read by the
+            // page before ProductRuns — which is the one place in this composition where a field
+            // outranks the ladder. A frame asking somebody not to unplug it for two minutes has
+            // nothing wrong with it by §2.6's reckoning, so the ladder would hide the one screen
+            // that has to be seen.
+            FlashPhase = status.ArrayFlash is { } flash ? PhaseNameOf(flash.Phase) : null,
+            FlashHeadline = status.ArrayFlash?.Headline,
+            FlashLines = status.ArrayFlash?.Lines,
+            FlashAffordance = status.ArrayFlash?.Affordance,
         };
     }
+
+    /// <summary>The firmware screen's phase, in the spelling the page reads.</summary>
+    /// <remarks>
+    /// Named rather than numbered for the same reason the accent is (decision 83): a page that does
+    /// not recognise a name renders the headline and the lines it was sent, which is the whole
+    /// message, instead of guessing at a state from an integer whose meaning moved.
+    /// </remarks>
+    public static string PhaseNameOf(ArrayFlashPhase phase) => phase switch
+    {
+        ArrayFlashPhase.Asking => "asking",
+        ArrayFlashPhase.Writing => "writing",
+        ArrayFlashPhase.Succeeded => "succeeded",
+        ArrayFlashPhase.Failed => "failed",
+        ArrayFlashPhase.Wedged => "wedged",
+        ArrayFlashPhase.Unfinished => "unfinished",
+        _ => "idle",
+    };
 
     /// <summary>Runs one evaluation of §2.7's stage 2 and its fallback rule.</summary>
     public async Task<BrowserStagePhase> TickAsync(CancellationToken cancellationToken)

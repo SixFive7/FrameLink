@@ -364,6 +364,72 @@ public sealed class AgentTouchRetryTests
             StringComparison.Ordinal);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // Decision 91: one reader, two things a hold can mean, and the precedence between them
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void A_firmware_question_outranks_the_retry_and_brings_its_own_hold()
+    {
+        // The frame is showing "do not unplug this — hold for five seconds to agree", and the same
+        // panel is the one a three-second hold uses to retry a stopped resource. A hold must do what
+        // the sentence in front of the person says, and nothing else: three seconds under a
+        // five-second question must do *nothing*, because a frame that started writing firmware at
+        // three would have started it before the sentence had finished asking.
+        var harness = new TouchHarness();
+        harness.Ask = harness.FirmwareAsk();
+
+        harness.Down();
+        harness.Advance(TimeSpan.FromSeconds(3.5));
+
+        Assert.Equal(0, harness.Answers);
+        Assert.Equal(0, harness.Retries);
+
+        harness.Advance(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(1, harness.Answers);
+
+        // And never the retry. The two are not both taken by one hold, however long it is held.
+        Assert.Equal(0, harness.Retries);
+    }
+
+    [Fact]
+    public void The_hold_the_screen_counts_is_the_hold_the_question_asked_for()
+    {
+        // The bar drawn on the console is composed from what the watch publishes, so a five-second
+        // question that published a three-second hold would count somebody's finger to full and then
+        // sit there doing nothing for two seconds — which reads as a screen that has died.
+        var harness = new TouchHarness();
+        harness.Ask = harness.FirmwareAsk();
+
+        harness.Down();
+        harness.Advance(TimeSpan.FromSeconds(1));
+
+        Assert.Equal(TimeSpan.FromSeconds(5), harness.Watch.State.Hold);
+
+        harness.Up();
+        harness.Ask = null;
+        harness.Tick();
+
+        Assert.Equal(TouchRetry.HoldDuration, harness.Watch.State.Hold);
+    }
+
+    [Fact]
+    public void A_question_is_answerable_even_when_nothing_has_given_up()
+    {
+        // The retry is offered only when a resource has stopped, which is the ordinary state of this
+        // predicate on a healthy frame — and a firmware question arrives on exactly such a frame,
+        // because nothing is wrong with it. An ask that inherited the retry's condition could
+        // therefore never be answered on the frames it is written for.
+        var harness = new TouchHarness(offered: false);
+        harness.Ask = harness.FirmwareAsk();
+
+        harness.Down();
+        harness.Advance(TimeSpan.FromSeconds(6));
+
+        Assert.Equal(1, harness.Answers);
+    }
+
     private static AgentStatus Stopped => new()
     {
         Condition = DeviceStateLadder.Starting,
@@ -411,6 +477,7 @@ public sealed class AgentTouchRetryTests
                 Log = Log,
                 Offered = () => Offered,
                 Retry = () => Retries++,
+                Ask = () => Ask,
             });
 
             Watch.EnsureOpen();
@@ -430,7 +497,17 @@ public sealed class AgentTouchRetryTests
 
         public bool Offered { get; }
 
+        /// <summary>Something on the screen that outranks the retry, or null (decision 91).</summary>
+        public TouchAsk? Ask { get; set; }
+
         public int Retries { get; private set; }
+
+        /// <summary>How many times the ask's own action has been taken.</summary>
+        public int Answers { get; private set; }
+
+        /// <summary>An ask with the firmware approval's own five-second hold.</summary>
+        public TouchAsk FirmwareAsk() =>
+            new("agreeing to the microphone update", TimeSpan.FromSeconds(5), () => Answers++);
 
         public int Publishes { get; private set; }
 

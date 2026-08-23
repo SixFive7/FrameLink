@@ -42,6 +42,25 @@ public sealed record PageMessage
     /// </remarks>
     public const string KindRetry = "retry";
 
+    /// <summary>
+    /// Somebody at the frame took whatever the firmware screen was offering (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>One kind for both meanings, and the meaning is the screen's rather than the message's.</b>
+    /// The same press means <i>yes, go ahead</i> under the asking screen and <i>OK, put this away</i>
+    /// under a finished one, and which it is is decided by what the agent currently has on the
+    /// panel — not by which button the page drew. A second kind would let a page that had fallen
+    /// behind send <i>approve</i> at a screen that had moved on, which is the one message in this
+    /// product that must never arrive out of date.
+    /// </para>
+    /// <para>
+    /// It is the browser's half of a gesture the console takes as a hold, and both land on the same
+    /// method for the same reason §2.5 rung 5's retry has one reset with three callers.
+    /// </para>
+    /// </remarks>
+    public const string KindArrayFlash = "array-flash";
+
     /// <summary>Which of the kinds above this is.</summary>
     public required string Kind { get; init; }
 
@@ -218,6 +237,37 @@ public sealed record StageMessage
     public string? SupervisionOverlay { get; init; }
 
     /// <summary>
+    /// Which firmware screen the frame is showing, by name, or null (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// <b>Non-null is the page's whole signal that this frame overrides
+    /// <see cref="ProductRuns"/>.</b> Every other narration field is hidden on a converged frame,
+    /// because a converged frame is showing photographs and nothing needs saying. The one screen
+    /// that must appear on a frame with nothing wrong with it is the one asking somebody not to
+    /// unplug it for the next two minutes, so this field is checked before that, and the page
+    /// renders these four fields and nothing else while it is set.
+    /// </remarks>
+    public string? FlashPhase { get; init; }
+
+    /// <summary>The firmware screen's headline, already worded for a non-technical reader.</summary>
+    public string? FlashHeadline { get; init; }
+
+    /// <summary>Its body, one sentence or one numbered step per entry.</summary>
+    /// <remarks>
+    /// A list rather than a paragraph because the recovery screen is a numbered gesture somebody
+    /// performs with their hands, and a person following it needs to keep their place in it.
+    /// </remarks>
+    public IReadOnlyList<string>? FlashLines { get; init; }
+
+    /// <summary>The label on the button this screen offers, or null when it offers none.</summary>
+    /// <remarks>
+    /// Null while a write is running, and only then. That is the one screen in this product with
+    /// nothing a person may usefully do, and a button on it would invite exactly the interruption
+    /// the whole feature exists to prevent.
+    /// </remarks>
+    public string? FlashAffordance { get; init; }
+
+    /// <summary>
     /// An instruction to the product, rather than anything about the device's condition.
     /// </summary>
     /// <remarks>
@@ -323,6 +373,16 @@ public sealed class LocalChannel
 
     /// <summary>Raised when somebody presses "Try again" at the frame (§2.5 rung 5).</summary>
     public event Action? RetryRequested;
+
+    /// <summary>
+    /// Raised when somebody at the frame answers the firmware screen (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// Carries nothing, because there is nothing to carry: what the press means is a property of
+    /// what the agent has on the panel at the instant it arrives, and the agent is the only party
+    /// that cannot be out of date about that.
+    /// </remarks>
+    public event Action? ArrayFlashAnswered;
 
     /// <summary>When the page last said anything at all.</summary>
     /// <remarks>
@@ -469,6 +529,9 @@ public sealed class LocalChannel
                 break;
             case PageMessage.KindRetry:
                 RetryRequested?.Invoke();
+                break;
+            case PageMessage.KindArrayFlash:
+                ArrayFlashAnswered?.Invoke();
                 break;
             default:
                 break;

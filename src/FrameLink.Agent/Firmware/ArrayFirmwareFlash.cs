@@ -45,6 +45,95 @@ public enum ArrayFlashRefusal
 
     /// <summary>A new agent binary is in place and this process is about to restart. Deferred.</summary>
     AgentRestartPending,
+
+    /// <summary>
+    /// Nobody at the frame has agreed to it yet. Deferred, not spent.
+    /// </summary>
+    /// <remarks>
+    /// The one refusal in this enum that is waiting on a person in the room rather than on a
+    /// machine. It is a deferral for exactly that reason: the authorisation stays armed, because an
+    /// operator's decision to flash this frame does not expire because the household was out.
+    /// </remarks>
+    AwaitingLocalApproval,
+
+    /// <summary>
+    /// The unit on the bus is not one this build has been told about (<see cref="ArrayHardwareGate"/>).
+    /// </summary>
+    ArrayNotRecognised,
+}
+
+/// <summary>
+/// One authorisation, taken apart — <c>&lt;sha256&gt;</c>, optionally <c>:&lt;ticket&gt;</c>.
+/// </summary>
+/// <param name="Digest">The SHA-256 of the image the operator is authorising.</param>
+/// <param name="Ticket">Whatever the operator wrote after the colon. May be empty.</param>
+/// <param name="UnattendedDeviceId">
+/// The device id named by an operator bypass inside the ticket, or null when there is none.
+/// </param>
+/// <remarks>
+/// <para>
+/// <b>The bypass rides inside the authorisation because that is what makes it single-use</b>, and
+/// adding a second mechanism would have made it something else. Single-use here is not a flag that
+/// is cleared: it is the <i>whole authorisation string</i> being written to
+/// <see cref="ArrayFirmwareFlash.ConsumedFileName"/> with <c>WriteSecretAtomic</c> before
+/// <c>dfu-util</c> starts, and an authorisation equal to the one already recorded being refused for
+/// ever after. A bypass carried inside that string is therefore spent by the same write, at the same
+/// instant, with no second file, no second flag and nothing that can be left switched on — and
+/// re-authorising an unattended write means writing a <i>different</i> string, which is an act
+/// somebody has to perform deliberately.
+/// </para>
+/// <para>
+/// <b>It names the device, which is what scopes it to one frame.</b> §3.4's settings are fleet
+/// defaults with per-device overrides, so a bypass that was merely a word would bypass on every
+/// frame the moment somebody set it fleet-wide — which is precisely the "fleet default" the operator
+/// ruled out. Requiring the frame's own device id inside the token means a fleet-wide push bypasses
+/// on exactly one frame and every other frame reads it, finds a name that is not its own, and asks
+/// its own household anyway. A frame that ignores a bypass for that reason says so in its journal
+/// rather than silently.
+/// </para>
+/// <para>
+/// <b>The token is long and reads as a sentence on purpose.</b>
+/// <see cref="ArrayFirmwareFlash.UnattendedPrefix"/> is not a flag anyone types by accident, and it
+/// states the thing being accepted — that no person will be at the frame while its microphone is
+/// written, and that mains loss during that write is unguardable and destroys the unit.
+/// </para>
+/// </remarks>
+public readonly record struct ArrayFlashAuthorisation(string Digest, string Ticket, string? UnattendedDeviceId)
+{
+    /// <summary>Takes an authorisation apart. Never throws; a malformed value simply matches nothing.</summary>
+    public static ArrayFlashAuthorisation Parse(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+
+        var parts = value.Split(':', 2);
+        var digest = parts[0].Trim();
+        var ticket = parts.Length > 1 ? parts[1].Trim() : string.Empty;
+        string? unattended = null;
+
+        foreach (var word in ticket.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
+        {
+            // The token alone is not a bypass. A bare prefix with nothing after it is somebody who
+            // stopped typing half way through the thing that scopes it to one frame, and reading
+            // that as "bypass everywhere" is the fleet-wide switch this design exists to prevent.
+            if (word.StartsWith(ArrayFirmwareFlash.UnattendedPrefix, StringComparison.Ordinal)
+                && word[ArrayFirmwareFlash.UnattendedPrefix.Length..] is { Length: > 0 } named)
+            {
+                unattended = named;
+            }
+        }
+
+        return new ArrayFlashAuthorisation(digest, ticket, unattended);
+    }
+
+    /// <summary>Whether this authorisation skips the local approval on <paramref name="deviceId"/>.</summary>
+    public bool BypassesLocalApproval(string deviceId) =>
+        UnattendedDeviceId is { Length: > 0 } named
+        && string.Equals(named, deviceId, StringComparison.Ordinal);
+
+    /// <summary>Whether it carries a bypass meant for some other frame.</summary>
+    public bool BypassNamesAnotherDevice(string deviceId) =>
+        UnattendedDeviceId is { Length: > 0 } named
+        && !string.Equals(named, deviceId, StringComparison.Ordinal);
 }
 
 /// <summary>What one look at the authorisation concluded.</summary>
@@ -75,6 +164,11 @@ public sealed record ArrayFlashServices
 
     /// <summary>The window that holds updates, reboots and the bench power switch off.</summary>
     public required ArrayFlashWindow Window { get; init; }
+
+    /// <summary>
+    /// The person at the frame, and the screen that asks them — the one interlock software cannot be.
+    /// </summary>
+    public required ArrayFlashApproval Approval { get; init; }
 
     /// <summary>Where the event trail goes.</summary>
     public required IReconcileTelemetry Telemetry { get; init; }
@@ -175,6 +269,42 @@ public sealed class ArrayFirmwareFlash
     /// <summary>Where the spent authorisation is remembered, durably.</summary>
     public const string ConsumedFileName = "array-flash.consumed";
 
+    /// <summary>
+    /// The operator's scoped bypass, written inside the authorisation's ticket as
+    /// <c>&lt;prefix&gt;&lt;deviceId&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>A frame may be somewhere nobody can stand</b>, so the local approval has to be skippable —
+    /// and every property that makes it safe to skip comes from where the token lives rather than
+    /// from the token itself. It is inside the single-use authorisation, so it is spent by the same
+    /// atomic write and cannot be left on. It carries a device id, so it cannot become a fleet
+    /// default. It is a sentence rather than a flag, so nobody sets it without reading it. See
+    /// <see cref="ArrayFlashAuthorisation"/> for the whole of that reasoning, and
+    /// <see cref="UnattendedWarning"/> for the words an operator has to have accepted.
+    /// </remarks>
+    public const string UnattendedPrefix = "unattended-nobody-at-this-frame-i-accept-mains-loss-destroys-it=";
+
+    /// <summary>
+    /// The warnings an operator is accepting by writing <see cref="UnattendedPrefix"/> into a ticket.
+    /// </summary>
+    /// <remarks>
+    /// Carried on the frame and emitted verbatim into the <c>array-flash</c> event of every
+    /// unattended write, so the trail records not only that a frame was flashed with nobody in front
+    /// of it but exactly what was being accepted when it was. It is a constant here because the
+    /// agent is the thing that acts on the bypass, and a warning that lives only in the surface an
+    /// operator reads can drift away from the behaviour it describes.
+    /// </remarks>
+    public static IReadOnlyList<string> UnattendedWarning { get; } =
+    [
+        "Nobody will be standing at this frame while its microphone is written.",
+        "Mains loss during the write is unguardable at the device: no interlock in this product can reach it, and a "
+            + "write interrupted by loss of power can leave the microphone unusable until somebody recovers it by hand.",
+        "Recovery needs physical access — power the unit off, hold Mute, power it back on — so a frame nobody can "
+            + "reach is a frame nobody can recover.",
+        "This applies to one write on one named frame. It is spent the instant the write starts and authorises "
+            + "nothing afterwards.",
+    ];
+
     /// <summary>The program that performs the write. Named in this file and nowhere else.</summary>
     public const string DfuUtil = "dfu-util";
 
@@ -187,6 +317,14 @@ public sealed class ArrayFirmwareFlash
     /// how long an operator should wait after pressing the button rather than against any cost.
     /// </remarks>
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromMinutes(1);
+
+    /// <summary>How often it looks while one of its own screens is up.</summary>
+    /// <remarks>
+    /// The screen is the reason, not the flash. While a firmware question is covering a household's
+    /// photos, every condition that would take it away again — a call starting, an update landing,
+    /// the operator changing their mind — has to be noticed in seconds rather than in a minute.
+    /// </remarks>
+    public static readonly TimeSpan PromptInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>How long the array is given to come back after the write.</summary>
     /// <remarks>
@@ -201,6 +339,7 @@ public sealed class ArrayFirmwareFlash
 
     private readonly ArrayFlashServices _services;
     private ArrayFlashRefusal? _reported;
+    private string? _reportedWhy;
 
     /// <summary>Creates the flash for one frame.</summary>
     public ArrayFirmwareFlash(ArrayFlashServices services)
@@ -231,46 +370,70 @@ public sealed class ArrayFirmwareFlash
         // board becomes an unrecoverable one. Only a person deletes this.
         if (_services.Window.Interrupted)
         {
+            // The same durable evidence, put on the screen the person is standing in front of. An
+            // array that is not on the bus at all is a board that did not come back, and the way
+            // back is a gesture somebody performs with their hands — so it is spelled out on the
+            // panel, which is the surface that still works when the microphone does not.
+            var attached = XvfArrayUsb.Attached(_services.Files);
+            _services.Approval.Interrupted(attached.Count > 0);
+
+            // Shown, and then bounded by the same call that bounds every other completed screen.
+            // A frame whose marker only a person can remove would otherwise cover a household's
+            // photos for ever — and permanently for a frame with no touchscreen, which cannot even
+            // be told to put it away. It comes back after the rest, so the condition is named
+            // repeatedly rather than once, which is what §1.2 principle 3 asks for.
+            _services.Approval.Withdraw();
+
             return await RefuseAsync(
                 ArrayFlashRefusal.PreviousFlashUnfinished,
                 "A previous firmware write on this frame never finished — "
                 + (_services.Window.InterruptedDetail ?? "no detail was recorded")
-                + ". Nothing further will be written until somebody has looked at the microphone unit and removed "
+                + (attached.Count > 0
+                    ? ". A microphone unit is still on the bus, so it may be well — this frame cannot tell."
+                    : ". No microphone unit is on the bus at all, so the frame is showing the Safe Mode recovery "
+                        + "gesture on its own screen.")
+                + " Nothing further will be written until somebody has looked at the microphone unit and removed "
                 + _services.Store.PathOf(ArrayFlashWindow.MarkerFileName) + ".",
                 cancellationToken).ConfigureAwait(false);
         }
 
         if (_services.Values.Find(AuthorisationKey) is not { } authorisation)
         {
+            _services.Approval.Withdraw();
             return Quiet(ArrayFlashRefusal.NotAuthorised, "No firmware write is authorised on this frame.");
         }
 
         if (string.Equals(Consumed(), authorisation, StringComparison.Ordinal))
         {
+            _services.Approval.Withdraw();
             return Quiet(
                 ArrayFlashRefusal.AlreadyConsumed,
                 "This firmware authorisation has already been used. Authorising another write means writing a different value.");
         }
 
-        var digest = authorisation.Split(':', 2)[0].Trim();
-        if (!string.Equals(digest, target.Sha256, StringComparison.OrdinalIgnoreCase))
+        var parsed = ArrayFlashAuthorisation.Parse(authorisation);
+        if (!string.Equals(parsed.Digest, target.Sha256, StringComparison.OrdinalIgnoreCase))
         {
+            _services.Approval.Withdraw();
             return await RefuseAsync(
                 ArrayFlashRefusal.NotThePinnedImage,
-                $"The firmware authorisation names sha256 {Short(digest)}, and the only image this build may write is "
+                $"The firmware authorisation names sha256 {Short(parsed.Digest)}, and the only image this build may write is "
                 + $"{target.Name} at sha256 {Short(target.Sha256)}. Nothing was written.",
                 cancellationToken).ConfigureAwait(false);
         }
 
         // Deferrals, before anything is spent. Both of these are ordinary and both come back on the
-        // next tick with the authorisation still armed.
+        // next tick with the authorisation still armed. Both also take the screen back: a firmware
+        // question must never be sitting on top of a call somebody has just started.
         if (_services.CallActive?.Invoke() == true)
         {
+            _services.Approval.Withdraw();
             return Quiet(ArrayFlashRefusal.CallInProgress, "Somebody is on a call; the firmware write is waiting.");
         }
 
         if (_services.RestartPending?.Invoke() == true)
         {
+            _services.Approval.Withdraw();
             return Quiet(
                 ArrayFlashRefusal.AgentRestartPending,
                 "A new agent version is in place and this process is about to restart; the firmware write is waiting.");
@@ -288,10 +451,118 @@ public sealed class ArrayFirmwareFlash
                 Consume(authorisation);
             }
 
+            _services.Approval.Withdraw();
             return await RefuseAsync(refusal.Kind, refusal.Why, cancellationToken).ConfigureAwait(false);
         }
 
-        return await FlashAsync(authorisation, cancellationToken).ConfigureAwait(false);
+        // Last, and deliberately last. Everything above is a machine answering a machine, and none
+        // of it needs a person; asking a household to stand by a frame that then refuses for a
+        // missing image would teach them that the question means nothing. From here everything is
+        // ready and the only thing left is whether somebody has said the write may start.
+        if (await ApprovedAsync(authorisation, parsed, cancellationToken).ConfigureAwait(false) is { } waiting)
+        {
+            return waiting;
+        }
+
+        return await FlashAsync(authorisation, parsed, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <b>The interlock that is a person</b> — null when the write may start, a refusal when not.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Mains loss during a DFU write is unguardable at the device and destroys the unit; the only
+    /// mitigation that exists is somebody in the room who has been told that and has agreed to it.
+    /// So this is the last gate and it is the one that cannot be satisfied by the frame itself: it
+    /// puts <see cref="ArrayFlashVoice.Asking"/> on the panel and waits, and the authorisation stays
+    /// armed for as long as it waits.
+    /// </para>
+    /// <para>
+    /// <b>The operator's bypass is checked first and is scoped to this device.</b> A bypass naming
+    /// another frame is not a bypass here — it is ignored, said out loud in the journal, and the
+    /// household is asked exactly as it would have been — which is what stops a fleet-wide setting
+    /// from silently skipping the local step everywhere.
+    /// </para>
+    /// </remarks>
+    private async Task<ArrayFlashOutcome?> ApprovedAsync(
+        string authorisation,
+        ArrayFlashAuthorisation parsed,
+        CancellationToken cancellationToken)
+    {
+        if (parsed.BypassesLocalApproval(_services.DeviceId))
+        {
+            _services.Approval.Approve(
+                authorisation,
+                "the fleet operator authorised it unattended for this device, accepting that "
+                + string.Join(" ", UnattendedWarning));
+            return null;
+        }
+
+        if (parsed.BypassNamesAnotherDevice(_services.DeviceId))
+        {
+            _services.Log.Warn(
+                $"The firmware authorisation carries an unattended bypass for {parsed.UnattendedDeviceId}, which is "
+                + $"not this frame ({_services.DeviceId}). The bypass is being ignored and somebody at this frame "
+                + "will be asked, exactly as they would have been without it.");
+        }
+
+        if (string.Equals(_services.Approval.ApprovedFor, authorisation, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var asking = _services.Approval.Ask(authorisation);
+
+        return await RefuseAsync(
+            ArrayFlashRefusal.AwaitingLocalApproval,
+            asking
+                ? _services.Approval.Answerable
+                    ? "A firmware write is authorised on this frame and is waiting for somebody standing at it to "
+                        + "agree to it on the screen. Mains loss during the write is the one hazard nothing in this "
+                        + "product can guard against, so the write does not start until a person has said they will "
+                        + "not take the power away."
+                    : "A firmware write is authorised on this frame, and this frame has no touchscreen — so nobody "
+                        + "can agree to it here and nothing will be written. Either give the frame a working panel, "
+                        + "or authorise the write unattended for this device by adding '"
+                        + UnattendedPrefix + _services.DeviceId + "' to the authorisation's ticket, which accepts "
+                        + "that " + string.Join(" ", UnattendedWarning)
+                : "A firmware write is authorised on this frame and nobody at the frame has agreed to it. The screen "
+                    + "has gone back to the product for now and will ask again later; the authorisation is still armed.",
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Takes this class's own screen off the panel when something else needs it, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <b>The cheap half of a tick, and the only half worth running quickly.</b> A firmware question
+    /// covers whatever the panel was showing, and the one thing it may never cover is somebody's
+    /// conversation — so between full ticks this runs on a short cadence and does exactly one thing.
+    /// A full tick would re-hash six megabytes of pinned images and start three control-tool
+    /// processes against the device the reconciler is also reading, every few seconds, for as long
+    /// as a household took to answer a question.
+    /// </remarks>
+    /// <returns>Whether a screen was taken away.</returns>
+    public bool StandDown()
+    {
+        if (_services.Approval.Prompt is null)
+        {
+            return false;
+        }
+
+        if (_services.CallActive?.Invoke() == true || _services.RestartPending?.Invoke() == true)
+        {
+            _services.Approval.Withdraw();
+            return true;
+        }
+
+        // Nothing needs the panel back, so the other cheap thing worth doing is making sure the
+        // screen still describes the frame it is on: the touchscreen is found by a watch of its own
+        // and the operator's contact details arrive over the link, so either can land after a
+        // screen has gone up.
+        _services.Approval.Refresh();
+        return false;
     }
 
     /// <summary>Ticks once, then on the interval, until asked to stop.</summary>
@@ -314,16 +585,36 @@ public sealed class ArrayFirmwareFlash
                 _services.Log.Warn($"An array firmware tick failed and was skipped: {exception.Message}");
             }
 
-            try
+            // One long sleep on a frame with nothing to say — which is every frame, nearly always —
+            // and a series of short ones while a screen of this class's own is up. What the short
+            // ones buy is not a faster flash: it is a question that comes off the panel in seconds
+            // when a call starts, rather than in up to a minute.
+            var waited = TimeSpan.Zero;
+
+            while (waited < DefaultInterval)
             {
-                await _services.Clock.DelayAsync(DefaultInterval, cancellationToken).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
+                var slice = _services.Approval.Prompt is null ? DefaultInterval - waited : PromptInterval;
+
+                try
+                {
+                    await _services.Clock.DelayAsync(slice, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                waited += slice;
+                StandDown();
             }
         }
     }
+
+    /// <summary>Everything the last pre-flight could read about the attached unit, or null.</summary>
+    public ArrayIdentity? Identity { get; private set; }
+
+    /// <summary>What the hardware gate concluded on the last pre-flight that reached it.</summary>
+    public ArrayGateVerdict? Verdict { get; private set; }
 
     /// <summary>The firmware version the array reports over USB, or null.</summary>
     /// <remarks>
@@ -391,19 +682,43 @@ public sealed class ArrayFirmwareFlash
                 $"The microphone unit already reports firmware {running}, which is the pinned target, so nothing was written.");
         }
 
+        // Last in the pre-flight, and after AlreadyAtTarget rather than before it, which is a
+        // deliberate ordering rather than an accident of where it was added. An unrecognised unit
+        // that is already on the target has had nothing written to it either way, and letting that
+        // case reach the spend is what keeps decision 91's "a later array swap cannot be flashed by
+        // nobody's decision" true — a refusal here does not spend, so a gate that ran first would
+        // leave an authorisation armed on a frame whose array somebody then changed.
+        Identity = await ArrayHardwareGate
+            .ReadAsync(_services.Files, _services.Tool, cancellationToken)
+            .ConfigureAwait(false);
+
+        var verdict = ArrayHardwareGate.Judge(Identity, pin);
+        Verdict = verdict;
+
+        if (verdict != ArrayGateVerdict.Recognised)
+        {
+            return (ArrayFlashRefusal.ArrayNotRecognised, ArrayHardwareGate.Explain(verdict, Identity));
+        }
+
         return null;
     }
 
-    private async Task<ArrayFlashOutcome> FlashAsync(string authorisation, CancellationToken cancellationToken)
+    private async Task<ArrayFlashOutcome> FlashAsync(
+        string authorisation,
+        ArrayFlashAuthorisation parsed,
+        CancellationToken cancellationToken)
     {
         var pin = _services.Installer.Pin;
         var target = pin.Target;
         var path = XvfFirmwareInstaller.PathOf(target);
         var before = DescriptorVersion() ?? "unreadable";
         var started = _services.Clock.UtcNow;
+        var unattended = parsed.BypassesLocalApproval(_services.DeviceId);
 
         // Spent first, durably, and only then is anything started. Everything after this line may
-        // die at any instant; nothing after this line may authorise a second write.
+        // die at any instant; nothing after this line may authorise a second write. The whole
+        // authorisation string goes in, which is what makes the operator's unattended bypass
+        // single-use by the same act rather than by a mechanism of its own.
         Consume(authorisation);
 
         ProcessResult write;
@@ -412,6 +727,11 @@ public sealed class ArrayFirmwareFlash
         var scope = _services.Window.Open(
             $"writing {target.Name} (sha256 {Short(target.Sha256)}) to the microphone unit");
         var returned = false;
+
+        // On the panel for the whole of the write, however it came to be agreed to. An unattended
+        // write means nobody was standing there when it started — not that nobody will walk past
+        // while it runs, and the person who does needs the same sentence the approver read.
+        _services.Approval.Writing();
 
         try
         {
@@ -461,6 +781,19 @@ public sealed class ArrayFirmwareFlash
             + $"in {elapsed.TotalSeconds:F0} s. It reported firmware {before} before and "
             + $"{after ?? "nothing"} after, and the control tool answers {control ?? "nothing"}.{agreement}");
 
+        // Who agreed to it is part of the trail, not a detail of how it was started. Six months
+        // later "was anybody standing there?" is the first question anybody asks about a unit that
+        // came back wrong, and an event that does not answer it makes the answer unknowable.
+        summary += unattended
+            ? " Nobody at the frame was asked: the fleet operator authorised this write unattended for this device, "
+                + "accepting that " + string.Join(" ", UnattendedWarning)
+            : " Somebody standing at the frame agreed to it on the screen before it started.";
+
+        if (Identity is { } identity)
+        {
+            summary += " The unit this was written to reads as: " + identity.Describe() + ".";
+        }
+
         if (!succeeded)
         {
             summary += " The write did not produce the pinned firmware. Nothing further will be attempted on this "
@@ -488,7 +821,13 @@ public sealed class ArrayFirmwareFlash
             },
             cancellationToken).ConfigureAwait(false);
 
+        // The screen the person who stood guard is owed: whether it worked, that they may unplug
+        // the frame again, and something to press. It stays until somebody presses it or until the
+        // linger runs out, because an unattended frame has nobody to press anything.
+        _services.Approval.Finished(succeeded);
+
         _reported = null;
+        _reportedWhy = null;
         return new ArrayFlashOutcome(null, Flashed: true, succeeded, summary);
     }
 
@@ -537,12 +876,17 @@ public sealed class ArrayFirmwareFlash
         string why,
         CancellationToken cancellationToken)
     {
-        if (_reported == refusal)
+        // The pair, not the kind. One refusal kind can carry materially different sentences — the
+        // local approval is waiting on a person, or on a frame that has no touchscreen for one to
+        // use — and gating on the kind alone would send whichever arrived first and silently drop
+        // the one that told the operator what to do about it.
+        if (_reported == refusal && string.Equals(_reportedWhy, why, StringComparison.Ordinal))
         {
             return new ArrayFlashOutcome(refusal, Flashed: false, Succeeded: false, why);
         }
 
         _reported = refusal;
+        _reportedWhy = why;
         _services.Log.Warn(why);
 
         await _services.Telemetry.EventAsync(
@@ -563,6 +907,7 @@ public sealed class ArrayFirmwareFlash
     private ArrayFlashOutcome Quiet(ArrayFlashRefusal refusal, string why)
     {
         _reported = refusal;
+        _reportedWhy = why;
         return new ArrayFlashOutcome(refusal, Flashed: false, Succeeded: false, why);
     }
 

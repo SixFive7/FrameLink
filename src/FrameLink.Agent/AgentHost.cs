@@ -227,6 +227,13 @@ public sealed class AgentHost
         // to happen before anything else could have written one.
         var flashWindow = new ArrayFlashWindow(store, _clock);
 
+        // Decision 91's last interlock, and the only one that is a person. It owns the frame's screen
+        // for the length of a firmware question and for the length of a write, so it is created
+        // beside the window rather than beside the flash: both the console stage and the browser
+        // stage read what it publishes, and the interrupted screen below has to be reachable on a
+        // frame where nothing else about the flash ever runs.
+        var flashApproval = new ArrayFlashApproval(hub, _clock, _log);
+
         if (flashWindow.Interrupted)
         {
             _log.Fail(
@@ -348,6 +355,12 @@ public sealed class AgentHost
         // other local-channel handlers.
         Action? retryFromFrame = null;
         channel.RetryRequested += () => retryFromFrame?.Invoke();
+
+        // Decision 91's browser half. The same method the console's hold calls, so "yes, go ahead"
+        // and "OK, put this away" mean what the screen says they mean whichever surface the panel
+        // happens to be showing — and a press can never approve a write the page was no longer
+        // displaying, because what it does is decided from the agent's own current screen.
+        channel.ArrayFlashAnswered += () => flashApproval.Answer("the browser stage");
 
         // Guide 11's daemon, inside the agent (§2.1). It holds the GPIO line for as long as the
         // agent runs and turns a press into the toggle that used to arrive over a WebSocket server
@@ -499,6 +512,17 @@ public sealed class AgentHost
             Log = _log,
             Offered = () => ReconcileVoice.HasStopped(hub.Current),
             Retry = () => retryFromFrame(),
+
+            // Decision 91, through the reader that already exists rather than through a second one.
+            // A firmware screen outranks the retry whenever one is up, brings its own five-second
+            // hold, and answers whatever it is currently saying — so the bar being counted, the
+            // label above it and the thing that happens at the end are one decision.
+            Ask = () => flashApproval.Prompt is { Affordance: { Length: > 0 } affordance } prompt
+                ? new TouchAsk(
+                    $"answering the microphone screen ({affordance})",
+                    prompt.Hold,
+                    () => flashApproval.Answer("a hold on the panel"))
+                : null,
         });
 
         // §2.3's vocabulary, composed from the loop's own state rather than from anything this
@@ -634,6 +658,7 @@ public sealed class AgentHost
                 new HttpXvfHostDownload(http, _log),
                 _log),
             Window = flashWindow,
+            Approval = flashApproval,
             Telemetry = outbox,
             Store = store,
             Clock = _clock,

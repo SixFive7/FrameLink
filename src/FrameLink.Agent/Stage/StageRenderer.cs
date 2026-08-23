@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.State;
 
@@ -73,12 +74,30 @@ public static class StagePalette
     /// screen now agrees with itself rather than with the handshake.
     /// </para>
     /// </remarks>
-    public static int For(AgentStatus status) => ReconcileVoice.Voice(status) switch
+    public static int For(AgentStatus status)
     {
-        StageVoice.Stopped => Red,
-        StageVoice.Repairing => Amber,
-        _ => ForRung(status.Condition),
-    };
+        ArgumentNullException.ThrowIfNull(status);
+
+        // Decision 91's screens sit above the ladder rather than on it, so the accent does too. A
+        // frame asking somebody not to unplug it is a frame with nothing wrong on it — green would
+        // be the ladder's honest answer and would be the wrong signal entirely, because the whole
+        // point of the screen is that something needs a person. Blue is this palette's "waiting on a
+        // person" and is exactly what this is; red is a write that did not come back or a unit that
+        // is not answering; green is the one screen that genuinely says everything is well.
+        if (status.ArrayFlash is { } prompt)
+        {
+            return prompt.Alarming ? Red
+                : prompt.Phase is ArrayFlashPhase.Succeeded ? Green
+                : Blue;
+        }
+
+        return ReconcileVoice.Voice(status) switch
+        {
+            StageVoice.Stopped => Red,
+            StageVoice.Repairing => Amber,
+            _ => ForRung(status.Condition),
+        };
+    }
 
     /// <summary>
     /// The name the browser stage sends for an accent this class chose (§2.7's second surface).
@@ -269,8 +288,64 @@ public static class StageRenderer
         return new string(cells);
     }
 
+    /// <summary>
+    /// The firmware screen, which replaces the narration rather than sitting beside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It is exclusive, and that is the design.</b> Everything else this renderer draws is
+    /// addressed to somebody who came to find out what is wrong with a frame. This is addressed to
+    /// whoever happens to be in the room, about one decision, with a consequence measured in broken
+    /// hardware — and a screen that put "please do not unplug this" underneath four fields about
+    /// resource attempts would be asking them to read past the part that matters.
+    /// </para>
+    /// <para>
+    /// <b>Nothing here is composed.</b> The headline, every line and the affordance arrive already
+    /// worded from <see cref="ArrayFlashVoice"/>, which is the same record the browser stage sends
+    /// to the page — so the two surfaces cannot come to say different things about the same write,
+    /// which is decision 83's rule applied before there is a second implementation to disagree with.
+    /// </para>
+    /// </remarks>
+    private static List<string> BuildFlash(ArrayFlashPrompt prompt, int inner, int accent, bool colour)
+    {
+        var lines = new List<string>(prompt.Lines.Count + 6)
+        {
+            Compose([], inner, colour),
+            Compose(
+                [
+                    // Still, never a spinner, on every one of these screens. Decision 70's rule is
+                    // that nothing may animate work that is not happening, and the one screen here
+                    // where work *is* happening is the one nobody may act on — so a moving glyph
+                    // there would be inviting attention to a screen whose whole message is "wait".
+                    new Run("■  ", accent),
+                    new Run(prompt.Headline, StagePalette.Headline, Bold: true),
+                ],
+                inner,
+                colour),
+            Compose([], inner, colour),
+        };
+
+        foreach (var line in prompt.Lines)
+        {
+            AddField(lines, string.Empty, line, inner, colour);
+        }
+
+        if (ArrayFlashVoice.HoldLine(prompt) is { Length: > 0 } hold)
+        {
+            lines.Add(Compose([], inner, colour));
+            AddField(lines, string.Empty, hold, inner, colour);
+        }
+
+        return lines;
+    }
+
     private static List<string> BuildHead(AgentStatus status, int tick, int inner, int accent, bool colour)
     {
+        if (status.ArrayFlash is { } prompt)
+        {
+            return BuildFlash(prompt, inner, accent, colour);
+        }
+
         // A stopped frame gets a still glyph in the accent of a refusal, not a turning spinner.
         // The spinner is the headline's half of the same promise the marquee makes below: that
         // something is happening. Nothing is (decision 70).
@@ -421,9 +496,15 @@ public static class StageRenderer
         {
             var left = Math.Max(0, (int)Math.Ceiling(status.Touch.Remaining(now).TotalSeconds));
 
+            // What the hold means is decided in one place and rendered here, so the label above
+            // the bar is always the thing the sentence three lines up asked for. A bar labelled
+            // "Try again" counting out a firmware approval would be the exact defect decision 77
+            // set out to avoid, in words instead of in coordinates.
+            var label = status.ArrayFlash is { Affordance: { Length: > 0 } affordance } ? affordance : "Try again";
+
             return Compose(
                 [
-                    new Run(Pad("Try again", LabelWidth), StagePalette.Label),
+                    new Run(Pad(label, LabelWidth), StagePalette.Label),
                     new Run(Bar(status.Touch.Progress(now), barWidth) + "  ", StagePalette.Blue),
                     new Run(
                         left <= 0

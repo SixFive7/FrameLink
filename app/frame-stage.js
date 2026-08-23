@@ -194,6 +194,50 @@ function headline(text, accent) {
   return row;
 }
 
+// The microphone-update screens — version2.md decision 91. Rendered *before* productRuns is
+// consulted, and that is the whole reason this block is separate.
+//
+// Every other narration on this surface answers "what is wrong with this frame", so a converged
+// frame hides all of it and shows photographs. These screens are the opposite case: the frame is
+// perfectly well, and somebody in the room has to be asked not to take the power away for the next
+// two minutes, because mains loss during a firmware write is the one hazard no software interlock
+// on the frame can reach. A screen that only appeared on a broken frame would never appear at all.
+//
+// Not one word here is composed. The headline, every line and the button's label arrive already
+// written from the agent's ArrayFlashVoice — the same record the console stage paints on
+// /dev/tty8 — so the two surfaces cannot come to say different things about the same write. The
+// press carries nothing for the same reason: what it means is whatever the agent currently has on
+// the panel, and the agent is the only party that cannot be out of date about that.
+function renderFlash(element, stage) {
+  element.replaceChildren();
+  element.style.display = 'flex';
+
+  element.appendChild(headline(stage.flashHeadline, stage.accent));
+
+  for (const text of stage.flashLines || []) {
+    element.appendChild(line(text, 'font-size:19px;color:#e8e8e8;max-width:44em;line-height:1.5'));
+  }
+
+  // No button while the write is running, and that is the only screen without one. It is the one
+  // moment in this product when there is nothing a person may usefully do, and an affordance there
+  // would be inviting exactly the interruption the screen is asking them to avoid.
+  if (!stage.flashAffordance) return;
+
+  const button = document.createElement('button');
+  button.textContent = stage.flashAffordance;
+  button.style.cssText = [
+    'margin-top:22px', 'padding:20px 44px', 'font-size:23px', 'border-radius:12px',
+    'border:1px solid #3a3a3a', 'background:#1b1b1b', 'color:#e8e8e8', 'cursor:pointer',
+    // The same exemption §2.7 item 4 gives "Reboot now": v1's touch shield must not block this.
+    'touch-action:manipulation', 'pointer-events:auto',
+  ].join(';');
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    send({ kind: 'array-flash' });
+  });
+  element.appendChild(button);
+}
+
 function render(stage) {
   const element = overlay();
 
@@ -201,6 +245,11 @@ function render(stage) {
   // annotation is a small persistent strip and not a takeover — §2.10's "an annotation, not a
   // rung", rendered only once the fault rate says somebody has to look at this frame.
   banner(stage.supervisionOverlay);
+
+  if (stage.flashHeadline) {
+    renderFlash(element, stage);
+    return;
+  }
 
   if (stage.productRuns) {
     element.style.display = 'none';
