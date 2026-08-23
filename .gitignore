@@ -24,3 +24,4 @@ __pycache__/
 # Disk images and other large local archives. Never committed - the v1 card image
 # alone is 119 GiB. Kept in the working directory for convenience, not for git.
 archive/
+SESSION-STATE.md
