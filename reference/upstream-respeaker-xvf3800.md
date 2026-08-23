@@ -22,9 +22,13 @@ places in this repository that overstate their evidence are named in
 [What has already been corrected](#corrections) rather than quietly repeated.
 
 The re-measurement used the GitHub REST API, `raw.githubusercontent.com` at explicit commit SHAs,
-and `sha256sum` on the downloaded bytes. Nothing was flashed, no array was touched, and no hardware
-reading in this file is new — the device-side readings are this project's own captures of
-2026-08-20 and 2026-08-23, cited as such.
+and `sha256sum` on the downloaded bytes. **Two classes of fact here were not re-measured on that
+date and are carried from earlier work, labelled where they appear.** The device-side readings are
+this project's own captures of 2026-08-20 and 2026-08-23 — nothing was flashed and no array was
+touched for this file. And the entropy and string analysis of the two firmware binaries in
+[section 2](#2-one-version-number-two-different-binaries) is the 2026-08-23 array workstream's
+measurement; the digests and the byte difference beside it were re-taken on 2026-08-24, that
+analysis was not.
 
 ---
 
