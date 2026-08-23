@@ -1,3 +1,4 @@
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Resources;
@@ -688,14 +689,13 @@ public sealed class AgentAudioTests
     }
 
     [Fact]
-    public void Nothing_in_the_agent_can_start_a_dfu_flash()
+    public void Only_one_file_in_the_agent_can_start_a_dfu_flash()
     {
-        // Decision 90's structural half, and it is a stronger guarantee than the two-key interlock
-        // it replaces. `dfu-util` used to be named in one private method behind an authorisation
-        // check; the assertion was that an unauthorised Act started no process. Now there is no
-        // authorisation to withhold, because there is no caller: every surviving mention of the
-        // name is either the apt package that puts the program on the frame for a person to run, or
-        // prose explaining that nothing runs it.
+        // Decision 91's structural half, and it is the same shape decision 90's test had with the
+        // conclusion reversed. That test asserted the agent could not flash at all; this one asserts
+        // that everything which *can* lives in one file, so "is the dangerous path guarded" is a
+        // question about one place rather than about the whole tree. The two permitted mentions are
+        // the apt package that puts the program on the frame and the interlocked flash that runs it.
         var agent = Path.Combine(GuiFreshnessTests.RepositoryRoot(), "src", "FrameLink.Agent");
         var mentioning = new List<string>();
 
@@ -707,10 +707,15 @@ public sealed class AgentAudioTests
                 continue;
             }
 
+            var name = Path.GetFileName(file);
             var text = File.ReadAllText(file);
 
-            // The argument vector the flash used to build. Nothing may reconstruct it.
-            Assert.DoesNotContain("\"-a\", \"1\", \"-D\"", text, StringComparison.Ordinal);
+            // The argument vector that writes the Upgrade partition. Exactly one file may build it,
+            // and it is the one the interlocks live in.
+            if (text.Contains("\"-a\", \"1\", \"-D\"", StringComparison.Ordinal))
+            {
+                Assert.Equal("ArrayFirmwareFlash.cs", name);
+            }
 
             foreach (var line in text.Split('\n'))
             {
@@ -718,12 +723,29 @@ public sealed class AgentAudioTests
                     && !line.TrimStart().StartsWith("///", StringComparison.Ordinal)
                     && !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
                 {
-                    mentioning.Add(Path.GetFileName(file) + ": " + line.Trim());
+                    mentioning.Add(name);
                 }
             }
         }
 
-        Assert.Equal(["PackageResources.cs: Package = \"dfu-util\","], mentioning);
+        Assert.Equal(
+            ["ArrayFirmwareFlash.cs", "PackageResources.cs"],
+            mentioning.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void The_flash_writes_the_upgrade_partition_and_never_the_factory_one()
+    {
+        // `-a 0` is the Factory partition, which is where Safe Mode's own firmware lives and is the
+        // only reason an interrupted write is recoverable at all. `-a 2` is the DataPartition, which
+        // is what upstream issue #8's corruption lives in and what a reflash cannot clear. Neither
+        // may ever appear: this build writes alt 1 and nothing else, and that is checked against the
+        // vector rather than against a comment.
+        var vector = ArrayFirmwareFlash.Arguments("/var/lib/fl-agent/xvf3800/xmos_firmwares/usb/image.bin");
+
+        Assert.Equal(
+            ["-R", "-e", "-a", "1", "-D", "/var/lib/fl-agent/xvf3800/xmos_firmwares/usb/image.bin"],
+            vector);
     }
 
     [Fact]
@@ -732,14 +754,20 @@ public sealed class AgentAudioTests
         // The reason this change exists. A 2.0.6 array used to drift `firmware.xvf3800.version`,
         // spend three attempts and three reboots, escalate, and stop the whole pass by decision 68
         // — leaving the screen, the camera and the speaker Blocked behind a version number nobody
-        // was ever going to let the frame write.
+        // was ever going to let the frame write. Decision 91 lets the agent write firmware again and
+        // this property is unchanged, because what came back into the graph is the *images* and not
+        // the version: a frame on 2.0.6 with no authorisation still converges everything else.
         using var files = new TemporaryFiles();
         var processes = Mixer(files, (Pcm0Correct, Pcm1Correct));
         Tool(files, processes, "VERSION 2 0 6");
 
         var block = Audio(files, processes);
 
-        Assert.DoesNotContain(block, resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal));
+        Assert.DoesNotContain(block, resource => resource.Name == "firmware.xvf3800.version");
+        Assert.DoesNotContain(
+            block,
+            resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal)
+                && resource.Name != XvfFirmwareImageResource.ResourceName);
         Assert.True((await Observe(block, XvfAmplifierResource.ResourceName)).InSync);
     }
 

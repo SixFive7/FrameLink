@@ -247,6 +247,191 @@ public sealed class HttpXvfHostDownload : IXvfHostDownload
     }
 }
 
+/// <summary>How one verified fetch ended.</summary>
+public enum VerifiedFetchResult
+{
+    /// <summary>The bytes arrived, matched the pin and are in place.</summary>
+    Installed,
+
+    /// <summary>Upstream could not be reached, or answered something unusable.</summary>
+    Unreachable,
+
+    /// <summary>The download was not the length the pin states.</summary>
+    SizeMismatch,
+
+    /// <summary>The download did not hash to the pinned digest.</summary>
+    ChecksumMismatch,
+}
+
+/// <summary>
+/// <b>Fetch → verify length and SHA-256 → fsync → atomic rename.</b> One implementation, because
+/// two would eventually disagree.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Extracted from <see cref="XvfHostInstaller"/> when a second pinned artifact appeared —
+/// <c>XvfFirmwareInstaller</c>, which puts the array's DFU images on the card. Both fetch from the
+/// same publisher over the same content-addressed URL shape, and both have the same requirement:
+/// nothing unverified is ever put in place, and a server that keeps sending fills no disk. A copy
+/// of this loop with one of those properties quietly missing is exactly the failure the whole pin
+/// exists to prevent, and the copy that would have gone missing is the firmware one — the file that
+/// gets written to a device that has no second chance.
+/// </para>
+/// <para>
+/// The two promises the tail keeps are deliberately different things. <c>rename(2)</c> is atomic
+/// with respect to a <i>reader</i> — the file is wholly old or wholly new and never half — while
+/// <c>fsync</c> is what makes the new content <i>durable</i>. Only the pair of them survives a power
+/// cut, and both of this method's callers write to the card a frame boots from.
+/// </para>
+/// </remarks>
+public static class VerifiedFetch
+{
+    /// <summary>Suffix of the file each download is staged into before the rename.</summary>
+    public const string StagingSuffix = ".part";
+
+    /// <summary>Fetches <paramref name="url"/> into <paramref name="path"/>, or refuses.</summary>
+    public static async Task<VerifiedFetchResult> IntoAsync(
+        ISystemFiles files,
+        IXvfHostDownload download,
+        IAgentLog log,
+        Uri url,
+        string path,
+        string sha256,
+        long sizeBytes,
+        UnixFileMode mode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(download);
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(url);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
+
+        var payload = await download.OpenAsync(url, cancellationToken).ConfigureAwait(false);
+
+        if (payload is null)
+        {
+            return VerifiedFetchResult.Unreachable;
+        }
+
+        var name = path[(path.LastIndexOf('/') + 1)..];
+        var staging = path + StagingSuffix;
+        var resolved = files.Resolve(staging);
+
+        long written;
+        string digest;
+
+        await using (payload.ConfigureAwait(false))
+        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
+        {
+            await using var target = new FileStream(resolved, FileMode.Create, FileAccess.Write, FileShare.None);
+            var buffer = new byte[64 * 1024];
+            written = 0;
+
+            while (true)
+            {
+                var read = await payload.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                written += read;
+                if (written > sizeBytes)
+                {
+                    // A server that keeps sending is not serving the file the pin names, and
+                    // /var/lib/fl-agent is on the card this frame boots from.
+                    break;
+                }
+
+                hash.AppendData(buffer.AsSpan(0, read));
+                await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+            }
+
+            // flushToDisk, not Flush(). The rename below is atomic for a reader; it says nothing
+            // about whether the bytes reached the card.
+            target.Flush(flushToDisk: true);
+            digest = Convert.ToHexStringLower(hash.GetHashAndReset());
+        }
+
+        if (written != sizeBytes)
+        {
+            log.Fail(string.Create(
+                CultureInfo.InvariantCulture,
+                $"{name} rejected: {written} bytes fetched from {url}, {sizeBytes} expected."));
+            return Discard(files, staging, VerifiedFetchResult.SizeMismatch);
+        }
+
+        if (!string.Equals(digest, sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            log.Fail($"{name} rejected: {url} does not match the pinned digest.");
+            return Discard(files, staging, VerifiedFetchResult.ChecksumMismatch);
+        }
+
+        // Set before the rename so the target is never briefly unrunnable, and again after it on
+        // the path the file actually has — the same pair FileStateStore.WriteSecretAtomic keeps,
+        // because the mode travels with the inode through rename(2) on a frame and is recorded
+        // against the path on the workstation the suite runs on.
+        files.SetMode(staging, mode);
+        File.Move(resolved, files.Resolve(path), overwrite: true);
+        files.SetMode(path, mode);
+
+        log.Info($"{name} installed at {path} from {url}.");
+        return VerifiedFetchResult.Installed;
+    }
+
+    /// <summary>SHA-256 of a file the agent owns, or null if it is absent or unreadable.</summary>
+    public static async Task<string?> DigestAsync(
+        ISystemFiles files,
+        IAgentLog log,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(log);
+
+        if (!files.FileExists(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var stream = new FileStream(
+                files.Resolve(path),
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                bufferSize: 256 * 1024,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
+            return Convert.ToHexStringLower(hash);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            log.Warn($"{path} could not be read: {exception.Message}");
+            return null;
+        }
+    }
+
+    private static VerifiedFetchResult Discard(ISystemFiles files, string staging, VerifiedFetchResult result)
+    {
+        try
+        {
+            files.DeleteFile(staging);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A stale staging file is untidy and harmless: the next attempt truncates it, and it is
+            // never the file anything runs.
+        }
+
+        return result;
+    }
+}
+
 /// <summary>
 /// <b>Fetch → verify SHA-256 → atomic rename, one file at a time.</b> The reSpeaker half of the
 /// pinned-and-checksum-verified fetch §2.1 already performs for Immich Kiosk.
@@ -278,7 +463,7 @@ public sealed class HttpXvfHostDownload : IXvfHostDownload
 public sealed class XvfHostInstaller
 {
     /// <summary>Suffix of the file each download is staged into before the rename.</summary>
-    public const string StagingSuffix = ".part";
+    public const string StagingSuffix = VerifiedFetch.StagingSuffix;
 
     private const UnixFileMode ExecutableMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
@@ -412,112 +597,42 @@ public sealed class XvfHostInstaller
     }
 
     /// <summary>Streams one file to a sibling staging path and checks it against the pin.</summary>
+    /// <remarks>
+    /// The loop itself lives in <see cref="VerifiedFetch"/>, shared with the DFU image installer.
+    /// What stays here is the mapping from a generic refusal to this resource's own vocabulary, so
+    /// the delta an operator reads still names the thing that was being installed.
+    /// </remarks>
     private async Task<XvfHostInstallResult> FetchAsync(
         XvfHostFile file,
         string path,
         UnixFileMode mode,
         CancellationToken cancellationToken)
     {
-        var url = Pin.UrlOf(file);
-        var payload = await _download.OpenAsync(url, cancellationToken).ConfigureAwait(false);
+        var result = await VerifiedFetch
+            .IntoAsync(
+                _files,
+                _download,
+                _log,
+                Pin.UrlOf(file),
+                path,
+                file.Sha256,
+                file.SizeBytes,
+                mode,
+                cancellationToken)
+            .ConfigureAwait(false);
 
-        if (payload is null)
+        return result switch
         {
-            return XvfHostInstallResult.Unreachable;
-        }
-
-        var staging = path + StagingSuffix;
-        var resolved = _files.Resolve(staging);
-
-        long written;
-        string digest;
-
-        await using (payload.ConfigureAwait(false))
-        using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
-        {
-            await using var target = new FileStream(resolved, FileMode.Create, FileAccess.Write, FileShare.None);
-            var buffer = new byte[64 * 1024];
-            written = 0;
-
-            while (true)
-            {
-                var read = await payload.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-                if (read == 0)
-                {
-                    break;
-                }
-
-                written += read;
-                if (written > file.SizeBytes)
-                {
-                    // A server that keeps sending is not serving the file the pin names, and
-                    // /var/lib/fl-agent is on the card this frame boots from.
-                    break;
-                }
-
-                hash.AppendData(buffer.AsSpan(0, read));
-                await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            }
-
-            // flushToDisk, not Flush(). The rename below is atomic for a reader; it says nothing
-            // about whether the bytes reached the card.
-            target.Flush(flushToDisk: true);
-            digest = Convert.ToHexStringLower(hash.GetHashAndReset());
-        }
-
-        if (written != file.SizeBytes)
-        {
-            _log.Fail(string.Create(
-                CultureInfo.InvariantCulture,
-                $"{file.Name} rejected: {written} bytes fetched from {url}, {file.SizeBytes} expected."));
-            return Discard(staging, XvfHostInstallResult.SizeMismatch);
-        }
-
-        if (!string.Equals(digest, file.Sha256, StringComparison.OrdinalIgnoreCase))
-        {
-            _log.Fail($"{file.Name} rejected: {url} does not match the pinned digest.");
-            return Discard(staging, XvfHostInstallResult.ChecksumMismatch);
-        }
-
-        // Set before the rename so the target is never briefly unrunnable, and again after it on
-        // the path the file actually has — the same pair FileStateStore.WriteSecretAtomic keeps,
-        // because the mode travels with the inode through rename(2) on a frame and is recorded
-        // against the path on the workstation the suite runs on.
-        _files.SetMode(staging, mode);
-        File.Move(resolved, _files.Resolve(path), overwrite: true);
-        _files.SetMode(path, mode);
-
-        _log.Info($"{file.Name} installed at {path} from {url}.");
-        return XvfHostInstallResult.Installed;
+            VerifiedFetchResult.Installed => XvfHostInstallResult.Installed,
+            VerifiedFetchResult.Unreachable => XvfHostInstallResult.Unreachable,
+            VerifiedFetchResult.SizeMismatch => XvfHostInstallResult.SizeMismatch,
+            _ => XvfHostInstallResult.ChecksumMismatch,
+        };
     }
 
     /// <summary>SHA-256 of a file the agent owns, or null if it is absent or unreadable.</summary>
-    private async Task<string?> DigestAsync(string path, CancellationToken cancellationToken)
-    {
-        if (!_files.FileExists(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            await using var stream = new FileStream(
-                _files.Resolve(path),
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 256 * 1024,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-            var hash = await SHA256.HashDataAsync(stream, cancellationToken).ConfigureAwait(false);
-            return Convert.ToHexStringLower(hash);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-            _log.Warn($"{path} could not be read: {exception.Message}");
-            return null;
-        }
-    }
+    private Task<string?> DigestAsync(string path, CancellationToken cancellationToken) =>
+        VerifiedFetch.DigestAsync(_files, _log, path, cancellationToken);
 
     /// <summary>Whether the file carries a bit that makes it runnable.</summary>
     /// <remarks>

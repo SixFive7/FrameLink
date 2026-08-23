@@ -1534,10 +1534,12 @@ public static class AudioCatalog
         ArgumentNullException.ThrowIfNull(context);
 
         var tool = new XvfHost(context.Files, context.Processes, context.Session);
-        var installer = new XvfHostInstaller(
-            context.Files,
-            context.XvfHostDownload ?? UnreachableXvfHostDownload.Instance,
-            context.Log);
+        var download = context.XvfHostDownload ?? UnreachableXvfHostDownload.Instance;
+        var installer = new XvfHostInstaller(context.Files, download, context.Log);
+
+        // Decision 91. The same publisher, the same content-addressed URL shape and the same
+        // verified-fetch core as the tool above, which is why it shares the one download seam.
+        var images = new Firmware.XvfFirmwareInstaller(context.Files, download, context.Log);
 
         var mixer = new AlsaMixer(context.Processes, context.Files);
         var session = new SessionAudio(context.Session, context.Files, context.Clock);
@@ -1620,7 +1622,15 @@ public static class AudioCatalog
             // resources below it.
             new XvfHostToolResource(tool, context.Files, installer),
 
-            // Positions 54–61. `firmware.xvf3800.version` used to sit at the head of this block,
+            // Position 23, beside the tool and for the same reason: it is a verified download, it
+            // depends on nothing, and it wants to be on the card as early as possible. Decision 91
+            // put it here rather than in the audio block below because it is not an array
+            // operation at all — it is three files, and a frame with no array attached still wants
+            // them. What it is *for* is the flash beside the loop, which refuses to start without
+            // a digest-verified target image and a digest-verified way back from it.
+            new XvfFirmwareImageResource(context.Files, images),
+
+            // Positions 55–62. `firmware.xvf3800.version` used to sit at the head of this block,
             // and decision 90 took it out of the graph entirely: a DFU flash is the only Act that
             // could ever converge it, this product will never perform one unattended, and a
             // resource with no Act that can succeed halts the pass instead of reporting. What it

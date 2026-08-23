@@ -226,6 +226,12 @@ public static class CatalogEvidenceMap
             "The capture never read /etc/timezone or /etc/localtime. Same reasoning as the locale: a "
             + "per-room fleet setting with no catalog default."),
 
+        new("firmware.xvf3800.image", false, null,
+            "The capture never looked for DFU images anywhere: v1 flashed the array by hand from a "
+            + "git clone under ~/xvf3800 and kept nothing pinned, so there is no v1 state for three "
+            + "digest-verified files under /var/lib/fl-agent to be compared against. Verified by the "
+            + "resource's own Observe, which re-hashes all three against XvfFirmwarePin on every pass."),
+
         new("tool.xvf-host.installed", false, null,
             "HOME_TREE lists an ~/xvf3800 directory and no more — not the binary, not its mode, not the "
             + "three .so files, not their hashes. The directory listing is itself an uncovered facet. "

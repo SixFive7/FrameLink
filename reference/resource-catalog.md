@@ -68,15 +68,18 @@ writing `—`. Under this definition that is the same thing, and it is kept rath
 because their whole point is running ahead of adoption; see the carve-out at the head of that
 section.
 
-**Counts.** 71 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
-are listed in their own section. Total **79**. It was 80 until decision 90 took
-`firmware.xvf3800.version` out of the graph; what it observed is now reported beside the loop and is
-recorded under "Does not become a device resource" below.
+**Counts.** 72 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
+are listed in their own section. Total **80**. It was 80 until decision 90 took
+`firmware.xvf3800.version` out of the graph, then 79; what that resource observed is now reported
+beside the loop and is recorded under "Does not become a device resource" below. Decision 91 brought
+the count back to 80 with a different resource: `firmware.xvf3800.image` converges the pinned DFU
+images *on the card*, which is a download with a real Act that always succeeds, and it is
+deliberately not a firmware version — nothing in the graph writes to the array.
 
 | Guide | Resources |
 | --- | ---: |
 | 3 — Hardware configuration | 2 |
-| 4 — Audio configuration | 13 |
+| 4 — Audio configuration | 14 |
 | 5 — Kiosk base | 14 |
 | 6 — Camera | 16 |
 | 7 — LiveKit server | 0 |
@@ -85,9 +88,9 @@ recorded under "Does not become a device resource" below.
 | 10 — SPA | 6 |
 | 11 — GPIO button | 2 |
 | 12 — systemd & reliability | 9 |
-| **Subtotal (guides 3–12)** | **71** |
+| **Subtotal (guides 3–12)** | **72** |
 | Cross-guide and v2-mandated | 8 |
-| **Total** | **79** |
+| **Total** | **80** |
 
 ---
 
@@ -226,7 +229,18 @@ attached to them:
 - **dependsOn** — —
 - **Value source** — fixed, under the same presence-plus-floor rule as the kiosk block; the reviewed version is in that block's table.
 - **Risk** — —
-- **Notes** — **Nothing in the agent runs this program any more** (decision 90): the DFU flash left the resource graph and the binary names `dfu-util` in no code path at all. It is kept, and it is not `pkg.git`'s situation: the flash is now an attended bench operation, so the tool has to be on the card when somebody arrives at the frame to perform one. That is a real consumer, and it is a person.
+- **Notes** — **Two consumers, and one of them is the agent again** (decision 91, reversing decision 90's half of this). `dfu-util` is named in exactly one code path in the agent — `ArrayFirmwareFlash`, which is single-use, digest-named and interlocked, and which refuses outright if `/usr/bin/dfu-util` is absent — and a test asserts that the name appears nowhere else in `src/FrameLink.Agent` outside that file and this package spec. The other consumer is a person: Safe Mode recovery is performed by hand at the bench with the array's Mute button held, and the tool has to be on the card before anybody arrives to do it.
+
+**`firmware.xvf3800.image`**
+
+- **From** — [guide 4 step 3](../docs/4-audio-configuration.md#3-pin-the-array-firmware-to-v2-0-10); the fetch half of it, which the guide performs by hand.
+- **Sets** — the three pinned XVF3800 DFU images present under `/var/lib/fl-agent/xvf3800/xmos_firmwares/`, each matching its pinned SHA-256: the **target** firmware the fleet converges on (`usb/respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin`), the **fallback** firmware a person puts back by hand (`usb/respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin`) and the **recovery** erase image (`recover/4mb_all_ff.bin`).
+- **Observe** — SHA-256 of all three files against `XvfFirmwarePin.Current`. Nothing is remembered; every pass re-hashes what is on the card.
+- **Verify** — identical, and it survives §2.4's reboot by construction for the same reason `tool.xvf-host.installed` does.
+- **dependsOn** — —
+- **Value source** — fixed; each image is pinned at the full commit SHA that last touched *that file* by `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` and reviewed in `upstream-review.json` under `xvf-firmware-target`, `xvf-firmware-fallback` and `xvf-firmware-recovery`.
+- **Risk** — — (it is a verified download; nothing here touches the array)
+- **Notes** — **This is the resource decision 91 added, and it is deliberately about files rather than about firmware.** A DFU write of an unverified 933 KB image is strictly worse than no flash at all — a truncated download would be pushed onto the array with nothing complaining — so a digest-verified image is the hard prerequisite for every safe flash, and it is the half of the operation that can converge unattended on every frame in the fleet with no risk at all. The write itself is **not** a resource and never will be: see "Does not become a device resource" below. **All three images, as one setting.** They are not independently useful — an array that took a bad write needs the blank `4mb_all_ff.bin` *and then* the known-good fallback, in that order — so a frame carrying one without the other has a recovery route with a hole in it, and splitting them would produce three resources that are only ever right or wrong together. **No edge on `pkg.dfu-util`**, deliberately: the images are worth having on a frame whose apt run failed, and an edge there would leave the recovery route `Blocked` at exactly the moment somebody wanted it. **The pin is per file, not per directory**, because `respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin` has been published *twice under one name with different bytes* (43% of 933,888 bytes differing, both answering `VERSION 2 0 10`, both `bcdDevice 020a`) — so a version string identifies nothing and a directory-level watch reports every unrelated firmware upstream adds. **Which 2.1.0** — upstream publishes three — is settled in that file's remarks: Seeed's wiki states that the unsuffixed name is the 2-channel 16 kHz build, upstream's 2.0.8 changelog *adds* the six-channel `ua-io16-6ch-sqr` profile against the `ua-io16-sqr` this project's array reports, the 2.1.0 filenames spell both departures out (`16k6ch`, `48k2ch`), and the v1 capture records this array's ALSA `Capture Channel Map` with `count 2`.
 
 **`audio.xvf3800.gpo-x0d31-amp-enable`**
 
@@ -1048,6 +1062,22 @@ Each line names the guide content excluded and what supersedes it.
   whose identity commands (`VERSION`, `BLD_MSG`, `BLD_HOST`, `BLD_REPO_HASH`, `BLD_MODIFIED`,
   `BOOT_STATUS`, `SERIAL_NUMBER`, `DFU_GETVERSION`) describe the firmware or the unit rather than the
   board. It is silkscreen, so a fleet can never know it.
+- **The firmware *write* itself, and decision 91 keeps it out of the graph for exactly the reasoning
+  above.** The operator reversed decision 90's product conclusion — the fleet is to converge on a
+  known firmware version, because that is a better property for hundreds of households than avoiding
+  a risky operation — and the reversal changed *whether the agent may write firmware*, not *whether a
+  firmware version can be a resource*. It still cannot: a frame nobody has authorised would drift,
+  spend three attempts and three reboots, escalate, and stop the pass. So the write is a single-use,
+  digest-named, interlocked operation beside the loop (`ArrayFirmwareFlash`), and what is in the
+  graph is `firmware.xvf3800.image` — the *files*, which converge everywhere with no risk. The
+  convergence property is delivered by the reporter above naming, on every frame, whether the
+  running firmware is the pinned target, and by one deliberate authorisation per frame turning that
+  into a write. The authorisation names the image's **SHA-256** and not its version, because the
+  same version string has been published twice with different bytes; it is consumed durably before
+  `dfu-util` starts, so it can never authorise a second write; and a flash in progress holds off the
+  self-update, the reconciler's reboot boundary and the bench power switch. **Nothing here has run on
+  hardware, and nothing may until the Safe Mode recovery route has been rehearsed on one of this
+  project's own arrays.**
 - **v1 parity is unaffected and stays where it was.** `reference/v1-state-inventory.txt` records
   `XVF3800_FIRMWARE` at `2 0 10`, and the parity harness's `audio.xvf3800.firmware` facet still
   compares it. What changed is that a difference there is now a parity *finding* for a person to
@@ -1088,31 +1118,35 @@ rule — validate before writing, back up both boot files, boot-count self-repai
 write discipline at the head of the Guide 3 section. See open question 1 for the decision and for
 the one part of it still outstanding.
 
-**Exception 2 is withdrawn, and the resource it existed for is gone.** It used to place
+**Exception 2 is withdrawn, and it stays withdrawn under decision 91.** It used to place
 `firmware.xvf3800.version` at position 54, ahead of the boot writes, on the reasoning that a DFU
 flash bricks only the **mic array** while a boot-partition or EEPROM write can produce a device
 nothing remote can reach. Decision 90 removed the resource: the only Act that could converge a
-firmware version is a DFU write, this product will never perform one unattended, and a resource whose
-Act cannot succeed does not report — it spends three attempts, three reboots and an escalation, and
-by decision 68 stops the whole pass. **There is now no brick-capable resource anywhere in the array
-chain**, and §5.5's ordering clause applies to the boot and EEPROM writes alone. Open question 2,
-which asked where to schedule the flash against the mixer values it was said to validate, is answered
-by there being nothing to schedule.
+firmware version is a DFU write, and a resource whose Act cannot succeed does not report — it spends
+three attempts, three reboots and an escalation, and by decision 68 stops the whole pass. **Decision
+91 reversed the product decision and not that reasoning.** The agent now does write firmware, but the
+write is not a resource and is not in this ordering at all: it is a single-use, digest-named,
+interlocked operation beside the loop (`ArrayFirmwareFlash`), so there is nothing to schedule here
+and no exception to carve. What decision 91 *did* add to the graph is `firmware.xvf3800.image` at
+position 23, and it is a verified download — **there is still no brick-capable resource anywhere in
+the array chain**, and §5.5's ordering clause still applies to the boot and EEPROM writes alone.
+Open question 2, which asked where to schedule the flash against the mixer values it was said to
+validate, is answered by the flash not being scheduled by anything.
 
 | # | Phase | Resources (in order) |
 | ---: | --- | --- |
 | 1 | **Agent root** | `agent.version` |
 | 2–3 | **Display — §5.5 carve-out, earliest possible slot** | `boot.cmdline.fbcon-rotate` · `boot.config.dtoverlay-waveshare-panel` |
 | 4–5 | **Agent roots — identity and adoption** | `agent.keypair` · `agent.adoption` |
-| 6–22 | **Package set** | `pkg.labwc` · `pkg.chromium` · `pkg.wireplumber` · `pkg.pipewire-alsa` · `pkg.wlr-randr` · `pkg.xdg-desktop-portal` · `pkg.xdg-desktop-portal-gtk` · `pkg.gstreamer1.0-tools` · `pkg.gstreamer1.0-plugins-base` · `pkg.gstreamer1.0-libcamera` · `pkg.gstreamer1.0-pipewire` · `pkg.libspa-0.2-libcamera.absent` · `pkg.dfu-util` · `pkg.git` · `pkg.grim` · `pkg.unattended-upgrades` · `tool.xvf-host.installed` |
-| 23–37 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` · `identity.hostname` |
-| 38–47 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
-| 48–53 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
-| 54–61 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.wireplumber.playback-volume` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
-| 62–75 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
-| 76–79 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
+| 6–23 | **Package set** | `pkg.labwc` · `pkg.chromium` · `pkg.wireplumber` · `pkg.pipewire-alsa` · `pkg.wlr-randr` · `pkg.xdg-desktop-portal` · `pkg.xdg-desktop-portal-gtk` · `pkg.gstreamer1.0-tools` · `pkg.gstreamer1.0-plugins-base` · `pkg.gstreamer1.0-libcamera` · `pkg.gstreamer1.0-pipewire` · `pkg.libspa-0.2-libcamera.absent` · `pkg.dfu-util` · `pkg.git` · `pkg.grim` · `pkg.unattended-upgrades` · `tool.xvf-host.installed` · `firmware.xvf3800.image` |
+| 24–38 | **System configuration** | `system.timezone` · `system.locale` · `user.framelink.supplementary-groups` · `boot.autologin.getty-tty1` · `mount.tmp.tmpfs` · `journal.storage-persistent` · `swap.zram-active` · `swap.no-file-backed` · `apt.auto-upgrades-enabled` · `apt.unattended-upgrades.allowed-origins` · `audio.modprobe.snd-usb-audio-index` · `unit.cpu-performance.content` · `unit.cpu-performance.enabled` · `cpu.governor.performance` · `identity.hostname` |
+| 39–48 | **Session and kiosk stack** (front-loaded per §2.7) | `session.bash-profile-exec-labwc` · `labwc.autostart.content` · `labwc.autostart.executable` · `labwc.rc-xml.touch-map` · `display.dsi2-transform` · `unit.xdg-desktop-portal.dropin-desktop` · `app.http.local-origin` · `unit.chromium-kiosk.content` · `unit.chromium-kiosk.enabled` · `unit.chromium-kiosk.running-matches-content` |
+| 49–54 | **Camera chain** | `wireplumber.conf.camera-monitors-disabled` · `unit.framelink-camera.content` · `unit.framelink-camera.enabled` · `portal.permission-store.camera` · `portal.camera-interface-published` · `camera.pipewire-node.framelink-cam` |
+| 55–62 | **Audio state** | `audio.xvf3800.gpo-x0d31-amp-enable` · `audio.mixer.pcm0-playback-switch` · `audio.mixer.pcm1-playback-switch` · `audio.wireplumber.playback-volume` · `audio.mixer.pcm0-playback-volume` · `audio.mixer.pcm1-playback-volume` · `audio.mixer.headset-capture-volume` · `audio.alsa.stored-state` |
+| 63–76 | **Product layer** | `kiosk.binary.pinned-release` · `kiosk.offline-cache.dir` · `kiosk.config.immich-url` · `kiosk.config.immich-api-key` · `kiosk.config.offline-mode-enabled` · `kiosk.config.offline-asset-count` · `kiosk.listen-address` · `kiosk.process.supervised` · `app.config.identity` · `app.config.room` · `app.config.livekit-url` · `app.config.livekit-token` · `app.config.immich-kiosk-url` · `gpio.button.line` |
+| 77–80 | **Brick-capable, unbootable risk — last** | `boot.config.camera-auto-detect` · `boot.config.dtoverlay-vc4-kms-v3d-noaudio` · `boot.cmdline.wifi-regdom` · `eeprom.config` |
 
-**`identity.hostname` moved out of the last phase, from 75 to 37.** It was scheduled there because
+**`identity.hostname` moved out of the last phase, from 75 to 37 — 38 since decision 91.** It was scheduled there because
 the trap made its Act a `/boot/firmware` write; with the trap disproved the Act is `hostnamectl`
 plus an `/etc/hosts` rewrite and the resource is not brick-capable at all. Its new slot is the end
 of system configuration, immediately before the session and kiosk stack, so the frame is answering
@@ -1126,12 +1160,13 @@ five.
 row labels above did not follow it.** It was added when the mixer revert was measured (decision 80),
 and it lands inside the audio phase — so the two rows below it each start one later than they used
 to. **Decision 90 then removed `firmware.xvf3800.version` from position 54 and moved everything after
-it back by one again**, which is why the audio phase now begins there. The labels say what the
-membership says: the product layer is 62–75 and the final phase 76–79, which is where
-`boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio`,
+it back by one again**, and **decision 91 added `firmware.xvf3800.image` at position 23 and moved
+everything after *that* forward by one**, which is where the numbers in the table come from. The
+labels say what the membership says: the product layer is 63–76 and the final phase 77–80, which is
+where `boot.config.camera-auto-detect`, `boot.config.dtoverlay-vc4-kms-v3d-noaudio`,
 `boot.cmdline.wifi-regdom` and `eeprom.config` actually sit, and the positions prose elsewhere in this
 document cites have been moved with them. The arithmetic is checkable rather than asserted: the rows'
-memberships sum to 79 with no gap and no overlap, and 79 is what `CatalogDocument.Parse` counts in
+memberships sum to 80 with no gap and no overlap, and 80 is what `CatalogDocument.Parse` counts in
 this file — a test compares the two, so a row label that drifts from its membership fails the
 suite rather than sitting here being wrong.
 

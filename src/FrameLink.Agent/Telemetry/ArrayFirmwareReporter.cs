@@ -1,4 +1,5 @@
 using System.Globalization;
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Resources;
 using FrameLink.Protocol;
@@ -145,7 +146,41 @@ public sealed class ArrayFirmwareReporter
                 CultureInfo.InvariantCulture,
                 $"{attached.Count} microphone units are attached: {string.Join("; ", descriptors)}.");
 
-        return text + " " + await ControlAsync(attached, cancellationToken).ConfigureAwait(false);
+        return text
+            + " " + await ControlAsync(attached, cancellationToken).ConfigureAwait(false)
+            + " " + AgainstTarget(attached);
+    }
+
+    /// <summary>How this frame stands against the firmware the fleet converges on.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This sentence is what "the fleet converges on the latest" is made of</b> (decision 91).
+    /// Nothing on a frame decides to write firmware on its own, so the convergence property has to
+    /// be delivered somewhere else: every frame says, unprompted and on every change, which firmware
+    /// it runs and whether that is the pinned target. The Fleet Manager can then answer "which
+    /// frames are behind" for the whole fleet from data it already stores, and an operator turns
+    /// that into a write one deliberate authorisation at a time.
+    /// </para>
+    /// <para>
+    /// It is deliberately a <i>sentence in a report</i> and not a status. §2.6's ladder answers one
+    /// question — does the product run? — and a frame on 2.0.6 runs the product perfectly well.
+    /// Making this a device state would stop a working frame over a number, which is the exact
+    /// failure decision 90 removed.
+    /// </para>
+    /// </remarks>
+    private static string AgainstTarget(IReadOnlyList<XvfArrayDevice> attached)
+    {
+        var target = XvfFirmwarePin.Current.Target;
+        var running = attached.Count == 1 ? XvfArrayUsb.Version(attached[0].BcdDevice) : null;
+
+        if (running is null)
+        {
+            return $"The firmware this fleet converges on is {target.Version}; this frame's reading could not be decoded.";
+        }
+
+        return string.Equals(running, target.Version, StringComparison.Ordinal)
+            ? $"That is the firmware this fleet converges on ({target.Version})."
+            : $"The firmware this fleet converges on is {target.Version}, so this unit is not on it.";
     }
 
     /// <summary>Reads the array, and reports if what it says has changed.</summary>

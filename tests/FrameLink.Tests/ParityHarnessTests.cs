@@ -190,7 +190,7 @@ public sealed class ParityHarnessTests
         var ids = CatalogDocument.Ids(Root);
         var evidence = CatalogEvidenceMap.For(ids);
 
-        Assert.Equal(79, ids.Count);
+        Assert.Equal(80, ids.Count);
         Assert.Equal(ids.Count, evidence.Count);
         Assert.All(evidence, item => Assert.False(string.IsNullOrWhiteSpace(item.Note)));
         Assert.Contains(evidence, item => item.Facet is null);
@@ -210,7 +210,7 @@ public sealed class ParityHarnessTests
     public void The_resource_count_matches_the_catalog_s_own_arithmetic()
     {
         // Measured against the document rather than remembered, the same way progress.json reads
-        // the number: a hard-coded 79 that nobody re-derives is exactly the recorded claim that
+        // the number: a hard-coded 80 that nobody re-derives is exactly the recorded claim that
         // outlives its cause.
         var text = File.ReadAllText(Path.Combine(Root, "reference", "resource-catalog.md"));
         var stated = System.Text.RegularExpressions.Regex.Match(text, @"\|\s*\*\*Total\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|");
@@ -551,7 +551,7 @@ public sealed class ParityHarnessTests
         Assert.All(report.Coverage.UncoveredSections, facet => Assert.False(string.IsNullOrWhiteSpace(facet.Limitation)));
         Assert.All(report.Coverage.PartialSections, facet => Assert.False(string.IsNullOrWhiteSpace(facet.Limitation)));
 
-        Assert.Equal(79, report.Coverage.CatalogResources);
+        Assert.Equal(80, report.Coverage.CatalogResources);
         Assert.Equal(
             report.Coverage.CatalogResources,
             report.Coverage.ResourcesWithReference.Count + report.Coverage.ResourcesWithoutReference.Count);

@@ -193,20 +193,24 @@ public sealed class AgentResourceGraphTests
         using var files = new TemporaryFiles();
         var graph = DeviceCatalog.BuildGraph(Context(files));
 
-        // <b>The whole catalog.</b> `reference/resource-catalog.md` enumerates 79 resources, one of
+        // <b>The whole catalog.</b> `reference/resource-catalog.md` enumerates 80 resources, one of
         // which — `pkg.git` — open question 3's adopted reading deletes, because `xvf_host` arrives
         // as a pinned checksum-verified artifact rather than a clone and guide 10's other use of
-        // git went with the embedded app. That leaves 78 implementable entries, all of them here.
+        // git went with the embedded app. That leaves 79 implementable entries, all of them here.
         // Two shipped resources are *not* in the catalog: `agent.device-name`, the display name the
         // Fleet Manager assigns at adoption, which the cross-guide section never enumerated; and
         // `kiosk.config.albums`, which scopes what the slideshow selects from and which neither
         // guide 9's Compose file nor the catalog ever had — a gap the frame proved by finding no
-        // photos at all. 78 catalog entries plus those two is the arithmetic.
+        // photos at all. 79 catalog entries plus those two is the arithmetic.
         //
         // It was 80 until decision 90 removed `firmware.xvf3800.version`: a firmware version has no
-        // Act that can succeed, because the only one is a DFU write this product will never perform
-        // unattended, so it observes and reports beside the loop instead of escalating inside it.
-        Assert.Equal(80, graph.Count);
+        // Act that can succeed, because the only one is a DFU write, and a resource that cannot act
+        // spends three attempts, three reboots and an escalation instead of reporting. Decision 91
+        // reversed the product decision without touching that reasoning — the agent writes firmware
+        // again, but from `ArrayFirmwareFlash` beside the loop, and what came back into the graph is
+        // `firmware.xvf3800.image`, which converges the pinned images on the card and never the
+        // array.
+        Assert.Equal(81, graph.Count);
 
         var names = graph.Ordered.Select(resource => resource.Name).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(PackageResource.Prefix + "git", names);
@@ -318,7 +322,7 @@ public sealed class AgentResourceGraphTests
         var extra = new[] { "agent.device-name", "kiosk.config.albums" };
 
         var document = ResourceCatalogDocument.Ids();
-        Assert.Equal(79, document.Count);
+        Assert.Equal(80, document.Count);
 
         using var files = new TemporaryFiles();
         var shipped = DeviceCatalog.BuildGraph(Context(files))

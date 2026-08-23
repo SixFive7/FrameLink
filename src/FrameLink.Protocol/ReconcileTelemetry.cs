@@ -97,6 +97,20 @@ public static class DeviceEventKinds
     public const string ArrayFirmware = "array-firmware";
 
     /// <summary>
+    /// A firmware write to the microphone unit was performed, or was refused (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// The audit trail for the one operation on a frame that cannot be undone by rewriting the
+    /// card. It carries the image digest, the version read before and after, how long the write
+    /// took and <c>dfu-util</c>'s own output verbatim, because a fleet-wide firmware change has to
+    /// be answerable months later and the tool's output is the only record of what the device said
+    /// while it was being written. A refusal is the same kind rather than a different one: "this
+    /// frame declined to flash, and here is which interlock stopped it" is exactly as much a part
+    /// of the trail as a write that happened.
+    /// </remarks>
+    public const string ArrayFlash = "array-flash";
+
+    /// <summary>
     /// The frame's own screen cannot show anything, so the Fleet Manager is the only surface
     /// left (§2.7).
     /// </summary>

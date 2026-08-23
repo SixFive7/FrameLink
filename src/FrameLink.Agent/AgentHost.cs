@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using FrameLink.Agent.Discovery;
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Identity;
 using FrameLink.Agent.Kiosk;
@@ -219,6 +220,22 @@ public sealed class AgentHost
 
         var endpoints = await ResolveEndpointsAsync(store, hub, shutdown.Token).ConfigureAwait(false);
 
+        // Decision 91, and it is created here — before the update service and before the loop —
+        // because both of them have to be able to ask it whether they may restart this machine, and
+        // it has to be able to answer that a *previous* process was writing firmware when it died.
+        // It reads its durable marker exactly once, at construction, which is why construction has
+        // to happen before anything else could have written one.
+        var flashWindow = new ArrayFlashWindow(store, _clock);
+
+        if (flashWindow.Interrupted)
+        {
+            _log.Fail(
+                "A firmware write to the microphone unit was in progress when this agent last stopped — "
+                + (flashWindow.InterruptedDetail ?? "no detail was recorded")
+                + ". No further write will be attempted until somebody has looked at the unit and removed "
+                + store.PathOf(ArrayFlashWindow.MarkerFileName) + ".");
+        }
+
         using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
         var updates = new UpdateService(
             new HttpReleaseSource(http, _log),
@@ -232,7 +249,15 @@ public sealed class AgentHost
             _log,
             () => hub.Current.Endpoints.Count > 0 ? hub.Current.Endpoints[0] : null,
             AgentBuild.Version,
-            AgentBuild.RuntimeIdentifier);
+            AgentBuild.RuntimeIdentifier)
+        {
+            // Decision 91's update stand-down. A restart cancels the one shutdown token this loop
+            // and the reconcile loop share, systemd brings the unit back, and the default
+            // KillMode=control-group takes every child in the cgroup with it — including a
+            // dfu-util part-way through writing an array's flash. An hourly tick is the single most
+            // likely thing on this frame to do that, and nothing stopped it before.
+            StandDown = () => flashWindow.Reason,
+        };
 
         using var uplink = new AgentUplink();
         var outbox = new TelemetryOutbox(uplink, store, _log);
@@ -423,13 +448,21 @@ public sealed class AgentHost
             // holds for every caller of the boundary and needs to know nothing about resources,
             // attempts or escalations — which is the whole requirement, because the livelock it
             // exists for is one where nothing is failing.
-            Reboots = new RebootFloor(
-                new SystemRebootBoundary(new SystemdControl(), _log),
-                journal,
-                _clock,
-                _log,
-                reconcileOptions.RebootFloorCount,
-                reconcileOptions.RebootFloorWindow),
+            // Decision 91 wraps that again, outermost, so a firmware write in progress refuses the
+            // reboot before the floor even counts it. Not an exception to §2.4: the resource still
+            // has no say and still reboots for every change, and a refusal is an outcome §2.4
+            // already has a first-class answer for — the change is written, it cannot be proven, it
+            // spends an attempt and reaches a person.
+            Reboots = new RebootHold(
+                new RebootFloor(
+                    new SystemRebootBoundary(new SystemdControl(), _log),
+                    journal,
+                    _clock,
+                    _log,
+                    reconcileOptions.RebootFloorCount,
+                    reconcileOptions.RebootFloorWindow),
+                () => flashWindow.Reason,
+                _log),
             Countdown = countdown,
             Telemetry = outbox,
             Hub = hub,
@@ -585,6 +618,32 @@ public sealed class AgentHost
         // Closes the forward reference opened above. From here the handover reads a real phase.
         browserStage = browser;
 
+        // Decision 91. Beside the loop for decision 90's reason unchanged — a firmware write is not
+        // an Act any resource may take, because a resource whose Act cannot succeed halts the pass —
+        // and single-use, digest-named and interlocked because it is the one operation on this frame
+        // that cannot be undone by rewriting the card. Built here, last, because it is the only
+        // thing that needs both the supervisor's view of whether somebody is on a call and the
+        // update service's view of whether this process is about to restart.
+        var arrayFlash = new ArrayFirmwareFlash(new ArrayFlashServices
+        {
+            Tool = new XvfHost(HostSystemFiles.Instance, HostProcessRunner.Instance, session),
+            Files = HostSystemFiles.Instance,
+            Processes = HostProcessRunner.Instance,
+            Installer = new XvfFirmwareInstaller(
+                HostSystemFiles.Instance,
+                new HttpXvfHostDownload(http, _log),
+                _log),
+            Window = flashWindow,
+            Telemetry = outbox,
+            Store = store,
+            Clock = _clock,
+            Log = _log,
+            Values = values,
+            DeviceId = identity.DeviceId,
+            CallActive = () => supervisor.CallActive,
+            RestartPending = () => hub.Current.RestartPending,
+        });
+
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
         // Twelve loops now, and none is gated on another finishing. §1.2.2: a frame must provision
@@ -596,7 +655,7 @@ public sealed class AgentHost
         // exactly when no help is coming — and the inventory buffers on disk like everything else
         // on that channel (§4.1). The button in particular has to work with nothing reachable,
         // because pressing it is how somebody in this room starts a call.
-        var running = new List<Task>(12)
+        var running = new List<Task>(13)
         {
             stage.RunAsync(shutdown.Token),
             link.RunAsync(shutdown.Token),
@@ -618,6 +677,11 @@ public sealed class AgentHost
             screen.RunAsync(shutdown.Token),
             packages.RunAsync(shutdown.Token),
             arrayFirmware.RunAsync(shutdown.Token),
+
+            // Decision 91's other half. It reads one setting a minute and returns; it writes
+            // firmware only when a person has authorised that exact image on this exact frame, and
+            // it spends the authorisation before it starts, so nothing here can ever run twice.
+            arrayFlash.RunAsync(shutdown.Token),
             button.RunAsync(shutdown.Token),
 
             // §2.7 item 9's console half. It polls a character device twenty times a second and

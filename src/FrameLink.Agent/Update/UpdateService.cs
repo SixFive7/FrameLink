@@ -20,6 +20,18 @@ public enum UpdateOutcome
 
     /// <summary>No endpoint is configured yet.</summary>
     NoEndpoint,
+
+    /// <summary>
+    /// Something on this frame must not be interrupted, so the check stood down (decision 91).
+    /// </summary>
+    /// <remarks>
+    /// <b>Deferred, never dropped.</b> The hourly tick is the mechanism and it converges the frame
+    /// whatever happened last time, so standing down costs at most one interval. What it buys is
+    /// the interlock this service had no way to express before: a restart tears down the cgroup,
+    /// and <c>fl-agent.service</c> deliberately leaves <c>KillMode</c> at <c>control-group</c>, so
+    /// a self-update landing during a firmware write <c>SIGKILL</c>s <c>dfu-util</c> mid-write.
+    /// </remarks>
+    StoodDown,
 }
 
 /// <summary>Asks the process to stand aside for a new binary.</summary>
@@ -103,6 +115,32 @@ public sealed class UpdateService
     /// <summary>Whether updates are enabled for this device (§2.8, operator-disableable).</summary>
     public bool Enabled { get; init; } = true;
 
+    /// <summary>
+    /// Why this frame must not be restarted right now, or null. Deferral, not disablement.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The interlock that was missing</b> (decision 91). <c>ProcessRestartSignal</c> cancels the
+    /// one shutdown token the reconcile loop also holds, systemd restarts the unit, and because
+    /// <c>fl-agent.service</c> deliberately leaves <c>KillMode</c> at the default
+    /// <c>control-group</c>, every child in the cgroup is <c>SIGKILL</c>ed with it. A firmware write
+    /// to the microphone array is a thirty-second child in that cgroup, and this hourly tick was the
+    /// single most likely thing to kill one.
+    /// </para>
+    /// <para>
+    /// <b>Asked twice, and the second time is the one that matters.</b> Once at the top of a check,
+    /// so an ordinary tick during a write costs nothing at all, and again immediately before the
+    /// swap — because the download between them can take minutes on a slow link, and a window that
+    /// opened during it would otherwise be missed by exactly the check that exists to see it.
+    /// </para>
+    /// <para>
+    /// Deliberately a delegate over a reason rather than a boolean or a typed interlock: §2.8's
+    /// convergence must not learn what a firmware image is, and the reason travels into the log so
+    /// a deferred update is never a silent one.
+    /// </para>
+    /// </remarks>
+    public Func<string?>? StandDown { get; init; }
+
     /// <summary>How many checks have run.</summary>
     public int CompletedChecks { get; private set; }
 
@@ -141,6 +179,12 @@ public sealed class UpdateService
         if (!Enabled)
         {
             return Record(UpdateOutcome.AlreadyMatching);
+        }
+
+        if (StandDown?.Invoke() is { Length: > 0 } holding)
+        {
+            _log.Info($"The update check stood down: {holding}. It will run again on the next tick.");
+            return Record(UpdateOutcome.StoodDown);
         }
 
         var endpoint = _endpoint();
@@ -182,6 +226,17 @@ public sealed class UpdateService
         if (payload is null)
         {
             return Record(UpdateOutcome.Unreachable);
+        }
+
+        // Asked again, on the far side of a download that can take minutes. The swap and the restart
+        // it requests are the half that kills a child process, so this is the check that has to be
+        // right — the one above only saves the download.
+        if (StandDown?.Invoke() is { Length: > 0 } stillHolding)
+        {
+            _log.Info($"The update was downloaded but stood down before applying: {stillHolding}.");
+            await payload.DisposeAsync().ConfigureAwait(false);
+            _hub.Publish(status => status with { UpdateProgress = null });
+            return Record(UpdateOutcome.StoodDown);
         }
 
         SwapResult swap;

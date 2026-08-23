@@ -266,6 +266,74 @@ public sealed class RebootFloor : IRebootBoundary
 }
 
 /// <summary>
+/// <b>A boundary that refuses while something on this frame must not be interrupted.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>This is not an exception to §2.4, and the distinction is the whole point.</b> "Every resource
+/// reboots, no exceptions, no per-resource cleverness" is about a resource deciding whether
+/// <i>its own</i> change needs proving, and that decision stays exactly where it is —
+/// <see cref="IResource"/> has no reboot member and still never will. What this adds is a
+/// device-level condition under which the machine cannot be restarted at all, which §2.4 already
+/// has a first-class answer for: <see cref="RebootCrossing.Refused"/>. The change is written and
+/// cannot be proven, so it spends an attempt and reaches a person on §2.5's ordinary schedule. That
+/// is the identical shape decision 79's reboot floor uses, and it is why a firmware flash needed no
+/// new vocabulary anywhere in the loop.
+/// </para>
+/// <para>
+/// <b>What it exists for</b> (decision 91): a DFU write to the microphone array takes about thirty
+/// seconds, is deliberately not a resource, and can therefore never be the thing that triggers a
+/// reboot — but any <i>other</i> resource's Act, on a pass that happens to overlap it, would take
+/// the machine down mid-write. Rebooting an array immediately after a firmware write is separately
+/// known to be a bad idea: upstream issue #20 reports a soft reboot leaving capture broken until a
+/// physical replug. So the hold is on the boundary, where it covers every caller and needs to know
+/// nothing about resources.
+/// </para>
+/// <para>
+/// It takes a predicate rather than the flash itself, so nothing in the reconcile layer has to know
+/// what a firmware image is, and a second reason to hold the machine still later costs one more
+/// delegate rather than a second decorator.
+/// </para>
+/// </remarks>
+public sealed class RebootHold : IRebootBoundary
+{
+    private readonly IRebootBoundary _inner;
+    private readonly Func<string?> _held;
+    private readonly IAgentLog _log;
+
+    /// <summary>Wraps <paramref name="inner"/>, refusing whenever <paramref name="held"/> answers.</summary>
+    /// <param name="inner">The boundary that actually restarts the machine.</param>
+    /// <param name="held">
+    /// A whole sentence saying why the machine must stay up, or null when it may go down.
+    /// </param>
+    /// <param name="log">Where a refusal is recorded.</param>
+    public RebootHold(IRebootBoundary inner, Func<string?> held, IAgentLog log)
+    {
+        ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(held);
+        ArgumentNullException.ThrowIfNull(log);
+
+        _inner = inner;
+        _held = held;
+        _log = log;
+    }
+
+    /// <inheritdoc/>
+    public async Task<RebootOutcome> CrossAsync(RebootRequest request, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        if (_held() is { Length: > 0 } reason)
+        {
+            _log.Fail($"{request.Resource}: the reboot was refused — {reason}.");
+            return new RebootOutcome(RebootCrossing.Refused, reason);
+        }
+
+        return await _inner.CrossAsync(request, cancellationToken).ConfigureAwait(false);
+    }
+}
+
+/// <summary>
 /// A boundary that crosses without restarting anything.
 /// </summary>
 /// <remarks>
