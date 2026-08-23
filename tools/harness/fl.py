@@ -78,9 +78,11 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from flh import build as build_mod  # noqa: E402
+from flh import debuglog as debug_mod  # noqa: E402
 from flh import cards as cards_mod  # noqa: E402
 from flh import collect as collect_mod  # noqa: E402
 from flh import deploy as deploy_mod  # noqa: E402
+from flh import flash as flash_mod  # noqa: E402
 from flh import parity as parity_mod  # noqa: E402
 from flh import power as power_mod  # noqa: E402
 from flh import progress, status, testrun, ui  # noqa: E402
@@ -116,6 +118,25 @@ def _parser() -> argparse.ArgumentParser:
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument(
+        "--debug",
+        dest="debug",
+        action="store_true",
+        default=None,
+        help=(
+            "write an excessive, bounded record of this run - every remote command with both "
+            "streams and its duration, every gate with the values it compared - to "
+            "tools/harness/runs/<stamp>-<cmd>/debug.log on THIS machine. Never on the frame, "
+            "never in the frame's journal: see flh/debuglog.py. FL_DEBUG=1 does the same."
+        ),
+    )
+    parser.add_argument(
+        "--no-debug",
+        dest="debug",
+        action="store_false",
+        help="suppress the debug log even if FL_DEBUG is set (array flash forces it on regardless)",
+    )
+
     subparsers = parser.add_subparsers(dest="command", metavar="<subcommand>")
 
     # --- build --------------------------------------------------------------
@@ -341,11 +362,98 @@ def _parser() -> argparse.ArgumentParser:
             "no dfu-util, no flashing path of any kind. The only writes to the frame are the "
             "stop and the start. Requires FL_PW.\n\n"
             "Exit 0 when the step did what it says, 2 when the reading could not be certified "
-            "or the frame did not report InSync in time - never 0 for either of those."
+            "Exit 0 when the step did what it says, 2 when the reading could not be certified or the frame did not report InSync in time - never 0 for either of those.\n\n"
+            "THE FLASH (decision 91). `array flash` is the attended bench write of the pinned\n"
+            "DFU image, and by default it writes NOTHING: with no flags it evaluates every\n"
+            "gate, reports each one, and resolves no writing program at all. Five independent\n"
+            "conditions stand in front of a write and no two of them live in the same place -\n"
+            "--write must be present; --authorise must name the pinned image's sha256; this\n"
+            "harness's pin and the agent's must agree; the bytes on the frame must re-hash to\n"
+            "the pin in the instant before dfu-util starts; and only alt 1, the Upgrade\n"
+            "partition, is ever written. Alt 0 is what Safe Mode boots from and is refused by\n"
+            "number. The agent must be held first, exactly as `read` requires.\n\n"
+            "  fl.py array flash                    every gate, nothing run\n"
+            "  fl.py array flash --simulate <what>  the whole system, with a generated stub in\n"
+            "                                       place of dfu-util; no byte reaches the array\n"
+            "  fl.py array flash --write --authorise <sha256>[:ticket]   the real write\n"
+            "  fl.py array flash --list-dfu         dfu-util -l, which WRITES NOTHING; in Safe\n"
+            "                                       Mode it lists a third alt setting, and that\n"
+            "                                       is the only proof Safe Mode was entered\n"
+            "  fl.py array flash --clear-marker     after a person has looked at the unit\n"
+            "  fl.py array stage                    fetch and verify the three pinned images\n"
+            "  fl.py array clean                    remove the bench directory from the frame\n"
+            "  fl.py array runbook                  the Safe Mode recovery steps; needs no frame\n\n"
+            "An interrupted write leaves a durable marker on the card and every later flash -\n"
+            "agent or bench - is refused until a person removes it. That is deliberate: a\n"
+            "cgroup kill, a power cut and a crash all leave the same array behind, and\n"
+            "retrying a partial write is the documented route from a recoverable board to an\n"
+            "unrecoverable one. `array flash` writes an excessive debug log for every run and\n"
+            "cannot be told not to."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    p_array.add_argument("action", choices=("hold", "read", "release"), help="what to do")
+    p_array.add_argument(
+        "action",
+        choices=("hold", "read", "release", "flash", "stage", "clean", "runbook"),
+        help="what to do",
+    )
+    p_array.add_argument(
+        "--authorise",
+        default=None,
+        metavar="SHA256[:TICKET]",
+        help=(
+            "authorise ONE write of the pinned target image. The digest before the colon must "
+            f"equal the pinned target's sha256 ({flash_mod.TARGET.sha256}); anything after it "
+            "is your own ticket text. This is the same string, in the same shape, that the "
+            f"agent's {flash_mod.AUTHORISATION_KEY} fleet setting carries."
+        ),
+    )
+    p_array.add_argument(
+        "--write",
+        action="store_true",
+        help=(
+            "PERFORM THE REAL WRITE. Without this, `array flash` evaluates every gate and "
+            "resolves no writing program at all. Mutually exclusive with --simulate."
+        ),
+    )
+    p_array.add_argument(
+        "--simulate",
+        default=None,
+        choices=tuple(sorted(flash_mod.SIMULATIONS)),
+        help=(
+            "run the whole system around a flash with a generated stub in place of dfu-util. "
+            "No byte reaches the array. The marker, the gates, the re-enumeration poll and "
+            "the artifact are all real."
+        ),
+    )
+    p_array.add_argument(
+        "--clear-marker",
+        action="store_true",
+        help=(
+            f"remove {flash_mod.MARKER_PATH} after a person has looked at the microphone "
+            "unit. Nothing in the flash path can do this for you; that is the point of the latch."
+        ),
+    )
+    p_array.add_argument(
+        "--reenumeration-timeout",
+        type=float,
+        default=flash_mod.REENUMERATION_TIMEOUT_S,
+        metavar="SECONDS",
+        help=(
+            f"how long the array is given to come back (default {flash_mod.REENUMERATION_TIMEOUT_S:.0f}, "
+            "matching the agent's ArrayFirmwareFlash.ReEnumerationTimeout). Shortening it makes "
+            "a bench run stop being a rehearsal of the fleet's path; the value used is recorded "
+            "in the run artifact either way."
+        ),
+    )
+    p_array.add_argument(
+        "--list-dfu",
+        action="store_true",
+        help=(
+            "run `dfu-util -l`, which enumerates alt settings and WRITES NOTHING. In Safe Mode "
+            "it lists a third alt setting, which is the only proof Safe Mode was entered."
+        ),
+    )
     p_array.add_argument(
         "--repeats",
         type=int,
@@ -490,6 +598,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = _parser()
     args = parser.parse_args(argv)
 
+    # One debug log per invocation, installed before anything connects so that the very
+    # first remote command is recorded. `array flash` forces its own on and opens it inside
+    # its own run directory, so it is excluded here rather than given two.
+    if not (args.command == "array" and getattr(args, "action", "") == "flash"):
+        debug_mod.open_log(args.command or "fl", flag=getattr(args, "debug", None))
+
     if not args.command:
         parser.print_help()
         return 0
@@ -603,6 +717,78 @@ def main(argv: list[str] | None = None) -> int:
             return int(outcome["exitCode"])
 
         if args.command == "array":
+            # The four actions that are not the three original ones. They are dispatched
+            # ahead of the progress.activity block because `runbook` needs no frame and no
+            # credential at all, and because `flash` opens its own debug log and writes its
+            # own artifact - wrapping it in a second one would give a flash two records of
+            # itself that could disagree.
+            if args.action == "runbook":
+                for line in flash_mod.recovery_runbook():
+                    ui.info(line)
+                return 0
+
+            if args.action == "flash" and args.clear_marker:
+                with flash_mod.ssh.connect() as mule:
+                    existing = flash_mod.clear_marker(mule)
+                if existing is None:
+                    ui.ok(f"No marker at {flash_mod.MARKER_PATH}. Nothing to clear.")
+                else:
+                    ui.ok(f"Removed {flash_mod.MARKER_PATH}, which held: {existing}")
+                    ui.info(
+                        "The agent latches this at construction, so a running agent that has "
+                        "already seen it stays refusing until it restarts."
+                    )
+                progress.log("array", True, f"cleared marker: {existing or 'none present'}")
+                return 0
+
+            if args.action == "flash" and args.list_dfu:
+                # Read-only: dfu-util -l enumerates and writes nothing.
+                with flash_mod.ssh.connect() as mule:
+                    listing = flash_mod.list_dfu(mule)
+                ui.block("dfu-util -l", listing)
+                safe_mode = "DataPartition" in listing
+                ui.info(
+                    "Three alt settings including DataPartition means Safe Mode."
+                    if safe_mode
+                    else "Two alt settings means run-time mode, not Safe Mode."
+                )
+                progress.log("array", True, f"dfu-util -l, safe mode: {safe_mode}")
+                return 0
+
+            if args.action == "stage":
+                with progress.activity("array", action="stage"):
+                    outcome = flash_mod.stage()
+                progress.log(
+                    "array", True,
+                    f"staged {len(outcome['staged'])} pinned images into {outcome['directory']}",
+                )
+                return 0
+
+            if args.action == "clean":
+                with progress.activity("array", action="clean"):
+                    outcome = flash_mod.clean()
+                progress.log("array", True, f"removed {outcome['removed']}")
+                return 0
+
+            if args.action == "flash":
+                outcome = flash_mod.flash(
+                    authorise=args.authorise,
+                    write=args.write,
+                    simulate=args.simulate,
+                    reenumeration_timeout_s=args.reenumeration_timeout,
+                )
+                progress.log(
+                    "array",
+                    bool(outcome.get("succeeded", outcome.get("permitted", False))),
+                    f"{outcome['mode']}: {outcome.get('outcome', 'no outcome recorded')}",
+                )
+                # A refusal is the command doing its job, not a harness fault - but it must
+                # never exit 0, because an operator scripting around this has to be able to
+                # tell "the write happened" from "the write was refused".
+                if outcome.get("succeeded"):
+                    return 0
+                return 0 if outcome.get("permitted") and args.simulate is None and not args.write else 2
+
             with progress.activity("array", action=args.action):
                 if args.action == "hold":
                     outcome = xvf_mod.hold()
@@ -701,6 +887,8 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         ui.fail("interrupted")
         return 130
+    finally:
+        debug_mod.close_log()
 
     parser.print_help()
     return 0

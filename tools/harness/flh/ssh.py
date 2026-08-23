@@ -52,10 +52,11 @@ was the line being discarded.
 from __future__ import annotations
 
 import socket
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from . import ui
+from . import debuglog, ui
 from .config import (
     MULE_HOST,
     MULE_SSH_PORT,
@@ -154,10 +155,12 @@ class Mule:
         carriage returns, which corrupts anything the harness wants to compare byte for
         byte (CLAUDE.md section 1.4).
         """
+        started = time.monotonic()
         _, stdout, stderr = self._client.exec_command(command, get_pty=False, timeout=timeout)
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         status = stdout.channel.recv_exit_status()
+        self._record(command, status, out, err, time.monotonic() - started, elevated=False)
         return Result(command=command, exit_status=status, stdout=out, stderr=err)
 
     def run_binary(self, command: str, *, timeout: float = 120.0) -> tuple[int, bytes, str]:
@@ -255,10 +258,12 @@ class Mule:
         one sudo invocation per call, because only the first one in a shell line can be
         answered on stdin.
         """
+        started = time.monotonic()
         wrapped, stdout, stderr = self._exec_privileged(command, timeout=timeout)
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
         status = stdout.channel.recv_exit_status()
+        self._record(command, status, out, err, time.monotonic() - started, elevated=True)
         result = Result(command=wrapped, exit_status=status, stdout=out, stderr=err)
         self.report_diagnostics(err)
         self._raise_if_elevation_failed(result)
@@ -275,6 +280,37 @@ class Mule:
             Result(command=wrapped, exit_status=status, stdout="", stderr=err)
         )
         return status, data, err
+
+    def _record(
+        self,
+        command: str,
+        status: int,
+        stdout: str,
+        stderr: str,
+        seconds: float,
+        *,
+        elevated: bool,
+    ) -> None:
+        """Hand one command to the run's debug log, if a debug log is open.
+
+        Every remote command in the harness funnels through :meth:`run` or
+        :meth:`run_privileged`, so recording here is the only placement that cannot miss
+        one. The bare ``command`` is recorded rather than the sudo-wrapped ``wrapped``
+        form, because the wrapper is noise that is identical on every line - and because
+        the password is on stdin and is therefore in neither string, which is the property
+        this whole design exists to keep.
+        """
+        log = debuglog.current()
+        if log is not None:
+            log.command_result(
+                command,
+                exit_code=status,
+                stdout=stdout,
+                stderr=stderr,
+                seconds=seconds,
+                host=self.host,
+                elevated=elevated,
+            )
 
     def report_diagnostics(self, stderr: str) -> None:
         """Say once what sudo's non-elevation complaints on this unit actually mean.
