@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.cards/1",
   "generatedBy": "tools/harness/fl.py cards",
-  "updatedUtc": "2026-08-23T17:37:25Z",
+  "updatedUtc": "2026-08-23T17:49:05Z",
   "readMeFirst": [
     "This is the FrameLink SD card register. There are three physical microSD cards and none of them is marked, so this file is the only way to answer 'which card is where and what is on it' without a human squinting at a card. It is written by `python tools/harness/fl.py cards` and is pointed at from progress.json's orientation block.",
     "Run `python tools/harness/fl.py cards check` first. It reads whatever card is in the workstation's USB reader and compares it against what this file claims is in there. Exit 0 means the register and reality agree. Exit 2 means they do not, and the register is then not to be trusted until someone works out which of the two is wrong.",
@@ -36,9 +36,35 @@
       },
       "fingerprint": {
         "mbrSignature": "f870549c",
-        "capturedUtc": "2026-08-23T16:28:04Z",
-        "capturedBy": "derived from a committed capture, NOT read from the card",
-        "source": "reference/v1-state-inventory.txt line 20 - `root=PARTUUID=f870549c-02`, which is this card's own cmdline.txt as captured from the running v1 frame. A PARTUUID's prefix IS the MBR disk signature, so the value is the card's even though the card has never been put in a reader. The same string is asserted in tests/FrameLink.Tests/AgentReliabilityTests.cs, so it is regression-held."
+        "capacityBytes": 128177930240,
+        "partitionStyle": "MBR",
+        "partitions": [
+          {
+            "index": 1,
+            "mbrType": 12,
+            "offsetBytes": 8388608,
+            "sizeBytes": 536870912
+          },
+          {
+            "index": 2,
+            "mbrType": 131,
+            "offsetBytes": 545259520,
+            "sizeBytes": 127632670720
+          }
+        ],
+        "volumeSerials": [
+          "EACA13DA"
+        ],
+        "volumeLabels": [
+          "bootfs"
+        ],
+        "filesystems": [
+          "FAT32"
+        ],
+        "marker": null,
+        "source": "reference/v1-state-inventory.txt line 20 - `root=PARTUUID=f870549c-02`, which is this card's own cmdline.txt as captured from the running v1 frame. A PARTUUID's prefix IS the MBR disk signature, so the value is the card's even though the card has never been put in a reader. The same string is asserted in tests/FrameLink.Tests/AgentReliabilityTests.cs, so it is regression-held.",
+        "capturedUtc": "2026-08-23T17:49:05Z",
+        "capturedBy": "fl.py cards identify"
       },
       "history": [
         {

@@ -365,10 +365,23 @@ def _parser() -> argparse.ArgumentParser:
             "            reader, and with --card, capture it as that card's fingerprint\n"
             "  record    record that a card moved. --why is required\n"
             "  label     propose the marker file that would make a card self-identifying.\n"
-            "            Prints the exact bytes and writes nothing unless --write is given\n\n"
+            "            Prints the exact bytes and writes nothing unless --write is given\n"
+            "  gate      may a tool open the card in the reader as --card? Stricter than\n"
+            "            `check`: the MBR signature, the capacity and the partition layout\n"
+            "            must all be RECORDED and all AGREE, because a field the register\n"
+            "            never captured is not weak evidence, it is none. --json emits the\n"
+            "            whole answer for a script to read; exit 0 means a read may proceed\n"
+            "  image     record an image taken OF a card, from the receipt the imaging script\n"
+            "            wrote beside it (--receipt), or add a further copy of one already\n"
+            "            recorded (--image <id> --add-copy '<where>'). The card's handling\n"
+            "            text is derived from how many copies exist, so it stops claiming to\n"
+            "            be the only copy at the moment that stops being true\n\n"
             "Read-only apart from `label --write`, which writes one text file into a mounted "
             "FAT volume and refuses unless `check` already agrees which card it is. Nothing "
-            "here flashes, formats, partitions or opens a physical drive handle.\n\n"
+            "here flashes, formats, partitions or opens a physical drive handle - `gate` exists "
+            "precisely so that the one script which does open a handle, "
+            "tools/harness/image-v1-card.ps1, does not carry its own drifting copy of these "
+            "rules.\n\n"
             "Nothing readable through a USB card reader is unique to the physical card: the "
             "reader passes no SD CID through, the MBR signature belongs to the image and the "
             "filesystem serial to whoever formatted it. `check` therefore reports 'ambiguous' "
@@ -383,7 +396,7 @@ def _parser() -> argparse.ArgumentParser:
         "action",
         nargs="?",
         default="list",
-        choices=("list", "check", "identify", "record", "label"),
+        choices=("list", "check", "identify", "record", "label", "gate", "image"),
         help="what to do (default list)",
     )
     p_cards.add_argument("--card", default=None, help="card id from the register")
@@ -404,6 +417,43 @@ def _parser() -> argparse.ArgumentParser:
         "--write",
         action="store_true",
         help="for `label`: actually write the marker file. Without it the bytes are printed and nothing is written",
+    )
+    p_cards.add_argument(
+        "--json",
+        action="store_true",
+        help="for `gate`: emit the whole verdict as JSON on stdout, for a script to read",
+    )
+    p_cards.add_argument(
+        "--require",
+        default=None,
+        metavar="FIELDS",
+        help=(
+            "for `gate`: comma-separated identity fields that must be recorded and agree "
+            f"(default {','.join(cards_mod.GATE_REQUIRED)})"
+        ),
+    )
+    p_cards.add_argument(
+        "--receipt",
+        default=None,
+        help="for `image`: the receipt JSON the imaging script wrote beside the image",
+    )
+    p_cards.add_argument(
+        "--image",
+        default=None,
+        dest="image_id",
+        help="for `image --add-copy`: which recorded image gained a copy",
+    )
+    p_cards.add_argument(
+        "--add-copy",
+        default=None,
+        dest="add_copy",
+        metavar="WHERE",
+        help="for `image`: record that the image now also exists here, in words",
+    )
+    p_cards.add_argument(
+        "--rehash",
+        action="store_true",
+        help="for `image --receipt`: re-read and re-hash the whole image file before recording it",
     )
 
     # --- status -------------------------------------------------------------
@@ -587,6 +637,29 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     code = cards_mod.record(
                         card_id=args.card, kind=args.kind, where=args.where, why=args.why
+                    )
+                elif args.action == "gate":
+                    if not args.card:
+                        raise HarnessError(
+                            "`cards gate` needs --card: it answers a question about one "
+                            "named card and will not pick one.",
+                            exit_code=1,
+                            remedy="e.g. python tools/harness/fl.py cards gate --card v1 --json",
+                        )
+                    required = (
+                        tuple(f.strip() for f in args.require.split(",") if f.strip())
+                        if args.require
+                        else cards_mod.GATE_REQUIRED
+                    )
+                    code = cards_mod.gate(
+                        card_id=args.card, require=required, json_output=args.json
+                    )
+                elif args.action == "image":
+                    code = cards_mod.image(
+                        receipt=args.receipt,
+                        image_id=args.image_id,
+                        add_copy=args.add_copy,
+                        rehash=args.rehash,
                     )
                 else:
                     if not args.card:

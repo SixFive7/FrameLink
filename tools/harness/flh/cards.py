@@ -72,6 +72,28 @@ a physical drive handle. The single write this module can perform is :func:`labe
 ``--write``, and it writes one text file into a mounted filesystem through the normal file API.
 Flashing lives in ``framelink-scratch/m25-image/flash-card.ps1`` and deliberately not here.
 
+Lending the identity rules to a tool that *does* open the device
+----------------------------------------------------------------
+Two operations need a raw handle on the card, and neither belongs in Python: flashing, which
+writes, and imaging, which reads all of it. Both need elevation on Windows, so both are
+PowerShell run by the operator. What they must not do is carry their own copy of "is this the
+right card", because a second copy of a safety rule is a rule that drifts and is then wrong in
+exactly the situation it was written for.
+
+:func:`gate` is that seam. It is the same probe, the same :func:`fingerprint` and the same
+:func:`compare` as :func:`check`, held to a stricter bar - :data:`GATE_REQUIRED` must all be
+*recorded* and all *agree*, because a field the register never captured is not weak evidence,
+it is none - and it emits its whole answer as JSON. ``tools/harness/image-v1-card.ps1`` calls
+it, refuses unless it exits 0, and then re-resolves the disk independently by bus, model,
+capacity and USBSTOR identity and refuses again unless the disk number it found is the one
+:func:`gate` found. Two resolutions that must agree, neither trusted alone.
+
+:func:`image` closes the loop the other way: the script writes a receipt beside the image it
+produced, and this module ingests it. No hash, size or device identity is re-typed by a human
+on the way into the register, and the card's ``handling`` text is *derived* from how many
+copies of the image exist rather than authored - so "this card is the only copy" stops being
+claimed at the moment it stops being true, and not before.
+
 Making sense to a Linux operator
 --------------------------------
 The register does not assume Windows. Every identity field carries the command that reads it on
@@ -489,13 +511,23 @@ def reader_disk(data: dict[str, Any], disks: list[dict[str, Any]]) -> tuple[dict
     return None, f"{len(matches)} USB disks share uniqueId {unique}, which cannot happen; refusing to guess"
 
 
+def hex_signature(disk: dict[str, Any]) -> str | None:
+    """A probed disk's MBR signature as lower-case hex, or ``None`` if it has no partition table.
+
+    ``Get-Disk`` reports the signature as a signed 32-bit decimal; every other tool in this
+    project - ``lsblk -no PTUUID``, ``root=PARTUUID=<sig>-02``, the register - writes it as
+    eight hex digits, so the conversion happens once, here.
+    """
+    signature = disk.get("signature")
+    return f"{int(signature) & 0xFFFFFFFF:08x}" if isinstance(signature, int) else None
+
+
 def fingerprint(disk: dict[str, Any]) -> dict[str, Any]:
     """Reduce a probed disk to the fields the register compares on.
 
     ``None`` is used for "the reader answered and there is no card", which is a different fact
     from "the field was not looked at" and has to survive into :func:`compare` intact.
     """
-    signature = disk.get("signature")
     partitions = [
         {
             "index": p.get("index"),
@@ -507,7 +539,7 @@ def fingerprint(disk: dict[str, Any]) -> dict[str, Any]:
     ]
     volumes = [p for p in (disk.get("partitions") or []) if p.get("driveLetter")]
     return {
-        "mbrSignature": f"{int(signature):08x}" if isinstance(signature, int) else None,
+        "mbrSignature": hex_signature(disk),
         "capacityBytes": disk.get("capacityBytes"),
         "partitionStyle": disk.get("partitionStyle"),
         "partitions": partitions,
@@ -531,6 +563,37 @@ def _read_marker(volumes: list[dict[str, Any]]) -> str | None:
         except OSError:
             continue
     return None
+
+
+#: Exactly the keys :func:`fingerprint` produces, derived by asking it rather than by listing
+#: them, so this cannot drift when a field is added there. Anything in a stored fingerprint
+#: that is *not* in here was authored by hand or read on a machine this probe cannot reach -
+#: ``frame1``'s ``sdCid``/``sdName``/``sdSerial``, read off the Pi's own SD controller and the
+#: only genuinely per-card values in the whole register, and ``v1``'s ``source``, which records
+#: that its MBR signature was derived from a committed capture before the card was ever read.
+#: :func:`_merged_fingerprint` carries those forward; without it a single ``cards identify``
+#: run would quietly delete the one field that can survive a reflash.
+_PROBE_FIELDS = frozenset(fingerprint({}))
+
+#: Provenance keys :func:`_merged_fingerprint` always rewrites rather than carries.
+_PROVENANCE_FIELDS = ("capturedUtc", "capturedBy")
+
+
+def _merged_fingerprint(
+    existing: dict[str, Any] | None, observed: dict[str, Any], captured_by: str
+) -> dict[str, Any]:
+    """A freshly observed fingerprint, with hand-authored fields from the old one carried over.
+
+    Every field the probe *can* read is replaced outright - a re-capture that kept a stale
+    observation would defeat the point of re-capturing. Every field it cannot read is kept,
+    because deleting a value this code has no way to reproduce is not a refresh, it is a loss.
+    """
+    carried = {
+        key: value
+        for key, value in (existing or {}).items()
+        if key not in _PROBE_FIELDS and key not in _PROVENANCE_FIELDS
+    }
+    return {**observed, **carried, "capturedUtc": utcnow(), "capturedBy": captured_by}
 
 
 # --- comparison ------------------------------------------------------------------------
@@ -726,9 +789,12 @@ def identify(*, card_id: str | None = None, force: bool = False) -> int:
                 + "\nNothing was written. Work out which card this is before overwriting the record."
             )
             return 2
-    entry["fingerprint"] = {**observed, "capturedUtc": utcnow(), "capturedBy": "fl.py cards identify"}
+    entry["fingerprint"] = _merged_fingerprint(existing, observed, "fl.py cards identify")
     save(data)
     ui.ok(f"fingerprint recorded for {card_id}")
+    carried = sorted(set(entry["fingerprint"]) - _PROBE_FIELDS - set(_PROVENANCE_FIELDS))
+    if carried:
+        ui.info(f"carried over unchanged (this probe cannot read them): {', '.join(carried)}")
     return 0
 
 
@@ -840,6 +906,211 @@ def check() -> int:
     return 0
 
 
+# --- the gate a tool passes before it may open the card --------------------------------
+
+#: The fields that must be **recorded and in agreement** before any tool is told which
+#: ``\\.\PhysicalDrive`` is the card.
+#:
+#: Deliberately stricter than :func:`check`. ``check`` answers "does the register still
+#: describe reality" and is content to be told only an MBR signature, because that is an honest
+#: answer to an honest question. A gate answers a different question - "is the block device I am
+#: about to open the object I was told to open" - and for that a field the register never
+#: captured is not weak evidence, it is no evidence. So all three must be present on both sides
+#: and equal: ``mbrSignature`` says which image is on the card, ``capacityBytes`` and
+#: ``partitions`` say the geometry is the one that was fingerprinted.
+GATE_REQUIRED = ("mbrSignature", "capacityBytes", "partitions")
+
+GATE_SCHEMA = "framelink.harness.cards.gate/1"
+
+
+def gate(
+    *,
+    card_id: str,
+    require: tuple[str, ...] = GATE_REQUIRED,
+    json_output: bool = False,
+) -> int:
+    """Decide whether the card in the reader may be opened as the named card, and say why not.
+
+    Read-only: :func:`probe` plus a stat of one filename per mounted volume, exactly as
+    :func:`check` and :func:`identify` are. It opens nothing, and it cannot - it has no code
+    that names a physical drive except to *report* the path it resolved.
+
+    It exists so that a tool which does open a device handle - ``tools/harness/image-v1-card.ps1``
+    is the first - does not carry a second, drifting copy of the identity rules. That script
+    re-resolves the disk independently by bus, model, capacity and USBSTOR identity, exactly as
+    ``flash-card.ps1`` does, and then refuses unless the number it found is the number this
+    function found. Two independent resolutions that must agree; neither one trusted alone.
+
+    Every reason to refuse is collected rather than raised, so ``--json`` always yields a
+    complete answer and the operator sees all of what is wrong at once instead of one thing per
+    run. Exit 0 only when ``refusals`` is empty.
+    """
+    data = load()
+    refusals: list[str] = []
+    report: dict[str, Any] = {
+        "schema": GATE_SCHEMA,
+        "checkedUtc": utcnow(),
+        "cardId": card_id,
+        "required": list(require),
+        "ok": False,
+        "refusals": refusals,
+        "usbDisks": [],
+        "readerMatch": None,
+        "disk": None,
+        "registered": None,
+        "observed": None,
+        "verdict": None,
+        "consistentWith": [],
+        "handling": None,
+        "contents": None,
+    }
+
+    unknown = [field for field in require if field not in IDENTITY_FIELDS]
+    if unknown:
+        raise HarnessError(
+            f"--require names {', '.join(unknown)}, which is not an identity field.",
+            exit_code=1,
+            remedy=f"Known fields: {', '.join(IDENTITY_FIELDS)}",
+        )
+
+    entry = next((e for e in data.get("cards", []) if e.get("id") == card_id), None)
+    if entry is None:
+        known = ", ".join(sorted(e.get("id", "?") for e in data.get("cards", []))) or "(none)"
+        refusals.append(f"the register has no card {card_id!r}. Known cards: {known}.")
+    else:
+        report["handling"] = entry.get("handling")
+        report["contents"] = (entry.get("contents") or {}).get("summary")
+        report["registered"] = entry.get("fingerprint")
+        located = (entry.get("location") or {}).get("kind")
+        if located != "reader":
+            refusals.append(
+                f"the register places {card_id!r} in a {located!r}, not in the reader "
+                f"({(entry.get('location') or {}).get('where', '?')}). Either the card was moved "
+                f"without being recorded, or this is the wrong card id. Record the move with "
+                f"`fl.py cards record` before reading anything."
+            )
+
+    disks = probe()
+    report["usbDisks"] = [
+        {
+            "number": d.get("number"),
+            "uniqueId": d.get("uniqueId"),
+            "friendlyName": d.get("friendlyName"),
+            "model": d.get("model"),
+            "capacityBytes": d.get("capacityBytes"),
+            "mbrSignature": hex_signature(d),
+            "operationalStatus": d.get("operationalStatus"),
+            "isReadOnly": d.get("isReadOnly"),
+        }
+        for d in disks
+    ]
+    if not disks:
+        refusals.append(
+            "no USB disk is visible at all, so there is nothing to read. The reader is "
+            "unplugged, or Windows has not enumerated it."
+        )
+
+    disk, how = reader_disk(data, disks)
+    report["readerMatch"] = how
+    if disk is None:
+        refusals.append(how)
+
+    if disk is not None:
+        report["disk"] = {
+            "number": disk.get("number"),
+            "devicePath": f"\\\\.\\PhysicalDrive{disk.get('number')}",
+            "uniqueId": disk.get("uniqueId"),
+            "friendlyName": disk.get("friendlyName"),
+            "model": disk.get("model"),
+            "capacityBytes": disk.get("capacityBytes"),
+            "partitionStyle": disk.get("partitionStyle"),
+            "operationalStatus": disk.get("operationalStatus"),
+            "isReadOnly": disk.get("isReadOnly"),
+        }
+        observed = fingerprint(disk)
+        report["observed"] = observed
+
+        # More than one USB disk carrying the same signature makes "which one is the card"
+        # unanswerable from the evidence, whatever the uniqueId said. Refuse rather than pick.
+        lookalikes = [
+            d
+            for d in disks
+            if d.get("number") != disk.get("number")
+            and hex_signature(d) is not None
+            and hex_signature(d) == observed.get("mbrSignature")
+        ]
+        if lookalikes:
+            where = ", ".join(f"disk {d.get('number')}" for d in lookalikes)
+            refusals.append(
+                f"MBR signature {observed.get('mbrSignature')} is on more than one USB disk "
+                f"({where}, as well as disk {disk.get('number')}). That signature belongs to an "
+                f"image, not to a card, so nothing here can say which of them is {card_id!r}. "
+                f"Unplug the others and run this again."
+            )
+
+        if entry is not None:
+            verdict = compare(entry.get("fingerprint"), observed)
+            report["verdict"] = verdict
+            for difference in verdict["differed"]:
+                refusals.append(
+                    f"{difference['field']} disagrees: the register says "
+                    f"{difference['register']!r}, the reader says {difference['observed']!r}."
+                )
+            for field in require:
+                if field in verdict["notRecorded"]:
+                    refusals.append(
+                        f"the register records no {field} for {card_id!r}, so that field cannot "
+                        f"be checked and this gate will not treat silence as agreement. Capture "
+                        f"it read-only with `fl.py cards identify --card {card_id}` once you are "
+                        f"certain which card is in the reader."
+                    )
+                elif field not in verdict["agreed"] and field not in {
+                    d["field"] for d in verdict["differed"]
+                }:  # pragma: no cover - compare() puts every field in exactly one bucket
+                    refusals.append(f"{field} was neither agreed nor compared.")
+
+            matched = candidates(data, observed)
+            report["consistentWith"] = [
+                {"cardId": i, "strength": v["strength"], "agreed": v["agreed"]} for i, v in matched
+            ]
+            others = [i for i, _ in matched if i != card_id]
+            if others:
+                refusals.append(
+                    f"the card in the reader is equally consistent with {', '.join(others)}. "
+                    f"Nothing readable through this reader is unique to a physical card, so an "
+                    f"image taken now could not honestly be labelled {card_id!r}. "
+                    f"`fl.py cards label --card {card_id}` proposes the field that would settle it."
+                )
+
+    report["ok"] = not refusals
+
+    if json_output:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0 if report["ok"] else 2
+
+    ui.step(f"Gate: may a tool open the card in the reader as {card_id!r}?")
+    ui.kv(
+        {
+            "reader": how,
+            "device": (report["disk"] or {}).get("devicePath", "-"),
+            "capacity": f"{(report['disk'] or {}).get('capacityBytes') or 0:,} B",
+            "mbrSignature": (report["observed"] or {}).get("mbrSignature") or "-",
+            "required": ", ".join(require),
+            "agreed": ", ".join((report["verdict"] or {}).get("agreed") or []) or "-",
+            "handling": report["handling"] or "-",
+        }
+    )
+    if report["ok"]:
+        ui.ok(f"The card in the reader is {card_id} on every required field. A read may proceed.")
+        ui.info("This says nothing about writing. Nothing in this harness writes to a card.")
+        return 0
+    ui.abort(
+        f"Refusing to identify the card in the reader as {card_id!r}:\n"
+        + "\n".join(f"  - {reason}" for reason in refusals)
+    )
+    return 2
+
+
 def record(*, card_id: str, kind: str, where: str, why: str) -> int:
     """Record that a card has moved. The only way position enters the register.
 
@@ -878,6 +1149,292 @@ def record(*, card_id: str, kind: str, where: str, why: str) -> int:
 
     if kind == "reader":
         ui.info(f"Confirm it with `fl.py cards check`, or capture identity with `fl.py cards identify --card {card_id}`.")
+    return 0
+
+
+# --- recording an image that was taken OF a card ---------------------------------------
+
+#: The receipt ``tools/harness/image-v1-card.ps1`` writes beside the image it produced. The
+#: script does the reading, this module does the recording, and the receipt is the seam: it
+#: means no hashes, sizes or device identities are re-typed by a human on the way into the
+#: register, and it survives the session that produced it.
+IMAGE_RECEIPT_SCHEMA = "framelink.harness.cards.image-receipt/1"
+
+#: Read in this many bytes at a time when ``--rehash`` re-reads the image file.
+_REHASH_CHUNK = 4 * 1024 * 1024
+
+
+def _handling_after_image(entry: dict[str, Any], image_id: str, image: dict[str, Any]) -> str:
+    """The card's handling text, rebuilt from what is now true about it.
+
+    Rebuilt rather than appended to, so that recording the same receipt twice, or adding a
+    second copy later, produces one coherent sentence rather than a sediment of them. The three
+    cases are genuinely different instructions, not three tones of the same one.
+    """
+    copies = image.get("copies") or []
+    where = "; ".join(str(copy.get("where")) for copy in copies if copy.get("where"))
+    described = (
+        f"Image {image_id!r} is a full raw byte-for-byte capture of this card - "
+        f"{image.get('sizeBytes') or 0:,} bytes, every sector including unallocated space, "
+        f"sha256 {image.get('sha256') or '?'}"
+    )
+
+    if not image.get("verified"):
+        return (
+            f"IRREPLACEABLE. {described} - but its verification did not pass or was skipped, so "
+            f"it is not yet evidence of anything and this card is still the only copy of the v1 "
+            f"system. Never flash it, never format it, never let a flashing tool resolve to it, "
+            f"and do not mount it writable. Re-run tools/harness/image-v1-card.ps1 and let the "
+            f"read-back comparison finish."
+        )
+
+    verified_how = (image.get("verification") or {}).get("method") or "read back and compared"
+    if len(copies) < 2:
+        return (
+            f"Imaged, not yet redundant. {described}, verified by {verified_how}. It exists in "
+            f"exactly one place ({where or 'nowhere recorded'}), and one file on one disk is a "
+            f"copy rather than a backup - so until a second medium holds it, this card is still "
+            f"the only durable copy of the v1 system. Never flash it, never format it, never let "
+            f"a flashing tool resolve to it, and do not mount it writable. Record the second copy "
+            f"with `fl.py cards image --image {image_id} --add-copy '<where>'`; this text is "
+            f"derived from that list and will change on its own when it does."
+        )
+    return (
+        f"No longer the only copy. {described}, verified by {verified_how}, and held in "
+        f"{len(copies)} places: {where}. This card is still the original the parity target was "
+        f"captured from, so do not flash it, format it or let a flashing tool resolve to it "
+        f"without a deliberate decision - but it no longer has to be handled as irreplaceable, "
+        f"because it is no longer irreplaceable."
+    )
+
+
+def _file_sha256(path: Path) -> str:
+    """SHA-256 of a file, streamed. Used only when ``--rehash`` asks for the expensive proof."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            block = handle.read(_REHASH_CHUNK)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def image(
+    *,
+    receipt: str | None = None,
+    image_id: str | None = None,
+    add_copy: str | None = None,
+    rehash: bool = False,
+) -> int:
+    """Record an image into the register: from a receipt, or add a copy of one already recorded.
+
+    Both forms are idempotent. Re-recording the same receipt rewrites the same image entry and
+    the same derived handling text and appends no second history line; adding a copy that is
+    already listed changes nothing. That matters because the alternative to a re-runnable
+    command is an operator hand-editing JSON, which is the thing this module exists to prevent.
+    """
+    if add_copy is not None:
+        return _add_copy(image_id=image_id, where=add_copy)
+    if not receipt:
+        raise HarnessError(
+            "`cards image` needs either --receipt <file> or --image <id> --add-copy '<where>'.",
+            exit_code=1,
+            remedy=(
+                "The receipt is written beside the image by tools/harness/image-v1-card.ps1, "
+                "e.g. --receipt C:/Users/jori/framelink-scratch/v1-card-image/"
+                "framelink-v1-card.receipt.json"
+            ),
+        )
+
+    receipt_path = Path(receipt)
+    try:
+        payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HarnessError(f"{receipt_path} could not be read: {exc}", exit_code=3) from exc
+    if payload.get("schema") != IMAGE_RECEIPT_SCHEMA:
+        raise HarnessError(
+            f"{receipt_path} declares schema {payload.get('schema')!r}, not "
+            f"{IMAGE_RECEIPT_SCHEMA!r}.",
+            exit_code=3,
+        )
+
+    missing = [
+        key
+        for key in ("imageId", "cardId", "path", "sizeBytes", "sha256", "verification")
+        if payload.get(key) in (None, "")
+    ]
+    if missing:
+        raise HarnessError(
+            f"{receipt_path} is missing: {', '.join(missing)}.",
+            exit_code=3,
+            remedy="It was written by an interrupted or older run. Re-run the imaging script.",
+        )
+
+    data = load()
+    entry = card(data, str(payload["cardId"]))
+    new_id = str(payload["imageId"])
+    image_file = Path(str(payload["path"]))
+
+    # The register must never claim an image that is not there, or that is the wrong length. A
+    # size check is nearly free and catches the two failures a receipt cannot: the file was
+    # moved after the run, and the run was killed between the last write and the rename.
+    if not image_file.is_file():
+        raise HarnessError(
+            f"the receipt names an image at {image_file} and there is no file there.",
+            exit_code=3,
+            remedy="Nothing was recorded. Move the image back, or re-run the imaging script.",
+        )
+    actual = image_file.stat().st_size
+    if actual != int(payload["sizeBytes"]):
+        raise HarnessError(
+            f"{image_file} is {actual:,} bytes; the receipt says {int(payload['sizeBytes']):,}.",
+            exit_code=3,
+            remedy="Nothing was recorded. The file is truncated or is not the one the receipt describes.",
+        )
+
+    ui.step(f"Recording image {new_id!r} of card {payload['cardId']!r}")
+    ui.kv({"receipt": str(receipt_path), "image": str(image_file), "bytes": f"{actual:,}"})
+
+    if rehash:
+        slow = " - this reads the whole file and takes minutes" if actual > 1_000_000_000 else ""
+        ui.info(f"re-hashing {actual:,} bytes{slow}")
+        again = _file_sha256(image_file)
+        if again != str(payload["sha256"]).lower():
+            ui.abort(
+                f"Refusing to record: {image_file} now hashes to {again}, and the receipt says "
+                f"{payload['sha256']}. The file has changed since it was written."
+            )
+            return 2
+        ui.ok(f"re-hashed and unchanged: {again}")
+
+    verification = dict(payload.get("verification") or {})
+    verified = bool(verification.get("allAgree")) and not verification.get("skipped")
+
+    previous = (data.get("images") or {}).get(new_id) or {}
+    copies = [copy for copy in (previous.get("copies") or []) if copy.get("where")]
+    primary = f"{payload.get('workstation') or 'this workstation'}: {image_file}"
+    if not any(copy.get("where") == primary for copy in copies):
+        copies.insert(0, {"where": primary, "medium": "workstation internal disk", "recordedUtc": utcnow()})
+
+    fingerprint_of_source = dict(payload.get("sourceFingerprint") or {})
+    record_entry = {
+        "summary": (
+            f"A full raw image of card {payload['cardId']!r} - {entry.get('title', '')}. Every "
+            f"sector of the card, unallocated space included, uncompressed and in card order, so "
+            f"it restores by being written back byte for byte."
+        ),
+        "kind": "capture",
+        "of": payload["cardId"],
+        "format": payload.get("format") or "raw, uncompressed",
+        "path": str(image_file),
+        "sizeBytes": actual,
+        "sha256": str(payload["sha256"]).lower(),
+        "mbrSignature": fingerprint_of_source.get("mbrSignature"),
+        "partitions": fingerprint_of_source.get("partitions"),
+        "capturedUtc": payload.get("capturedUtc"),
+        "completedUtc": payload.get("completedUtc"),
+        "durationSeconds": payload.get("durationSeconds"),
+        "capturedBy": payload.get("capturedBy") or "tools/harness/image-v1-card.ps1",
+        "workstation": payload.get("workstation"),
+        "device": payload.get("device"),
+        "sourceFingerprint": fingerprint_of_source or None,
+        "verified": verified,
+        "verification": verification,
+        "copies": copies,
+        "restore": (
+            "It is a whole-disk image including the MBR, so it is written back to a card with "
+            "any raw writer - `dd if=<image> of=/dev/sdX bs=4M status=progress` on Linux, or "
+            "Raspberry Pi Imager's 'Use custom' on Windows - onto a card of at least "
+            f"{actual:,} bytes. On Linux it also mounts without being restored: "
+            "`losetup -Pfr --show <image>` attaches it read-only with its partitions."
+        ),
+        "recordedUtc": utcnow(),
+        "recordedFrom": str(receipt_path),
+        "gate": payload.get("gate"),
+    }
+    data.setdefault("images", {})[new_id] = record_entry
+
+    contents = entry.setdefault("contents", {})
+    contents["imageId"] = new_id
+    entry["handling"] = _handling_after_image(entry, new_id, record_entry)
+
+    # An imaging is not a move, but it is the largest thing that has ever happened to this card
+    # and the history is where a later session looks for that. Keyed by imageId so re-recording
+    # the same receipt does not add a second line.
+    history = entry.setdefault("history", [])
+    if not any(event.get("imageId") == new_id for event in history):
+        location = entry.get("location") or {}
+        history.append(
+            {
+                "utc": utcnow(),
+                "from": location.get("where"),
+                "kind": location.get("kind", "unknown"),
+                "where": location.get("where"),
+                "imageId": new_id,
+                "why": (
+                    f"Not a move. A full raw image of this card was taken read-only by "
+                    f"{record_entry['capturedBy']} and recorded here. The card did not leave the "
+                    f"reader and nothing was written to it."
+                ),
+            }
+        )
+
+    save(data)
+    ui.ok(f"recorded image {new_id}")
+    ui.kv(
+        {
+            "verified": "yes" if verified else "NO - the read-back did not pass or was skipped",
+            "copies": str(len(copies)),
+            "handling now": entry["handling"],
+        }
+    )
+    if not verified:
+        ui.warn(
+            "The card's handling text still says IRREPLACEABLE, because an unverified image is "
+            "not yet a copy of anything."
+        )
+        return 2
+    if len(copies) < 2:
+        ui.info(
+            f"One copy on one disk is not redundancy. Put it on a second medium and record that "
+            f"with `fl.py cards image --image {new_id} --add-copy '<where>'`."
+        )
+    return 0
+
+
+def _add_copy(*, image_id: str | None, where: str) -> int:
+    """Record that the image now also exists somewhere else, and refresh the derived handling."""
+    if not image_id:
+        raise HarnessError("`cards image --add-copy` needs --image <id>.", exit_code=1)
+    if not where.strip():
+        raise HarnessError("--add-copy needs the place, in words.", exit_code=1)
+
+    data = load()
+    images = data.get("images") or {}
+    if image_id not in images:
+        known = ", ".join(sorted(images)) or "(none)"
+        raise HarnessError(
+            f"No image {image_id!r} in the register.", exit_code=3, remedy=f"Known images: {known}."
+        )
+    record_entry = images[image_id]
+    copies = [copy for copy in (record_entry.get("copies") or []) if copy.get("where")]
+    if any(copy.get("where") == where for copy in copies):
+        ui.ok(f"{image_id} already lists {where!r}; nothing changed.")
+        return 0
+    copies.append({"where": where, "recordedUtc": utcnow(), "statedBy": "operator"})
+    record_entry["copies"] = copies
+
+    of_card = record_entry.get("of")
+    if of_card:
+        entry = card(data, str(of_card))
+        entry["handling"] = _handling_after_image(entry, image_id, record_entry)
+    save(data)
+    ui.ok(f"{image_id}: copy {len(copies)} recorded - {where}")
+    if of_card:
+        ui.kv({"handling now": card(data, str(of_card))["handling"]})
     return 0
 
 
