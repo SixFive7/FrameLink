@@ -25,3 +25,8 @@ __pycache__/
 # alone is 119 GiB. Kept in the working directory for convenience, not for git.
 archive/
 SESSION-STATE.md
+
+# Scratch: raw research captures, intermediate artifacts, anything an agent
+# produced on the way to a finding rather than as the finding. The findings
+# themselves belong in reference/ or docs/ and are committed there.
+.work/
