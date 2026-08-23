@@ -319,9 +319,11 @@ def _parser() -> argparse.ArgumentParser:
             "for the unit, and refuses to certify a reading taken on an array the agent could "
             "have written to. It refuses outright if two arrays are attached, because "
             "xvf_host has no device selector and could not say which one answered.\n\n"
-            "Only VERSION and GPO_READ_VALUES are ever sent. No GPO write, no dfu-util, no "
-            "flashing path of any kind. The only writes to the frame are the stop and the "
-            "start. Requires FL_PW.\n\n"
+            "Only VERSION, GPO_READ_VALUES and the four BLD_* build-provenance reads "
+            "(BLD_REPO_HASH, BLD_MSG, BLD_HOST, BLD_MODIFIED) are ever sent, and each one is "
+            "checked against three independent gates rather than one allowlist. No GPO write, "
+            "no dfu-util, no flashing path of any kind. The only writes to the frame are the "
+            "stop and the start. Requires FL_PW.\n\n"
             "Exit 0 when the step did what it says, 2 when the reading could not be certified "
             "or the frame did not report InSync in time - never 0 for either of those."
         ),
@@ -483,7 +485,9 @@ def main(argv: list[str] | None = None) -> int:
                     # tools/harness/runs/ holds the verbatim capture and is swept; this is the
                     # record that survives, so it carries every value the question turns on.
                     summary = (
-                        f"firmware {outcome['firmware']}, X0D31={outcome['amplifierPin']} "
+                        f"firmware {outcome['firmware']}, "
+                        f"build {outcome['buildIdentity'] or 'not reported'}, "
+                        f"X0D31={outcome['amplifierPin']} "
                         f"(mute {outcome['muteButton']}, LED {outcome['ledRing']}), "
                         f"stable={outcome['stable']}, ordering {outcome['ordering']}, "
                         f"serial {outcome['usb'].get('serial', '?')}"

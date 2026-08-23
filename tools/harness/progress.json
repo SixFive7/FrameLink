@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-16T19:12:14Z",
+  "updatedUtc": "2026-08-23T15:49:58Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -19,7 +19,7 @@
     "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
     "Start the dev Fleet Manager, which is down: FRAMELINK_OPERATOR_PASSWORD set, then dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199. The mule's agent is pointed at http://10.20.30.200:5199 and is retrying forever; its journal is a wall of connection warnings until this is up.",
     "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
-    "THE FRONTIER (M3): the agent's graph carries 81 resources against the catalog's 80 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 81 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
+    "THE FRONTIER (M3): the agent's graph carries 80 resources against the catalog's 79 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 80 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
     "M2.5 is NOT done and cannot be finished at this desk: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and version2.md section 5.3 item 3 records that no SD card reader is attached. Ask the user for one."
   ],
   "blockers": [
@@ -27,19 +27,19 @@
       "id": "fl-pw-unset",
       "what": "FL_PW is not set, so no command can reach the mule.",
       "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-16T12:14:10Z"
+      "since": "2026-08-23T15:49:58Z"
     },
     {
       "id": "ha-token-unset",
       "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
       "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
-      "since": "2026-08-16T12:14:10Z"
+      "since": "2026-08-23T15:49:58Z"
     },
     {
       "id": "operator-password-unset",
       "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
       "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
-      "since": "2026-08-16T12:14:10Z"
+      "since": "2026-08-23T15:49:58Z"
     }
   ],
   "milestones": [
@@ -112,7 +112,7 @@
       "stateFrom": "resources",
       "evidence": {
         "how": "derived-from-the-repository",
-        "what": "The agent's graph carries 81 resources against the catalog's 80, 1 net beyond it; 36 of 81 can still be shown to have been reboot-verified on real hardware, which is a floor and not a census. Both numbers are measured on every write, not recorded.",
+        "what": "The agent's graph carries 80 resources against the catalog's 79, 1 net beyond it; 36 of 80 can still be shown to have been reboot-verified on real hardware, which is a floor and not a census. Both numbers are measured on every write, not recorded.",
         "notWitnessed": "The triple bar this milestone is graded on - state-diff against the frozen v1 reference, checkpoint assertions, validation battery on the mule - has not been run for any group. The state-diff harness now exists (`fl.py parity`, judged by tools/FrameLink.Parity) and is tested against fixtures, but it has never been run against a frame: no observation has ever been collected and no parity verdict has ever been issued. The other two bars have no harness."
       }
     },
@@ -178,15 +178,15 @@
       "title": "Smart plug switches under harness control with wrong-entity and wear guards",
       "state": "proven",
       "provenBy": "fl.py power",
-      "provenUtc": "2026-08-15T13:27:38Z",
+      "provenUtc": "2026-08-20T15:09:13Z",
       "provenCommand": "fl.py power",
-      "detail": "cycle: 2 relay operation(s), wrong-entity guard passed"
+      "detail": "on: 1 relay operation(s), wrong-entity guard passed"
     },
     "collect": {
       "title": "Screenshot and journal tail come back from the mule",
       "state": "proven",
       "provenBy": "fl.py collect",
-      "provenUtc": "2026-08-16T19:12:14Z",
+      "provenUtc": "2026-08-23T15:48:15Z",
       "provenCommand": "fl.py collect",
       "detail": "screenshot via grim, journal 0 lines"
     },
@@ -200,9 +200,9 @@
     }
   },
   "resources": {
-    "catalogTotal": 80,
+    "catalogTotal": 79,
     "catalogTotalReadFrom": "reference/resource-catalog.md",
-    "implemented": 81,
+    "implemented": 80,
     "implementedReadFrom": "tests/FrameLink.Tests/AgentResourceGraphTests.cs",
     "remaining": 0,
     "beyondCatalog": 1,
@@ -318,6 +318,17 @@
       "whenUtc": "2026-08-16",
       "where": "mule framelink@10.20.30.53, dev Fleet Manager at http://10.20.30.200:5199",
       "recordedIn": "commit 0384c01, deployed as 0.0.0+0384c01.dirty (the `.dirty` is `fl.py`'s own progress.json in-flight marker, as on fe61154). Gates before it: `dotnet run --project tests/FrameLink.Tests -c Release` 1223 passed / 0 failed, and `dotnet build FrameLink.slnx -c Release` 0 warnings / 0 errors. The census series is C:/Users/jori/framelink-scratch/v-census.jsonl - 120 readings, one every 30 s, nine before the deploy and 111 after it - the panel captures are v-panel-before.png and v-panel-after-1..3.png beside it, the whole post-deploy journal is v-journal-after.txt, and the deploy transcript is v-deploy.log. That directory is outside the repository, so these are local-only evidence. The served release feed was checked after deploying - GET /agent/release/linux-arm64 answers 0.0.0+0384c01.dirty with the matching sha256, so §2.8 cannot walk the frame back to the previous build"
+    },
+    {
+      "id": "the-array-names-its-build-and-nothing-public-can-name-it-back",
+      "question": "Decision 90 records that upstream published `v2.0.10` **twice with different bytes** - `17bac32a` (2026-06-29, sha256 `237f762a…`) and `aeacafab` (2026-07-13, sha256 `81593709…`), 43 % of 933,888 bytes differing - and that Frame #1 is *probably* running the newer one because it was flashed 2026-08-08, **which is inference from dates and not a measurement**. The flashed file itself is gone: the SD card that ran it was replaced. But the pinned `libcommand_map.so` carries `BLD_REPO_HASH`, *\"Retrieve the GIT hash of the sw_xvf3800 repo used to build the firmware\"*, beside `BLD_MSG`, `BLD_HOST` and `BLD_MODIFIED` - four reads no session had ever taken. Can the board say which build it is running?",
+      "measured": "**The board answers, precisely and repeatably - and nothing public can decode the answer.** Frame #1's own array (serial `101991441260500069`, `bcdDevice 020a`), `fl-agent` proven stopped both times, read twice nine minutes apart across a full stop/start cycle and byte-identical on both:\n```\nVERSION 2 0 10\nBLD_REPO_HASH 3f08f630b41b8bce11cb2f45857ba49f22f9d507\nBLD_MSG ua-io16-sqr\nBLD_HOST NA\nBLD_MODIFIED TRUE\n```\n`BLD_MSG`, `BLD_HOST` and `BLD_MODIFIED` arrive NUL-padded to fixed widths (39, 28 and 2 NULs); the tool prints them raw and they look like spaces, so `xvf.parse_reply` strips them - `str.split()` does not, and without that the padding lands inside the recorded value and any later board-to-board comparison compares the padding too.\n**`sw_xvf3800` does not exist in public.** `github.com/xmos/sw_xvf3800` and `api.github.com/repos/xmos/sw_xvf3800` both answer **404**; a GitHub repository search for `sw_xvf3800` returns **nothing, from any owner**; `xmos` publishes exactly one XVF repository and it is `host_xvf_control`. GitHub commit search for `3f08f630b41b8bce11cb2f45857ba49f22f9d507` returns nothing and neither does a web search. XMOS's own build documentation describes the firmware as a **source release package**, not a repository - which is what makes the field unresolvable rather than merely unindexed.\n**The two published binaries cannot be tied to source commits by inspection either, and the reason is structural.** Both were downloaded and their digests confirmed against decision 90's (`237f762a5562…`, `81593709500c…`, 933,888 bytes each, 402,246 bytes = 43.1 % differing). Neither contains the hash as ASCII, as upper-case ASCII, as 20 raw bytes, word-swapped, nor the string `ua-io16-sqr` - under identity, all 256 XOR constants, all 255 ADD constants, bit-reversal, or strides of 2, 3, 4 and 8. There are only **331 printable ASCII runs of 6+ chars in 933,888 bytes** and not one is a firmware string. The layout says why: a 98-byte header, then bytes `0x62`-`0x33fa5` **identical between the two builds** at 1.835 bits/byte, then a body at 5.649 bits/byte whose non-padding bytes run **7.327 bits/byte** - the application payload is compressed. That is simultaneously why no string is findable and why a small source change flips 43 % of the file.\n**Both publications were real firmware changes, so their hashes must differ.** `17bac32a` is *\"restore audio descriptors and buffers on bus reset\"*, `aeacafab` is *\"decoupling DOA state from effect\"*, and upstream's `xmos_firmwares/usb/changelog.md` lists all three v2.0.10 fixes under one heading - the union of the two, with no note that the version was published twice.",
+      "answer": "**The reading is a per-build fingerprint that names no build.** It is stable, reproducible, free, needs no flash and works on any board whose USB is up - so it tells two boards apart with certainty - but `3f08f630b41b8bce11cb2f45857ba49f22f9d507` resolves to nothing anyone outside XMOS can look up. **`BLD_MODIFIED TRUE` is the part that settles the shape of the question permanently**: upstream's own wording is *\"whether or not the current firmware repo has been modified from the official release\"*, so this image was built from a **dirty working tree**. Even a public `sw_xvf3800` would let the hash name a base commit and not the bytes - so a git hash can never be a byte-level identity for these images, and no future access to the repository would change that.\n**What it does newly establish is the build configuration.** `BLD_MSG` is `ua-io16-sqr` - the 2-channel 16 kHz square-array USB Audio profile - which rules out Frame #1 running any of the four sibling images upstream ships in the same directory (`_6chl_v2.0.8`, `_v2.0.9_48k`, `_v2.1.0_16k6ch`, `_v2.1.0_48k2ch`). Upstream's v2.0.8 changelog names the six-channel profile `ua-io16-6ch-sqr`, which is what makes the field interpretable at all. `BLD_HOST` is `NA`, so the build host is not recorded and corroborates nothing.\n**The operator's decision gets a decisive experiment out of this, which it did not have before.** If the spare is ever flashed, flash it from *one named published file* and read `BLD_REPO_HASH` afterwards: equal to `3f08f630…` means Frame #1 runs that file's build, unequal means it runs the other one. Either outcome closes the question outright, from a flash that was going to happen anyway - and it also makes every future flash self-documenting, because the file-to-hash mapping is established the first time anyone records both.",
+      "rulesOut": "Rules out **reading the published `.bin` files to find out what is on a board**. They are compressed and no simple transform exposes a string; the only way further is decompressing an XMOS boot image, and decision 63 forecloses that deliberately - staying not-an-XMOS-Licensee is a precondition of the native-protocol work, and reverse-engineering their image format is the wrong side of that line. This is a stopping point taken on purpose, not effort not spent.\nIt also rules out `BLD_REPO_HASH` ever being a *byte* identity, per `BLD_MODIFIED TRUE` above.\n**What it does not establish: which of the two 2.0.10 builds Frame #1 is running.** Decision 90's date inference - flashed 2026-08-08, after the 2026-07-13 republication, so probably the newer build - is untouched and is still inference. Nothing here bears on board revision either; that remains silkscreen-only. And the 2.0.6 spare in the unpowered Frame #2 was not read, so there is exactly one fingerprint on file and nothing yet to compare it against.",
+      "consistentWith": "Decision 90 throughout, and it reproduces that decision's bench measurement exactly: `GPO_READ_VALUES 0 0 0 1 0`, three stable readings, on both passes - the same five values the 2026-08-20 session read from a factory 2.0.6 array and from this 2.0.10 one. That session is still visible in this boot's `dmesg`: the array re-enumerated at 20190.997 s with `bcdDevice= 2.06` and again at 20295.380 s with `bcdDevice= 2.0a`, which is the spare going in and Frame #1's own array coming back. It also confirms decision 90's claim that the command map carries these four commands - they are at offsets 504-510 of `libcommand_map.so`'s string table, with the descriptions quoted above.",
+      "whenUtc": "2026-08-23",
+      "where": "mule framelink@10.20.30.53, array serial 101991441260500069",
+      "recordedIn": "`tools/harness/flh/xvf.py`, whose read allowlist gained the four `BLD_*` commands and, with them, two gates that sit *beside* the allowlist rather than behind it: a command must be one bare `A-Z0-9_` token (so no value can follow it, which is how `xvf_host` turns a getter into a setter) and must contain none of `WRITE_FRAGMENTS`, **checked without consulting the allowlist** - so adding `GPO_WRITE_VALUE` or `DFU_DETACH` to `READ_COMMANDS` still raises. Verified by doing exactly that in a scratch interpreter. No test suite covers `tools/harness/`, so the gates were exercised directly and the module was then run end-to-end against the frame twice. Two artifacts under the gitignored `tools/harness/runs/`, so local-only evidence: `20260823T153820Z-array` (first reading) and `20260823T154709Z-array` (second, with the NUL strip and with `certified` written *into* `reading.json` instead of being assigned after the file was closed). Frame #1 was stopped twice for 50 s and 44 s, reported `InSync(linux-arm64, endpoints resolved by boot-file)` on both restarts, and chromium pid 243393 survived both untouched - the browser was never reloaded. Photographs before and after each cycle are the `*-collect` directories beside them. Neither reading is `certified`: the array was attached long before the agent stopped, so the connect-order proof is `violated` by construction. That bounds the *GPO* reading only - `BLD_*` are fixed at firmware compile time and nothing a running agent can send moves them."
     }
   ],
   "orientation": {
@@ -397,13 +408,13 @@
       "deployedUtc": "2026-08-16T11:38:40Z"
     },
     "lastCollection": {
-      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260816T191213Z-collect",
-      "capturedUtc": "2026-08-16T19:12:14Z",
+      "directory": "C:/Source/SixFive7/FrameLink/tools/harness/runs/20260823T154814Z-collect",
+      "capturedUtc": "2026-08-23T15:48:15Z",
       "screenshot": {
         "method": "grim",
-        "bytes": 734180,
+        "bytes": 870811,
         "waylandDisplay": "wayland-0",
-        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T191213Z-collect\\screenshot.png"
+        "path": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T154814Z-collect\\screenshot.png"
       },
       "journal": null
     },
@@ -413,8 +424,8 @@
     "builds": 17,
     "deploys": 12,
     "testRuns": 13,
-    "collections": 16,
-    "relayOperations": 2
+    "collections": 29,
+    "relayOperations": 3
   },
   "log": [
     {
@@ -927,6 +938,150 @@
       "command": "collect",
       "ok": true,
       "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260816T191213Z-collect"
+    },
+    {
+      "utc": "2026-08-18T11:39:03Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260818T113902Z-collect"
+    },
+    {
+      "utc": "2026-08-18T11:39:23Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260818T113922Z-collect"
+    },
+    {
+      "utc": "2026-08-18T11:42:37Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260818T114236Z-collect"
+    },
+    {
+      "utc": "2026-08-18T11:43:00Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260818T114300Z-collect"
+    },
+    {
+      "utc": "2026-08-18T11:46:57Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260818T114656Z-collect"
+    },
+    {
+      "utc": "2026-08-20T15:09:13Z",
+      "command": "power",
+      "ok": true,
+      "summary": "on - {'action': 'on', 'relayOperations': 1, 'state': 'on', 'aliveAfterSeconds': 21.0}"
+    },
+    {
+      "utc": "2026-08-20T15:10:29Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent inactive, 1 array(s) attached"
+    },
+    {
+      "utc": "2026-08-20T20:46:13Z",
+      "command": "array",
+      "ok": true,
+      "summary": "firmware 2 0 6, X0D31=0 (mute 0, LED 1), stable=True, ordering proven, serial 101991441260500030"
+    },
+    {
+      "utc": "2026-08-20T20:49:11Z",
+      "command": "array",
+      "ok": true,
+      "summary": "firmware 2 0 10, X0D31=0 (mute 0, LED 1), stable=True, ordering proven, serial 101991441260500069"
+    },
+    {
+      "utc": "2026-08-20T20:49:58Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent active, [INFO] This frame now reports itself as InSync(linux-arm64, endpoints resolved by boot-file)."
+    },
+    {
+      "utc": "2026-08-23T15:36:38Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153637Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:37:40Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153739Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:37:41Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153740Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:37:43Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153742Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:38:00Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent inactive, 1 array(s) attached"
+    },
+    {
+      "utc": "2026-08-23T15:38:20Z",
+      "command": "array",
+      "ok": false,
+      "summary": "firmware 2 0 10, build 3f08f630b41b8bce11cb2f45857ba49f22f9d507, X0D31=0 (mute 0, LED 1), stable=True, ordering violated, serial 101991441260500069"
+    },
+    {
+      "utc": "2026-08-23T15:39:35Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent active, [INFO] This frame now reports itself as InSync(linux-arm64, endpoints resolved by boot-file)."
+    },
+    {
+      "utc": "2026-08-23T15:39:47Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153946Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:39:48Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T153947Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:47:07Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent inactive, 1 array(s) attached"
+    },
+    {
+      "utc": "2026-08-23T15:47:09Z",
+      "command": "array",
+      "ok": false,
+      "summary": "firmware 2 0 10, build 3f08f630b41b8bce11cb2f45857ba49f22f9d507, X0D31=0 (mute 0, LED 1), stable=True, ordering violated, serial 101991441260500069"
+    },
+    {
+      "utc": "2026-08-23T15:48:05Z",
+      "command": "array",
+      "ok": true,
+      "summary": "fl-agent active, [INFO] This frame now reports itself as InSync(linux-arm64, endpoints resolved by boot-file)."
+    },
+    {
+      "utc": "2026-08-23T15:48:13Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T154812Z-collect"
+    },
+    {
+      "utc": "2026-08-23T15:48:15Z",
+      "command": "collect",
+      "ok": true,
+      "summary": "C:\\Source\\SixFive7\\FrameLink\\tools\\harness\\runs\\20260823T154814Z-collect"
     }
   ]
 }

@@ -45,6 +45,27 @@ nowhere in this file except in prose. The only writes to the frame are ``systemc
 ``systemctl start`` of ``fl-agent.service``, which are :func:`hold` and :func:`release` and
 nothing else.
 
+An allowlist alone is only as safe as the last edit to it, and this one has now been edited
+once - so :func:`_invocation` enforces **three** gates that a single edit cannot defeat
+together, and the two new ones sit beside the allowlist rather than behind it:
+
+1. **Shape.** The command must match :data:`COMMAND_NAME` - one bare ``A-Z0-9_`` token. This
+   is the gate that matters most, because ``xvf_host``'s read and write forms of one setting
+   are frequently *the same command name* distinguished only by whether a value follows it
+   (``GPO_WRITE_VALUE 31 0``). A vector this module builds can carry no value, so a getter
+   cannot be turned into a setter by what is passed to it, and no shell metacharacter can
+   reach the remote shell either.
+2. **Name.** The command must contain none of :data:`WRITE_FRAGMENTS`, checked *independently
+   of the allowlist*. Adding ``GPO_WRITE_VALUE`` or ``DFU_DETACH`` to :data:`READ_COMMANDS`
+   therefore does not make it sendable; it makes :func:`_invocation` raise a second, louder
+   error. This gate fails closed by construction - a future read whose name happens to
+   contain ``SET`` is refused until a human looks at it, which is the correct direction.
+3. **Allowlist.** The command must be in :data:`READ_COMMANDS`.
+
+Every command in that list is a read of a value the DSP computed before the frame was
+switched on: a version, four build-provenance strings fixed at firmware compile time, and
+five GPO pin levels.
+
 Why the array cannot simply be added alongside the existing one
 ---------------------------------------------------------------
 ``xvf_host`` has no device selector: its ``--help`` lists a protocol (``-u``), a command map
@@ -85,10 +106,59 @@ TOOL_DIRECTORIES = (
     "$HOME/xvf3800/host_control/rpi_64bit",
 )
 
-#: Every device command this module may send. Both are pure reads of the DSP's own state.
+#: Every device command this module may send. Every one is a pure read of the DSP's own state.
 #: Anything not in this tuple raises in :func:`_invocation` - the allowlist is the mechanism,
-#: not the comment above it.
-READ_COMMANDS = ("VERSION", "GPO_READ_VALUES")
+#: not the comment above it - and so does anything in it that fails either of the two gates
+#: beside it, which is what stops an edit *to this tuple* from being enough to send a write.
+READ_COMMANDS = (
+    "VERSION",
+    "BLD_REPO_HASH",
+    "BLD_MSG",
+    "BLD_HOST",
+    "BLD_MODIFIED",
+    "GPO_READ_VALUES",
+)
+
+#: The build-provenance reads, in the order :func:`read` takes them. The firmware fixes all
+#: four at compile time and nothing on a running frame can move them, which is what makes them
+#: worth taking: ``VERSION`` answers ``2 0 10`` for two *different* published 2.0.10 binaries
+#: (17bac32a and aeacafab, 43 % of 933,888 bytes apart) and so does ``bcdDevice``, so neither
+#: distinguishes them. ``BLD_REPO_HASH`` is documented in the command map as "Retrieve the GIT
+#: hash of the sw_xvf3800 repo used to build the firmware" - if the two releases were built
+#: from different commits, this is the reading that says which one a board is running.
+BUILD_COMMANDS = ("BLD_REPO_HASH", "BLD_MSG", "BLD_HOST", "BLD_MODIFIED")
+
+#: Gate 1: a command is one bare token and nothing else. See the module docstring - the point
+#: is not tidiness, it is that ``xvf_host`` writes by taking a value *after* the command name,
+#: so a vector that can carry no value can only read.
+COMMAND_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+#: Gate 2: fragments that name a mutation, refused wherever they appear in a command name and
+#: checked whether or not the command is allowlisted. Deliberately broader than the command map
+#: needs: a false refusal costs one conversation with a human, and this module exists to be run
+#: against an array the operator has exactly one spare of.
+WRITE_FRAGMENTS = (
+    "WRITE",
+    "SET",
+    "SAVE",
+    "STORE",
+    "DFU",
+    "FLASH",
+    "ERASE",
+    "UPGRADE",
+    "UPDATE",
+    "REBOOT",
+    "RESET",
+    "BURN",
+    "PROGRAM",
+    "ENABLE",
+    "DISABLE",
+    "CLEAR",
+    "DELETE",
+    "LOAD",
+    "COMMIT",
+    "CALIBRAT",
+)
 
 #: The five pins ``GPO_READ_VALUES`` answers with, in the firmware's fixed order. Mirrors
 #: ``XvfHost.GpoPins``; the parse below is the same shape as ``XvfHost.GpoValues`` for the
@@ -140,7 +210,35 @@ def _invocation(directory: str, command: str) -> str:
     because the binary loads its sibling ``.so`` files relative to where it is run from. The
     same vector is used here deliberately: a measurement taken through a different invocation
     is a measurement of a different thing.
+
+    Three gates, in the order a wrong string trips them, and all three unconditional. They are
+    written out rather than combined because the errors are what a future editor will read.
     """
+    if not COMMAND_NAME.fullmatch(command):
+        raise HarnessError(
+            f"'{command}' is not a bare device command name.",
+            remedy=(
+                "Only a single A-Z0-9_ token is ever sent. xvf_host writes a setting by taking "
+                "a value after the command name, so this harness builds a vector that cannot "
+                "carry one - which is why an argument, a space or a shell character is refused "
+                "here rather than passed along."
+            ),
+        )
+
+    for fragment in WRITE_FRAGMENTS:
+        if fragment in command:
+            raise HarnessError(
+                f"'{command}' contains '{fragment}', which names a mutation.",
+                remedy=(
+                    "This gate does not consult the allowlist, so adding the command to "
+                    "READ_COMMANDS will not get it sent. That is deliberate: this module "
+                    "measures, and writing a GPO pin or flashing firmware belongs to the "
+                    "agent's own resources, behind their own authorisation. If the command "
+                    "really is a read whose name merely reads like a write, a human decides "
+                    "that and says so in WRITE_FRAGMENTS."
+                ),
+            )
+
     if command not in READ_COMMANDS:
         raise HarnessError(
             f"'{command}' is not one of the read-only device commands this harness can send "
@@ -185,16 +283,66 @@ def _tool_directory(mule: ssh.Mule) -> str:
     return directory[0]
 
 
-def parse_version(output: str) -> str | None:
-    """The firmware version out of a ``VERSION`` reply, in the tool's spelling (``2 0 10``)."""
+def parse_reply(command: str, output: str) -> str | None:
+    """The value out of a single-valued reply, in the tool's own spelling.
+
+    ``xvf_host`` echoes the command name and then the value, so the value is the rest of the
+    first line that starts with the name - whitespace-normalised, because a byte array comes
+    back column-aligned. Lines the tool prints before the answer (its banner) do not start with
+    the command name and cannot be mistaken for it.
+
+    **NULs are stripped, and that is not cosmetic.** The firmware stores the build fields as
+    fixed-width char arrays and pads them with ``\\0``, which the tool prints raw: measured
+    2026-08-23, ``BLD_MSG`` came back as ``ua-io16-sqr`` followed by 39 NUL bytes. They look
+    like spaces in a terminal and survive ``str.split()``, which splits on whitespace and NUL
+    is not whitespace - so without this the padding ends up inside the recorded value and any
+    later comparison of two boards' readings compares the padding too.
+    """
     for raw in output.splitlines():
         line = raw.strip()
-        if not line.startswith("VERSION"):
+        if not line.startswith(command):
             continue
-        rest = line[len("VERSION"):].strip()
+        rest = line[len(command):].replace("\x00", " ").strip()
         if rest:
             return " ".join(rest.split())
     return None
+
+
+def parse_version(output: str) -> str | None:
+    """The firmware version out of a ``VERSION`` reply, in the tool's spelling (``2 0 10``)."""
+    return parse_reply("VERSION", output)
+
+
+def as_text(value: str | None) -> str | None:
+    """A byte-array reply rendered as the string it encodes, or None if it is not one.
+
+    The command map types several fields as arrays of ``uint8``, and ``xvf_host`` prints an
+    array as the numbers in it - so a git hash can arrive as ``49 55 98 97 ...`` rather than as
+    ``17ba...``. Decoding it here rather than in the caller keeps the verbatim reply verbatim:
+    both are recorded, and this one is explicitly derived.
+
+    Returns None unless *every* token is an integer in 0-255 and the decoded result is entirely
+    printable ASCII once trailing NULs are dropped, so a genuinely numeric reply (``VERSION``'s
+    ``2 0 10``) is never silently reinterpreted as the string ``'\\x02\\x00\\n'``.
+    """
+    if not value:
+        return None
+    tokens = value.split()
+    numbers: list[int] = []
+    for token in tokens:
+        if not token.isdigit():
+            return None
+        number = int(token)
+        if not 0 <= number <= 255:
+            return None
+        numbers.append(number)
+    while numbers and numbers[-1] == 0:
+        numbers.pop()
+    if not numbers:
+        return None
+    if not all(32 <= number <= 126 for number in numbers):
+        return None
+    return "".join(chr(number) for number in numbers)
 
 
 def parse_gpo(output: str) -> list[int] | None:
@@ -441,6 +589,21 @@ def read(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         capture("xvf_host VERSION", version_text.strip())
         version = parse_version(version_text)
 
+        # 4a. Which *build* of that version. VERSION cannot tell 2.0.10 from 2.0.10 and neither
+        #     can bcdDevice; these four can, if the firmware answers them. A command the
+        #     firmware does not implement fails rather than lies, so an unsupported read is
+        #     recorded as such - with the tool's own refusal captured beside it - and the rest
+        #     of the reading is unaffected.
+        build: dict[str, str | None] = {}
+        build_text: dict[str, str | None] = {}
+        for command in BUILD_COMMANDS:
+            result = mule.run_privileged(_invocation(directory, command), timeout=60)
+            text = (result.stdout + result.stderr).strip()
+            capture(f"xvf_host {command}", text or "(no output)")
+            value = parse_reply(command, text)
+            build[command] = value
+            build_text[command] = as_text(value)
+
         readings: list[list[int] | None] = []
         for index in range(repeats):
             result = mule.run_privileged(_invocation(directory, "GPO_READ_VALUES"), timeout=60)
@@ -468,9 +631,15 @@ def read(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         state_word = "ON" if amplifier == 0 else "OFF"
         verdict = f"AMPLIFIER {state_word} {when} (X0D31={amplifier}, active-low)"
 
+    # The build identity, preferring the decoded string but never discarding the raw reply.
+    build_identity = build_text.get("BLD_REPO_HASH") or build.get("BLD_REPO_HASH")
+
     reading: dict[str, Any] = {
         "takenUtc": datetime.now(UTC).isoformat(),
         "firmware": version,
+        "build": build,
+        "buildText": build_text,
+        "buildIdentity": build_identity,
         "usb": devices[0],
         "gpoPins": list(GPO_PINS),
         "gpoReadings": readings,
@@ -483,6 +652,11 @@ def read(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         "verdict": verdict,
         "agentActiveState": active,
         "toolDirectory": directory,
+        # Set here rather than after the file is written. It used to be assigned on the way out
+        # of the function, so `reading.json` - the artifact somebody reads months later, when
+        # the console output is long gone - carried every input to the verdict and not the
+        # verdict, and `.get("certified")` on it answered None for a reading that had failed.
+        "certified": order == "proven" and stable and amplifier is not None,
     }
 
     directory_out = _run_dir()
@@ -498,6 +672,10 @@ def read(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
         {
             "firmware (VERSION)": version or "not reported",
             "firmware (bcdDevice)": devices[0].get("bcdDevice", "?"),
+            **{
+                f"build {command}": (build_text.get(command) or build.get(command) or "not reported")
+                for command in BUILD_COMMANDS
+            },
             "serial": devices[0].get("serial", "(none)"),
             "X0D31 amplifier": "?" if amplifier is None else str(amplifier),
             "X0D30 mute button": "?" if not values else str(values[MUTE_INDEX]),
@@ -521,7 +699,6 @@ def read(*, repeats: int = DEFAULT_REPEATS) -> dict[str, Any]:
     ui.info("  python tools/harness/fl.py array read      (same reading, order now proved)")
     ui.info("  python tools/harness/fl.py array release   (agent back, photographs back)")
 
-    reading["certified"] = order == "proven" and stable and amplifier is not None
     return reading
 
 
