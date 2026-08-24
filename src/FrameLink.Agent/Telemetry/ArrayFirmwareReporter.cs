@@ -228,7 +228,9 @@ public sealed class ArrayFirmwareReporter
             {
                 return;
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not ProcessTimeoutException)
             {
                 // Reporting is observation, so a failed tick costs visibility and nothing else.
                 // Taking the process down over it would cost the frame its product.
@@ -271,9 +273,12 @@ public sealed class ArrayFirmwareReporter
             return XvfHost.Binary + " was not asked: it cannot say which of these units it reached.";
         }
 
-        var reply = await _tool
+        // This loop is also the one that can stall the reconcile pass, because every xvf_host
+        // call in the process queues behind one semaphore. A tool that never answers used to hold
+        // that gate for ever and take the pass with it.
+        var reply = ProcessTimeoutException.ThrowIfTimedOut(await _tool
             .RunAsync(root, [XvfHost.VersionCommand], cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         if ((XvfHost.Version(reply.StandardOutput) ?? XvfHost.Version(reply.Combined)) is not { } reported)
         {

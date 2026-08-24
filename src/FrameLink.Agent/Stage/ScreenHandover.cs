@@ -274,11 +274,18 @@ public sealed class ScreenHandover : IDisposable
             {
                 return;
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not ProcessTimeoutException)
             {
                 // §1.2.2 again: a frame provisions and self-heals with the server unreachable, and
                 // a panel showing the wrong terminal is a strictly smaller problem than that. This
-                // loop is awaited beside the reconciler, so a throw here would take the agent down.
+                // loop is awaited beside the reconciler, so a throw here takes the agent down —
+                // which is why a command that never answered is excluded from this filter and
+                // nothing else is. Skipping a tick is the right answer for a pgrep that ran and said
+                // nothing; there is no next tick worth having when pgrep itself has stopped
+                // answering, and the ledger the host writes on the way out is the only thing that
+                // makes the failure visible to anybody.
                 _log.Warn($"A screen handover tick failed and was skipped: {exception.Message}");
             }
 
@@ -303,9 +310,13 @@ public sealed class ScreenHandover : IDisposable
     /// </remarks>
     private async Task<bool> CompositorIsRunningAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes
-            .RunAsync("pgrep", ["-x", CompositorProcess], cancellationToken)
-            .ConfigureAwait(false);
+        // "Any failure to run pgrep at all answers no compositor" is right for a pgrep that ran
+        // and said nothing, and wrong for one that never came back: erring towards the console is
+        // only safe if this loop is still alive to keep switching, and a pgrep with no deadline took
+        // the whole loop with it. So a timeout is not an answer here, it is a failure that leaves.
+        var result = ProcessTimeoutException.ThrowIfTimedOut(await _processes
+            .RunAsync("pgrep", ["-x", CompositorProcess], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false));
 
         return result.Succeeded;
     }

@@ -26,7 +26,7 @@ namespace FrameLink.Agent.Hosting;
 /// </para>
 /// <para>
 /// <b>The reconcile pass must never see this thrown</b>, and it does not: nothing on the resource
-/// path calls <see cref="ThrowIfTimedOut"/>. A resource whose command timed out reads
+/// path calls <see cref="ThrowIfTimedOut(ProcessResult)"/>. A resource whose command timed out reads
 /// <see cref="ProcessResult.TimedOut"/> as ordinary failure data, reports the drift it genuinely
 /// found, and spends one of its own three attempts — the operator's decision, unchanged, and a
 /// resource that threw here would instead take the whole pass down with it.
@@ -75,6 +75,24 @@ public sealed class ProcessTimeoutException : Exception
     public static ProcessResult ThrowIfTimedOut(ProcessResult result) =>
         result.TimedOut ? throw new ProcessTimeoutException(result) : result;
 
+    /// <summary>
+    /// The same, for the narrower result <see cref="ISystemControl"/> hands back.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="SystemControlResult"/> keeps only a success flag and the combined output, and the
+    /// combined output is where the runner already wrote the sentence naming the command and the
+    /// deadline — so there is nothing to compose here, only a flag to act on. The overload exists
+    /// because §2.7's browser stage stops and starts the getty through this type rather than through
+    /// <see cref="ProcessResult"/>, and those two calls are half of what it does to put the console
+    /// in front of a broken desktop.
+    /// </remarks>
+    public static SystemControlResult ThrowIfTimedOut(SystemControlResult result) =>
+        result.TimedOut ? throw new ProcessTimeoutException(Flatten(result.Output)) : result;
+
+    /// <summary>The runner's own sentence, on one line.</summary>
+    private static string Flatten(string output) =>
+        output.ReplaceLineEndings(" ").Trim();
+
     /// <summary>The whole of what the loop's supervisor will put on the screen.</summary>
     /// <remarks>
     /// <see cref="ProcessResult.Combined"/> already holds the explanation the runner wrote plus
@@ -82,5 +100,5 @@ public sealed class ProcessTimeoutException : Exception
     /// one-line delta.
     /// </remarks>
     private static string Describe(ProcessResult result) =>
-        result.Combined.Replace('\n', ' ').Replace('\r', ' ').Trim();
+        result.Combined.ReplaceLineEndings(" ").Trim();
 }

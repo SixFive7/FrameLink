@@ -32,7 +32,7 @@ public readonly record struct ProcessResult(int ExitCode, string StandardOutput,
     /// <para>
     /// <b>The loops beside the pass need the opposite, and they get it explicitly.</b> They have no
     /// attempt ledger of their own, so a timeout they simply retried would repeat for ever with
-    /// nothing escalating; <see cref="ProcessTimeoutException.ThrowIfTimedOut"/> is how those call
+    /// nothing escalating; <see cref="ProcessTimeoutException.ThrowIfTimedOut(ProcessResult)"/> is how those call
     /// sites convert this flag into the failure their supervisor already knows how to record.
     /// </para>
     /// </remarks>

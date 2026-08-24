@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Resources;
+using FrameLink.Agent.Stage;
+using FrameLink.Agent.Supervise;
 
 namespace FrameLink.Tests;
 
@@ -76,7 +78,7 @@ public sealed class AgentProcessDeadlineTests
 
             elapsed.Stop();
 
-            Assert.True(result.TimedOut);
+            Assert.True(result.TimedOut, $"exit {result.ExitCode} after {elapsed.Elapsed}: {result.Combined}");
             Assert.False(result.Succeeded);
             Assert.Equal(Short, result.Deadline);
 
@@ -104,7 +106,7 @@ public sealed class AgentProcessDeadlineTests
             var result = await HostProcessRunner.Instance
                 .RunAsync(executable, arguments, Short, TestContext.Current.CancellationToken);
 
-            Assert.True(result.TimedOut);
+            Assert.True(result.TimedOut, $"exit {result.ExitCode}: {result.Combined}");
 
             // <b>Whatever arrived before the kill survives it.</b> A report that said only "it did
             // not answer" would throw away the one piece of evidence about how far it got — which
@@ -495,6 +497,111 @@ public sealed class AgentProcessDeadlineTests
             Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
     }
 
+    [Fact]
+    public async Task A_command_that_never_answered_leaves_the_screen_handover_loop()
+    {
+        using var caller = new CancellationTokenSource();
+        var handover = new ScreenHandover(
+            new RecordingVirtualTerminals(TtyTerminal.ProductTerminal),
+            new TimingOutRunner(),
+            new ManualClock(),
+            new RecordingLog());
+
+        // <b>Both halves of the mechanism in one assertion.</b> The call site has to convert the
+        // flag into something that leaves, and the loop's broad catch has to let it past — either
+        // one alone and this loop goes on forking a pgrep every two seconds against a system that
+        // has stopped answering, for the life of the frame, with nothing counting it.
+        var thrown = await Assert.ThrowsAsync<ProcessTimeoutException>(() => handover.RunAsync(caller.Token));
+
+        Assert.Contains("pgrep", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("did not answer within", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_memory_watchdogs_only_measurement_is_bounded()
+    {
+        var probe = new ProcMemoryProbe(new MemorySystemFiles(), new TimingOutRunner());
+
+        // §2.10's five behaviours share one tick, so this is the call whose hang froze all of them
+        // at once — and it is the frame's last defence against an OOM kill.
+        var thrown = await Assert.ThrowsAsync<ProcessTimeoutException>(async () =>
+            await probe.SampleAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("ps -eo rss=,comm=", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_timeout_ends_the_reporting_loop_and_fails_the_resource_from_the_same_class()
+    {
+        var apt = new AptPackages(new TimingOutRunner());
+
+        // <b>The same class, two opposite answers, and both are right.</b> Listing installed
+        // packages is only ever called by a supervised loop with no ledger, so a dpkg database that
+        // has stopped answering has to leave the loop rather than be reported as an empty inventory
+        // once an hour for ever.
+        await Assert.ThrowsAsync<ProcessTimeoutException>(async () =>
+            await apt.ListInstalledAsync(TestContext.Current.CancellationToken));
+
+        // Installing is a resource's Act. It fails the resource, spends one of the three attempts
+        // and lets the ladder render it — which is the operator's decision, and a throw here would
+        // instead take the whole reconcile pass down over one package.
+        var outcome = await apt.InstallAsync("chromium", TestContext.Current.CancellationToken);
+
+        Assert.False(outcome.Succeeded);
+        Assert.Contains("did not answer within", outcome.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_narrower_result_systemctl_hands_back_can_still_say_it_never_answered()
+    {
+        var systemd = new SystemdControl(new TimingOutRunner());
+
+        var result = await systemd.RunAsync(["stop", "getty@tty1.service"], TestContext.Current.CancellationToken);
+
+        // §2.7's browser stage stops and starts the getty through this type, not through
+        // ProcessResult. A result that could not carry the flag would leave those two calls unable
+        // to tell "systemd said no" from "systemd never answered".
+        Assert.True(result.TimedOut);
+        Assert.False(result.Succeeded);
+
+        var thrown = Assert.Throws<ProcessTimeoutException>(() => ProcessTimeoutException.ThrowIfTimedOut(result));
+        Assert.Contains("systemctl stop getty@tty1.service", thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain('\n', thrown.Message);
+
+        // And an answer that arrived is passed straight through, so nothing that works changes.
+        var answered = new SystemControlResult(true, "done");
+        Assert.Equal(answered, ProcessTimeoutException.ThrowIfTimedOut(answered));
+    }
+
+    /// <summary>
+    /// A runner on which every command is stopped for running past its deadline.
+    /// </summary>
+    /// <remarks>
+    /// It builds a real <see cref="ProcessResult.DeadlineExceeded"/>, so what the tests read is the
+    /// same sentence a frame would put on its own screen rather than a stand-in for it.
+    /// </remarks>
+    private sealed class TimingOutRunner : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(
+            string executable,
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken) =>
+            RunAsync(executable, arguments, ProcessDeadline.Local, cancellationToken);
+
+        public Task<ProcessResult> RunAsync(
+            string executable,
+            IReadOnlyList<string> arguments,
+            TimeSpan deadline,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(ProcessResult.DeadlineExceeded(
+                executable,
+                arguments,
+                deadline,
+                standardOutput: string.Empty,
+                standardError: string.Empty,
+                treeKilled: true));
+    }
+
     /// <summary>What one call site asked for.</summary>
     private readonly record struct RecordedCall(string Executable, string Line, TimeSpan Deadline);
 
@@ -560,7 +667,21 @@ public sealed class AgentProcessDeadlineTests
         : "/bin/sh";
 
     /// <summary>The name the grandchild appears under in the process table.</summary>
-    private static string GrandchildName => OperatingSystem.IsWindows() ? "PING" : "sleep";
+    private static string GrandchildName => OperatingSystem.IsWindows() ? "WAITFOR" : "sleep";
+
+    /// <summary>
+    /// A command that hangs and cannot fail on its way there.
+    /// </summary>
+    /// <remarks>
+    /// <b>Not <c>ping</c>, and the reason is measured rather than stylistic.</b> <c>ping -n 300</c>
+    /// is the usual Windows sleeper, but it needs the IP helper driver and a socket, and under a
+    /// loaded parallel test run it occasionally fails to get one and exits in under a second. That
+    /// reads to these tests as "the deadline never fired", which is the opposite of what happened,
+    /// and it flaked two of them. <c>waitfor</c> waits on a named signal that is never sent: no
+    /// socket, no console, no driver, nothing to fail at.
+    /// </remarks>
+    private static string Sleeper(string signal) =>
+        OperatingSystem.IsWindows() ? $"waitfor /t 300 {signal}" : "sleep 300";
 
     /// <summary>A command that answers at once.</summary>
     private static (string Executable, string[] Arguments) Echo(string what) =>
@@ -571,26 +692,26 @@ public sealed class AgentProcessDeadlineTests
     /// <summary>A command that hangs, with no children of its own.</summary>
     private static (string Executable, string[] Arguments) Hang() =>
         OperatingSystem.IsWindows()
-            ? (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "PING.EXE"),
-               ["-n", "300", "127.0.0.1"])
+            ? (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "waitfor.exe"),
+               ["/t", "300", "FrameLinkDeadlineHang"])
             : ("/bin/sleep", ["300"]);
 
     /// <summary>A command that says something and then hangs.</summary>
     private static (string Executable, string[] Arguments) SaysThenHangs(string what) =>
         OperatingSystem.IsWindows()
-            ? (Shell, ["/c", $"echo {what}&ping -n 300 127.0.0.1"])
+            ? (Shell, ["/c", $"echo {what}&" + Sleeper("FrameLinkDeadlineSaid")])
             : (Shell, ["-c", $"echo {what}; sleep 300"]);
 
     /// <summary>A command that hangs while a child of its own also runs.</summary>
     private static (string Executable, string[] Arguments) LiveGrandchild() =>
         OperatingSystem.IsWindows()
-            ? (Shell, ["/c", "ping -n 300 127.0.0.1"])
+            ? (Shell, ["/c", Sleeper("FrameLinkDeadlineLive")])
             : (Shell, ["-c", "sleep 300 & wait"]);
 
     /// <summary>A command that exits at once, leaving a child holding the pipe.</summary>
     private static (string Executable, string[] Arguments) OrphanedGrandchild() =>
         OperatingSystem.IsWindows()
-            ? (Shell, ["/c", "start /b ping -n 300 127.0.0.1"])
+            ? (Shell, ["/c", "start /b " + Sleeper("FrameLinkDeadlineOrphan")])
             : (Shell, ["-c", "sleep 300 &"]);
 
     // ---- looking at the process table ----------------------------------------------------

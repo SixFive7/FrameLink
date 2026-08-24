@@ -61,9 +61,13 @@ public sealed class ProcMemoryProbe : IMemoryProbe
     /// <inheritdoc/>
     public async ValueTask<MemorySample> SampleAsync(CancellationToken cancellationToken)
     {
-        var listed = await _processes
-            .RunAsync("ps", ["-eo", "rss=,comm="], cancellationToken)
-            .ConfigureAwait(false);
+        // <b>Thirty seconds on a command that answers in milliseconds, and short on purpose.</b>
+        // This is the memory watchdog's only measurement and it is the frame's last defence against
+        // an OOM kill, so a /proc that has stopped answering has to become a reported failure
+        // quickly rather than hold §2.10's five behaviours through tick after tick — they share one.
+        var listed = ProcessTimeoutException.ThrowIfTimedOut(await _processes
+            .RunAsync("ps", ["-eo", "rss=,comm="], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false));
 
         var (rss, processes) = SumBrowserTree(listed.StandardOutput);
 

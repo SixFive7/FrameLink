@@ -175,7 +175,9 @@ public sealed class PackageInventoryReporter
             {
                 return;
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not ProcessTimeoutException)
             {
                 // Reporting is observation, so a failed tick costs visibility and nothing else.
                 // Taking the process down over it would cost the frame its product.

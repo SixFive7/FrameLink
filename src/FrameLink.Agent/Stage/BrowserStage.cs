@@ -436,9 +436,13 @@ public sealed class BrowserStage
 
     private async Task<bool> BrowserIsRunningAsync(CancellationToken cancellationToken)
     {
-        var result = await _services.Session
+        // A systemctl that answers "inactive" and a systemctl that never answers are opposite
+        // facts, and reading the second as the first is how this stage used to freeze: the whole
+        // mechanism for keeping the panel from going blank waits on a service manager, so a wedged
+        // one leaves a broken desktop up with no teardown, no console fallback and no escalation.
+        var result = ProcessTimeoutException.ThrowIfTimedOut(await _services.Session
             .RunAsync("systemctl", ["--user", "is-active", ChromiumKioskUnitResource.UnitName], cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         return string.Equals(result.StandardOutput.Trim(), "active", StringComparison.Ordinal);
     }
@@ -471,13 +475,15 @@ public sealed class BrowserStage
         // so whichever gets there first, the other finds the terminal already in front.
         await TakeScreenAsync(cancellationToken).ConfigureAwait(false);
 
-        await _services.Session
+        ProcessTimeoutException.ThrowIfTimedOut(await _services.Session
             .RunAsync("systemctl", ["--user", "stop", ChromiumKioskUnitResource.UnitName], cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         var stopped = await _services.SystemControl
             .RunAsync(["stop", GettyUnitName], cancellationToken)
             .ConfigureAwait(false);
+
+        ProcessTimeoutException.ThrowIfTimedOut(stopped);
 
         _services.Channel.Forget();
 
@@ -525,6 +531,8 @@ public sealed class BrowserStage
         var started = await _services.SystemControl
             .RunAsync(["start", GettyUnitName], cancellationToken)
             .ConfigureAwait(false);
+
+        ProcessTimeoutException.ThrowIfTimedOut(started);
 
         _services.Log.Info(
             $"Bringing the screen back up for another try after taking it down {Teardowns} time(s)."

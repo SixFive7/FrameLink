@@ -341,7 +341,15 @@ public sealed class Supervisor
             {
                 return;
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            // <b>A timeout is excluded, and it is the third thing on this list for the same
+            // reason as the first two: it is not a fault this tick can recover from by trying
+            // again.</b> The other five behaviours share this tick, so a command that never answers
+            // takes all of them, and retrying it every fifteen seconds for the life of the frame
+            // records nothing anywhere. Leaving the loop hands it to the supervision that already
+            // writes agent.loop.<name> against §2.5's same budget of three.
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not ProcessTimeoutException)
             {
                 // A supervisor that dies takes the memory watchdog with it, which is how v1 died
                 // every ninety minutes. §1.2.3 forbids repairing invisibly, not surviving loudly:
@@ -534,9 +542,9 @@ public sealed class Supervisor
 
         Watch(window, CameraResources);
 
-        var result = await _services.Session
+        var result = ProcessTimeoutException.ThrowIfTimedOut(await _services.Session
             .RunAsync("systemctl", ["--user", "restart", CameraUnitName], cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         await RecordAsync(
             CameraRecycle,
@@ -657,9 +665,9 @@ public sealed class Supervisor
         // would fire again one interval later and again after that.
         _services.Channel.Forget();
 
-        var result = await _services.Session
+        var result = ProcessTimeoutException.ThrowIfTimedOut(await _services.Session
             .RunAsync("systemctl", ["--user", "restart", ChromiumKioskUnitResource.UnitName], cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         await RecordAsync(
             behaviour,

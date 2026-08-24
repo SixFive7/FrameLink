@@ -280,9 +280,15 @@ public sealed class AptPackages
     /// </remarks>
     public async Task<IReadOnlyDictionary<string, string>> ListInstalledAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes
+        // <b>The one place in this class that converts a timeout into a failure that leaves.</b>
+        // Its only caller is the package inventory reporter, which is a supervised loop with no
+        // attempt ledger of its own: a dpkg database that has stopped answering would otherwise be
+        // reported as an empty inventory once an hour, for ever, which is a wrong answer rather than
+        // a missing one. A second caller on the resource path would want the opposite and should
+        // read the flag instead.
+        var result = ProcessTimeoutException.ThrowIfTimedOut(await _processes
             .RunAsync(DpkgQuery, ["-W", ListFormat], ProcessDeadline.Local, cancellationToken)
-            .ConfigureAwait(false);
+            .ConfigureAwait(false));
 
         return result.Succeeded ? ParseList(result.StandardOutput) : ReadOnlyEmpty;
     }

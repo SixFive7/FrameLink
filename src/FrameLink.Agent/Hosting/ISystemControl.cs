@@ -3,7 +3,21 @@ namespace FrameLink.Agent.Hosting;
 /// <summary>The result of asking the init system to do something.</summary>
 /// <param name="Succeeded">Whether the command exited zero.</param>
 /// <param name="Output">Combined standard output and standard error, trimmed.</param>
-public readonly record struct SystemControlResult(bool Succeeded, string Output);
+public readonly record struct SystemControlResult(bool Succeeded, string Output)
+{
+    /// <summary>
+    /// Whether <c>systemctl</c> was stopped for taking longer than its deadline rather than
+    /// answering.
+    /// </summary>
+    /// <remarks>
+    /// <b>It travels because §2.7's browser stage reads this type and not
+    /// <see cref="ProcessResult"/>.</b> Two of the four commands that stage runs to take a broken
+    /// desktop down and put the console in front of it come through here, and a loop that could not
+    /// tell "systemd said no" from "systemd never answered" would retry a wedged service manager on
+    /// a five-second tick for the life of the frame with nothing counting the failures.
+    /// </remarks>
+    public bool TimedOut { get; init; }
+}
 
 /// <summary>
 /// The agent's narrow window onto systemd.
@@ -51,6 +65,10 @@ public sealed class SystemdControl : ISystemControl
         var result = await _processes
             .RunAsync(Executable, arguments, ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
-        return new SystemControlResult(result.Succeeded, result.Combined.Trim());
+
+        return new SystemControlResult(result.Succeeded, result.Combined.Trim())
+        {
+            TimedOut = result.TimedOut,
+        };
     }
 }

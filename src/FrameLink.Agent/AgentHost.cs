@@ -1165,11 +1165,19 @@ public sealed class AgentHost
             {
                 return;
             }
-            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            // <b>A command that never answered is the exception to "carry on", and it is the
+            // exception because of the rule rather than despite it.</b> Recording and carrying on
+            // keeps §2.7 enforceable for a tick that failed and can be tried again in five seconds.
+            // It does not for a systemctl that has stopped answering: this stage is made of those
+            // calls, so retrying one forever leaves the exact state §2.7 forbids — a broken desktop,
+            // no teardown, no console fallback — with nothing counting the failures. Leaving the
+            // loop hands it to the supervision below, which records agent.loop.browser-stage against
+            // the same budget of three, stands the agent down twice and holds the screen on the
+            // third with the command and its deadline in the delta.
+            catch (Exception exception) when (exception is not OutOfMemoryException
+                and not StackOverflowException
+                and not ProcessTimeoutException)
             {
-                // §2.7's hard rule is against blank screens, and a stage that died would be the
-                // one thing left to notice one. Recording and carrying on is the only response
-                // that keeps the rule enforceable.
                 _log.Warn($"A browser-stage tick failed and was skipped: {exception.Message}");
             }
 
