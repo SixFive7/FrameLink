@@ -752,28 +752,29 @@ public sealed class AgentArrayFlashProgressTests
         // 933 KB image. Publishing on each would repaint the console, re-render the page and put a
         // message on the wire eight times a second for the whole write.
         //
-        // <b>The elapsed second is held still, and it has to be.</b> A frame is worth repainting
-        // when the stage, the percentage or the elapsed whole second has moved — the second is in
-        // there on purpose, because it is the only thing that moves through the manifest. So "a
-        // finer byte count does not cause a repaint" is only true *within one second*, and a test
-        // that let the pump's own stopwatch run was asserting that four statements execute inside
-        // the same second. On a loaded machine they do not: this test failed 4 times in 30 runs with
-        // the thread pool starved, every time on the assertion below, because a second had turned
-        // over rather than because anything about the reading had changed.
+        // <b>One caller, and a second held still — the test used to have neither.</b> It drove
+        // frames by hand against a started pump, whose loop makes the very same decision on every
+        // change to the box: each box.Read below woke that loop, it drew the frame first, and the
+        // hand-driven call then truthfully answered that nothing had changed since. And a frame is
+        // worth repainting when the stage, the percentage or the elapsed whole second has moved —
+        // the second is in the signature on purpose, because it is the only thing that moves
+        // through the manifest — so the test was also asserting that five statements execute inside
+        // one second. Starving the thread pool broke it both ways: 4 failures in 30 runs on the
+        // second having turned over, then 4 in 40 on the loop having got there first.
+        //
+        // ArrayFlashProgressPump.Manual is the pump with the competing caller removed, and the
+        // elapsed reading is one this test holds, so both assertions below are now about the rule
+        // rather than about the scheduler.
         var hub = new AgentStatusHub(AgentStatusFactory.Green());
         var approval = new ArrayFlashApproval(hub, new ManualClock(), new RecordingLog());
         var box = new ArrayFlashProgressBox(933_888);
         var elapsed = TimeSpan.FromSeconds(7);
-        var pump = ArrayFlashProgressPump.Start(
-            approval,
-            box,
-            new RecordingLog(),
-            TimeSpan.FromMinutes(5),
-            elapsed: () => elapsed);
+        var pump = ArrayFlashProgressPump.Manual(approval, box, new RecordingLog(), elapsed: () => elapsed);
 
         try
         {
-            Assert.True(pump.PublishOnce() || pump.Published > 0);
+            Assert.True(pump.PublishOnce());
+            Assert.Equal(1, pump.Published);
 
             box.Read("Download\t[==========               ]  41%       382894 bytes");
             Assert.True(pump.PublishOnce());
@@ -798,6 +799,12 @@ public sealed class AgentArrayFlashProgressTests
             Assert.True(pump.PublishOnce());
             Assert.Equal(8, hub.Current.ArrayFlash?.Progress?.Elapsed.TotalSeconds);
             Assert.Equal(392_086, hub.Current.ArrayFlash?.Progress?.BytesWritten);
+
+            // Four frames for six readings, and the two that were dropped are the two that had
+            // nothing new to say. That count is the whole point of the rule: a 933 KB image is 228
+            // redraws of the tool's bar, and a repaint each would put a message on the wire eight
+            // times a second for the whole write.
+            Assert.Equal(4, pump.Published);
         }
         finally
         {

@@ -492,13 +492,7 @@ public sealed class ArrayFlashProgressPump : IDisposable
         ArgumentNullException.ThrowIfNull(box);
         ArgumentNullException.ThrowIfNull(log);
 
-        var pump = new ArrayFlashProgressPump(
-            approval,
-            box,
-            log,
-            approval.BeginWriting(attempt),
-            beat ?? DefaultBeat,
-            elapsed ?? StartElapsed());
+        var pump = Manual(approval, box, log, attempt, elapsed, beat);
 
         // Discarded on purpose. Nothing waits on this task — not the caller, not Dispose — because
         // anything that waited on it would be a way for the screen to reach the write.
@@ -507,11 +501,56 @@ public sealed class ArrayFlashProgressPump : IDisposable
         return pump;
     }
 
+    /// <summary>
+    /// A pump that claims the screen but reports nothing until it is asked to, frame by frame.
+    /// </summary>
+    /// <param name="approval">The frame's screen, which is also the epoch's owner.</param>
+    /// <param name="box">Where the newest reading lands.</param>
+    /// <param name="log">Where a publish that failed is noted, once.</param>
+    /// <param name="attempt">
+    /// Which of <see cref="ArrayFirmwareFlash.MaxAttempts"/> writes this is, counting from one.
+    /// </param>
+    /// <param name="elapsed">
+    /// How long this write has been running, or null for a <see cref="Stopwatch"/> started here.
+    /// </param>
+    /// <param name="beat">Kept for symmetry with <see cref="Start"/>; nothing here beats.</param>
+    /// <remarks>
+    /// <b>For the suite, and it is what makes <see cref="PublishOnce"/>'s contract observable at
+    /// all.</b> The decision this class exists to make is whether a reading is worth a frame, and
+    /// <see cref="Start"/>'s loop makes that same decision on every change to the box — so a test
+    /// driving frames by hand against a started pump was racing it. A reading the test pushed woke
+    /// the loop, the loop drew the frame first, and the test's own call then truthfully reported
+    /// that nothing had changed since. Nothing about that is a wrong answer; it is two callers
+    /// asking one question. This is the pump with the second caller removed.
+    /// </remarks>
+    public static ArrayFlashProgressPump Manual(
+        ArrayFlashApproval approval,
+        ArrayFlashProgressBox box,
+        IAgentLog log,
+        int attempt = 1,
+        Func<TimeSpan>? elapsed = null,
+        TimeSpan? beat = null)
+    {
+        ArgumentNullException.ThrowIfNull(approval);
+        ArgumentNullException.ThrowIfNull(box);
+        ArgumentNullException.ThrowIfNull(log);
+
+        return new ArrayFlashProgressPump(
+            approval,
+            box,
+            log,
+            approval.BeginWriting(attempt),
+            beat ?? DefaultBeat,
+            elapsed ?? StartElapsed());
+    }
+
     /// <summary>Composes the current reading and puts it on the screen, if it has changed.</summary>
     /// <returns>Whether a frame was published.</returns>
     /// <remarks>
-    /// Public so the suite can drive one frame at a time with no task behind it. In the agent it is
-    /// called only from the loop this class runs.
+    /// Public so the suite can drive one frame at a time, which means against a pump from
+    /// <see cref="Manual"/> rather than <see cref="Start"/> — there is no synchronisation on
+    /// <see cref="Published"/> or on the last signature, because in the agent this is called from
+    /// one loop and nowhere else.
     /// </remarks>
     public bool PublishOnce()
     {
