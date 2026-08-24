@@ -633,7 +633,7 @@ public sealed class LiveKitInstaller
             $"LiveKit {version} publishes no build for this machine's architecture "
             + $"({RuntimeInformation.OSArchitecture}), so the bundled call server cannot run here."),
         LiveKitInstallResult.Unreachable =>
-            $"LiveKit {version} could not be downloaded — this server has no route to GitHub.",
+            $"LiveKit {version} could not be downloaded: this server has no route to GitHub.",
         LiveKitInstallResult.ArchiveSizeMismatch =>
             $"LiveKit {version} was refused: the download was not the length the pin states.",
         LiveKitInstallResult.ArchiveChecksumMismatch =>
