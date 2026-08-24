@@ -171,4 +171,179 @@ public sealed class AgentIdentityTests
         Assert.Throws<ArgumentException>(() => temporary.Store.PathOf("../../etc/shadow"));
         Assert.Throws<ArgumentException>(() => temporary.Store.PathOf("nested/key"));
     }
+
+    // -----------------------------------------------------------------------------------------
+    // The one-time first-boot write: atomic, and verified before it is believed
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_key_is_written_through_the_same_atomic_path_as_every_other_state_file()
+    {
+        // device.key was the last file still going through the plain overwrite after every other
+        // state file moved onto stage-sync-rename. What proves it moved is that the staging path
+        // is the one the mode was applied to — nothing else applies a mode to that path — and
+        // that it is gone afterwards because it was renamed rather than deleted.
+        using var temporary = new TemporaryStore();
+
+        using var identity = DeviceKeyStore.LoadOrCreate(temporary.Store, NullLog.Instance);
+
+        var staging = temporary.Store.PathOf(DeviceKeyStore.KeyFileName + FileStateStore.StagingSuffix);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            temporary.Permissions.ModeOf(staging));
+        Assert.False(File.Exists(staging));
+        Assert.Equal(
+            Path.GetDirectoryName(temporary.Store.PathOf(DeviceKeyStore.KeyFileName)),
+            Path.GetDirectoryName(staging));
+    }
+
+    [Fact]
+    public void A_key_that_does_not_read_back_fails_at_write_time_rather_than_on_the_next_boot()
+    {
+        // The card that kept half of what it was handed. Before the read-back this returned a
+        // working identity, the frame ran the whole session on a key that was already unusable,
+        // and the failure arrived on the next boot as the "damaged key" refusal — which is
+        // indistinguishable, from the outside, from a frame that has died.
+        using var temporary = new TemporaryStore();
+        var truncating = new DamagingStore(temporary.Store, bytes => bytes[..(bytes.Length / 2)]);
+
+        var thrown = Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(truncating, NullLog.Instance));
+
+        Assert.Contains(DeviceKeyStore.KeyFileName, thrown.Message, StringComparison.Ordinal);
+
+        // The same damage, on the boot after. Asserting both is what makes "rather than on the
+        // next boot" a statement about *when* it is caught rather than about whether it is.
+        Assert.True(temporary.Store.Exists(DeviceKeyStore.KeyFileName));
+        Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(temporary.Store, NullLog.Instance));
+    }
+
+    [Fact]
+    public void A_key_that_reads_back_as_nothing_at_all_fails_the_write()
+    {
+        // A store that accepted the bytes and kept none of them — a full card, or a write that
+        // reported success and went nowhere. There is no file to parse, so this is the branch a
+        // parse alone would miss.
+        using var temporary = new TemporaryStore();
+        var swallowing = new DamagingStore(temporary.Store, _ => null);
+
+        var thrown = Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(swallowing, NullLog.Instance));
+
+        Assert.Contains("is not there", thrown.Message, StringComparison.Ordinal);
+        Assert.False(temporary.Store.Exists(DeviceKeyStore.KeyFileName));
+    }
+
+    [Fact]
+    public void A_key_with_bytes_after_it_fails_the_write_even_though_it_parses()
+    {
+        // A shorter key written over a longer one leaves the tail of the old file behind. The
+        // structure at the front still imports, so parsing alone says yes; what says no is that
+        // the import did not consume the whole file.
+        using var temporary = new TemporaryStore();
+        var trailing = new DamagingStore(temporary.Store, bytes => [.. bytes, .. "not part of the key"u8]);
+
+        var thrown = Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(trailing, NullLog.Instance));
+
+        Assert.Contains("trailing data", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_key_that_reads_back_as_a_different_key_fails_the_write()
+    {
+        // The write that landed somebody else's bytes: the file parses perfectly and the frame
+        // would run under an identity nothing in this process ever generated. Comparing the
+        // public half is what catches it, and the public half is what the device id is derived
+        // from, so agreeing on it is agreeing on the identity.
+        using var temporary = new TemporaryStore();
+        using var other = DeviceIdentity.CreateKeyPair();
+        var substitute = other.ExportPkcs8PrivateKey();
+        var swapping = new DamagingStore(temporary.Store, _ => substitute);
+
+        var thrown = Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(swapping, NullLog.Instance));
+
+        Assert.Contains("different key", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_failed_write_says_so_without_putting_any_of_the_key_in_the_message()
+    {
+        // The refusal is read by a person and lands in the journal, so it carries the path and
+        // nothing else. §2.9's "the private half never leaves the object" has to hold on the
+        // failure path too, and a failure path is where a stray diagnostic would be added.
+        using var temporary = new TemporaryStore();
+        var log = new RecordingLog();
+        var truncating = new DamagingStore(temporary.Store, bytes => bytes[..8]);
+
+        var thrown = Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(truncating, log));
+
+        var stored = temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName)!;
+        Assert.DoesNotContain(Convert.ToBase64String(stored), thrown.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(Convert.ToHexStringLower(stored), thrown.Message, StringComparison.OrdinalIgnoreCase);
+
+        // Nothing announced an identity either: the log line that names a device id is the one
+        // that says the frame has one, and it must not be written for a key that was not kept.
+        Assert.DoesNotContain("generated on first boot", log.Transcript, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A store that keeps something other than the bytes it was handed — the card half of a bad
+    /// write, which is the only half a process cannot produce by crashing itself.
+    /// </summary>
+    /// <remarks>
+    /// The damage is applied to the write rather than to the read on purpose: what is under test
+    /// is that the file <i>on disk</i> is checked, so the bytes have to genuinely reach it and
+    /// genuinely come back through <see cref="FileStateStore"/>. A null from the delegate is the
+    /// write that reported success and kept nothing.
+    /// </remarks>
+    private sealed class DamagingStore : IStateStore
+    {
+        private readonly IStateStore _inner;
+        private readonly Func<byte[], byte[]?> _damage;
+
+        public DamagingStore(IStateStore inner, Func<byte[], byte[]?> damage)
+        {
+            _inner = inner;
+            _damage = damage;
+        }
+
+        public string Root => _inner.Root;
+
+        public void EnsureReady() => _inner.EnsureReady();
+
+        public bool Exists(string name) => _inner.Exists(name);
+
+        public byte[]? ReadBytes(string name) => _inner.ReadBytes(name);
+
+        public string? ReadText(string name) => _inner.ReadText(name);
+
+        public void WriteSecret(string name, ReadOnlySpan<byte> content) => Damage(name, content, _inner.WriteSecret);
+
+        public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) =>
+            Damage(name, content, _inner.WriteSecretAtomic);
+
+        public void WriteText(string name, string content) => _inner.WriteText(name, content);
+
+        public void Delete(string name) => _inner.Delete(name);
+
+        public string PathOf(string name) => _inner.PathOf(name);
+
+        private void Damage(string name, ReadOnlySpan<byte> content, WriteBytes write)
+        {
+            var damaged = _damage(content.ToArray());
+            if (damaged is null)
+            {
+                return;
+            }
+
+            write(name, damaged);
+        }
+
+        private delegate void WriteBytes(string name, ReadOnlySpan<byte> content);
+    }
 }
