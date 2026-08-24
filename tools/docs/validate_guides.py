@@ -88,7 +88,7 @@ for path in sorted(DOCS.glob("*.md")):
     fenced = code_fence_mask(lines)
 
     def fail(msg, n=None):
-        problems.append(f"{name}{'' if n is None else f':{n}'} — {msg}")
+        problems.append(f"{name}{'' if n is None else f':{n}'} - {msg}")
 
     headings = [(i + 1, l) for i, l in enumerate(lines) if HEADING_RE.match(l) and not fenced[i]]
     # CLAUDE.md section 2.1 permits guides 1 and 2 exactly one structural heading each, because
