@@ -14,13 +14,18 @@ namespace FrameLink.Control.Endpoints;
 /// what stops a feature this small from being four one-line additions nobody can find later.
 /// </para>
 /// <para>
-/// <b>Two routes, one verb.</b> <c>POST /api/devices/{id}/retry</c> is the frame-level action an
+/// <b>Three routes, one verb.</b> <c>POST /api/devices/{id}/retry</c> is the frame-level action an
 /// operator reaches for when a device row says it has stopped reconciling — rung 4 stops the whole
 /// frame, and a stopped frame can have several resources that gave up, so asking about each one
 /// would be a list the operator has to reconstruct from a screen that already knows it.
 /// <c>POST /api/devices/{id}/retry/{resource}</c> is the same verb aimed at one escalation, which
 /// is what the reconcile screen renders a button beside. The agent decides nothing differently
 /// between them; the payload simply carries a resource or does not.
+/// <c>POST /api/devices/{id}/restart</c> is the third, and it is the frame-level verb with the
+/// operator's own ending on it — the budgets are reset and then the frame restarts, which is what
+/// the button on the frame's own screen does. It is only ever delivered down a live socket, so an
+/// offline frame answers 409 exactly as the other two do rather than accepting a restart nobody
+/// will carry out.
 /// </para>
 /// <para>
 /// <b>Offline is a 409, not a 200.</b> Unlike a settings push, nothing replays a retry on the next
@@ -60,6 +65,17 @@ public static class RetryEndpoints
             TimeProvider time,
             CancellationToken cancellationToken) =>
             RetryAsync(deviceId, resource, devices, retries, time, cancellationToken));
+
+        // The operator's third route and the frame's second button: "reboot -> forces a new retry",
+        // pressed from here instead of from the panel. Same verb, same reset, same 409 when the
+        // frame is not holding a socket — the restart is simply what the agent does after it.
+        app.MapPost("/api/devices/{deviceId}/restart", (
+            string deviceId,
+            IDeviceStore devices,
+            RetryPublisher retries,
+            TimeProvider time,
+            CancellationToken cancellationToken) =>
+            RetryAsync(deviceId, resource: null, devices, retries, time, cancellationToken, reboot: true));
     }
 
     private static async Task<IResult> RetryAsync(
@@ -68,7 +84,8 @@ public static class RetryEndpoints
         IDeviceStore devices,
         RetryPublisher retries,
         TimeProvider time,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool reboot = false)
     {
         var device = await devices.FindAsync(deviceId, cancellationToken).ConfigureAwait(false);
         if (device is null)
@@ -94,7 +111,7 @@ public static class RetryEndpoints
         }
 
         var outcome = await retries
-            .RetryAsync(deviceId, resource, time.GetUtcNow(), cancellationToken)
+            .RetryAsync(deviceId, resource, time.GetUtcNow(), cancellationToken, reboot)
             .ConfigureAwait(false);
 
         var named = string.IsNullOrWhiteSpace(resource) ? null : resource.Trim();
@@ -105,13 +122,20 @@ public static class RetryEndpoints
             Resource = named,
             Outcome = outcome is RetryOutcome.Sent ? "sent" : "offline",
             Detail = outcome is RetryOutcome.Sent
-                ? named is null
-                    ? "This frame has been asked to try every setting it gave up on again. Its attempt budgets are "
-                        + "reset; the next reconcile pass picks them up."
-                    : $"This frame has been asked to try '{named}' again. Its attempt budget is reset; the next "
-                        + "reconcile pass picks it up."
-                : "This frame is not connected, so nothing was delivered. A retry is not replayed on reconnect — "
-                    + "press it again once the frame is online.",
+                ? reboot
+                    ? "This frame has been asked to restart and try again. Its attempt budgets are reset and it is "
+                        + "going down now; it comes back in about a minute and starts reconciling from the top."
+                    : named is null
+                        ? "This frame has been asked to try every setting it gave up on again. Its attempt budgets are "
+                            + "reset; the next reconcile pass picks them up."
+                        : $"This frame has been asked to try '{named}' again. Its attempt budget is reset; the next "
+                            + "reconcile pass picks it up."
+                : reboot
+                    ? "This frame is not connected, so nothing was delivered. A restart cannot be queued for a frame "
+                        + "that is not there — press it again once the frame is online, or use the button on the frame "
+                        + "itself."
+                    : "This frame is not connected, so nothing was delivered. A retry is not replayed on reconnect — "
+                        + "press it again once the frame is online.",
         };
 
         return Results.Json(

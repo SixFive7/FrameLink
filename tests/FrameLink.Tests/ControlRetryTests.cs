@@ -78,6 +78,77 @@ public sealed class ControlRetryTests
     }
 
     [Fact]
+    public async Task A_remote_restart_is_the_same_message_with_the_operators_own_ending_on_it()
+    {
+        // "The last one (the reboot) can also be triggered from the fleet manager given the agent
+        // is connected." It is the retry message with one field set rather than a kind of its own,
+        // so an older frame that does not know the field still resets its budgets and tries again.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        await using var agent = await server.ConnectAgentAsync(key);
+        Assert.Equal(HandshakeStatus.Ok, agent.Result.Status);
+
+        var response = await server.Client.PostAsync($"/api/devices/{deviceId}/restart", content: null, Token);
+
+        response.EnsureSuccessStatusCode();
+        var body = await response.ReadAsync(ControlJson.Default.RetryResponse);
+
+        Assert.Equal("sent", body.Outcome);
+        Assert.Null(body.Resource);
+        Assert.Contains("restart and try again", body.Detail, StringComparison.Ordinal);
+
+        var request = await WaitForRetryAsync(agent, TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(request);
+        Assert.Equal(deviceId, request.DeviceId);
+        Assert.True(request.Reboot);
+        Assert.Null(request.Resource);
+    }
+
+    [Fact]
+    public async Task An_ordinary_retry_never_carries_the_restart()
+    {
+        // The two verbs share a message and must not share a meaning. A retry that arrived with the
+        // reboot flag set would take a household's photographs away for a minute every time an
+        // operator cleared a budget.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        await using var agent = await server.ConnectAgentAsync(key);
+
+        (await server.Client.PostAsync($"/api/devices/{deviceId}/retry", content: null, Token))
+            .EnsureSuccessStatusCode();
+
+        var request = await WaitForRetryAsync(agent, TimeSpan.FromSeconds(5));
+
+        Assert.NotNull(request);
+        Assert.False(request.Reboot);
+    }
+
+    [Fact]
+    public async Task A_restart_at_a_frame_that_is_not_connected_is_refused_and_says_where_the_other_button_is()
+    {
+        // "Given the agent is connected" is the whole of the condition, and it is enforced by the
+        // socket rather than by a flag: a frame with no connection is answered 409, and nothing
+        // queues the restart for later. The operator is told the frame's own screen still has the
+        // button, because that is the one surface a person can reach when the server cannot.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        var response = await server.Client.PostAsync($"/api/devices/{deviceId}/restart", content: null, Token);
+        var body = await response.ReadAsync(ControlJson.Default.RetryResponse);
+
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("offline", body.Outcome);
+        Assert.Contains("not connected", body.Detail, StringComparison.Ordinal);
+        Assert.Contains("the button on the frame itself", body.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_retry_at_a_frame_nobody_can_reach_is_refused_rather_than_reported_done()
     {
         await using var server = await ControlServer.StartAsync(Password);

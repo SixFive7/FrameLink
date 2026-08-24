@@ -209,6 +209,23 @@ export const api = {
 	},
 
 	/**
+	 * `POST /api/devices/{id}/restart` — the frame's own second button, pressed from here.
+	 *
+	 * The operator's rule: "the reboot can also be triggered from the fleet manager given the
+	 * agent is connected". It resets every exhausted budget and then restarts the frame, which is
+	 * exactly what the button on the frame's screen does, so a person at the frame and a person in
+	 * a browser are doing the same thing.
+	 *
+	 * 409 `offline` again, and here it matters more than for a retry: nothing queues a restart, and
+	 * a frame that came back an hour later to reboot itself for a decision nobody remembers making
+	 * would be worse than one that was never asked.
+	 */
+	restart: (deviceId: string) =>
+		request<RetryResponse>(`/api/devices/${encodeURIComponent(deviceId)}/restart`, {
+			method: 'POST'
+		}),
+
+	/**
 	 * `GET /api/packages` — the fleet-wide package comparison.
 	 *
 	 * Answers with *differences*, never with the sets. Ten frames carrying ~930 packages each

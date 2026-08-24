@@ -277,6 +277,34 @@ public sealed record RetryRequest
 
     /// <summary>When the operator asked, for the agent's log.</summary>
     public required DateTimeOffset RequestedUtc { get; init; }
+
+    /// <summary>
+    /// Whether the frame should <b>restart</b> after the budget is reset — the Fleet Manager's half
+    /// of the stopped screen's second button.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The operator's specification, verbatim: "the reboot can also be triggered from the fleet
+    /// manager given the agent is connected".</b> It is a field on this message rather than a kind
+    /// of its own because it is the same command with a stronger ending — the reset is identical,
+    /// the resource selection is identical, and what differs is only whether the frame comes back
+    /// from a known state or waits for its next ordinary pass.
+    /// </para>
+    /// <para>
+    /// <b>An older agent ignores it and performs the plain retry</b>, which is the correct
+    /// degradation: the budget is still cleared and the frame still tries again, it simply does not
+    /// restart first. That is the growth rule this class documents working as intended — a member
+    /// added, nothing removed, renamed or retyped.
+    /// </para>
+    /// <para>
+    /// <b>"Given the agent is connected" is not a property of this field.</b> It is a property of
+    /// the transport: the Fleet Manager sends this down an open socket or not at all, and answers
+    /// the operator 409 when there is none. Nothing replays it on reconnect, for the same reason
+    /// nothing replays a retry — a restart delivered hours later to a frame whose situation has
+    /// moved on is worse than one refused now.
+    /// </para>
+    /// </remarks>
+    public bool Reboot { get; init; }
 }
 
 /// <summary>

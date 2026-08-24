@@ -137,6 +137,37 @@
 	let pressed = $state<Record<string, string>>({});
 	let pressing = $state<string | undefined>(undefined);
 
+	/**
+	 * The frame-wide restart — the remote half of the second button on the frame's own screen.
+	 *
+	 * It appears only once the frame has actually stopped, for the same reason the button on the
+	 * frame does: a restart offered against a frame that is working is a minute of somebody's
+	 * photographs taken away for nothing.
+	 *
+	 * It is *disabled* rather than hidden while the frame is offline, and the disabled button says
+	 * why. A button that silently does nothing is worse than one that is visibly unavailable — and
+	 * the condition is not a guess: §3.5 makes presence the socket, so `reconcile.online` is the
+	 * same fact the server would answer 409 on.
+	 */
+	let restartSaid = $state<string | undefined>(undefined);
+	let restarting = $state(false);
+
+	const stopped = $derived(faulted.length > 0);
+
+	async function restart() {
+		if (restarting) return;
+		restarting = true;
+		try {
+			const answer = await api.restart(deviceId);
+			restartSaid = answer.detail;
+		} catch (error) {
+			restartSaid =
+				error instanceof ApiError ? error.message : 'That did not reach the Fleet Manager.';
+		} finally {
+			restarting = false;
+		}
+	}
+
 	async function retry(resource: string) {
 		if (pressing) return;
 		pressing = resource;
@@ -215,6 +246,38 @@
 			</p>
 		{/if}
 	</header>
+
+	{#if stopped}
+		<section class="restart" in:rise={{ y: 8 }}>
+			<Card tone="danger">
+				<h3>This frame has stopped and is waiting for a person</h3>
+				<p class="note">
+					It is showing the same two buttons on its own screen. This is the one of them you can
+					press from here: it gives every setting that gave up its attempts back and restarts the
+					frame, so it starts again from the top. Shutting it down is deliberately not offered
+					here — switching a frame off is a decision for somebody in the room with it.
+				</p>
+				<div class="fault-action">
+					<button class="retry" disabled={restarting || !reconcile.online} onclick={restart}>
+						<Icon name="refresh" size={15} />
+						{restarting ? 'Asking…' : 'Restart and try again'}
+					</button>
+					{#if !reconcile.online}
+						<p class="retry-note">
+							Unavailable while this frame is offline. Nothing queues a restart, so it has to be
+							asked while the frame is connected — or pressed on the frame itself.
+						</p>
+					{:else if restartSaid}
+						<p class="retry-said" in:collapse>{restartSaid}</p>
+					{:else}
+						<p class="retry-note">
+							The frame goes down as soon as it is asked and comes back in about a minute.
+						</p>
+					{/if}
+				</div>
+			</Card>
+		</section>
+	{/if}
 
 	{#if reconcile.problem}
 		<div class="banner" role="status" in:rise={{ y: 8 }}>
@@ -693,6 +756,15 @@
 		gap: var(--space-2);
 		justify-items: start;
 		margin-top: var(--space-5);
+	}
+
+	.restart h3 {
+		margin: 0 0 6px;
+		font-size: 15px;
+	}
+
+	.restart .note {
+		margin: 0 0 12px;
 	}
 
 	.retry {

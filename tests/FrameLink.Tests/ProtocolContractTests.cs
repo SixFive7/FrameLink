@@ -149,8 +149,13 @@ public sealed class ProtocolContractTests
         // A device-wide retry omits the resource entirely rather than sending an empty string, so
         // "everything that gave up" and "a resource literally named nothing" cannot be confused on
         // the wire. That is DefaultIgnoreCondition.WhenWritingNull doing contract work.
+        //
+        // `reboot` is on the wire and `resource` is not, and the asymmetry is the growth rule
+        // working: a bool has no null to be omitted for, so the field a member was *added* for
+        // travels on every retry as false. An older agent ignores an unknown property and performs
+        // the plain retry it always did, which is the degradation the freeze document promises.
         Assert.Equal(
-            """{"deviceId":"AAAA-AAAA-AAAA-AAAA","requestedUtc":"2026-08-16T12:00:00+00:00"}""",
+            """{"deviceId":"AAAA-AAAA-AAAA-AAAA","requestedUtc":"2026-08-16T12:00:00+00:00","reboot":false}""",
             System.Text.Json.JsonSerializer.Serialize(
                 new RetryRequest
                 {
@@ -158,6 +163,13 @@ public sealed class ProtocolContractTests
                     RequestedUtc = new DateTimeOffset(2026, 8, 16, 12, 0, 0, TimeSpan.Zero),
                 },
                 ProtocolJson.Default.RetryRequest));
+
+        // And the operator's remote restart is the same message with that one field set, so a frame
+        // reading it needs no new kind and no new payload shape.
+        Assert.True(
+            System.Text.Json.JsonSerializer.Deserialize(
+                """{"deviceId":"AAAA-AAAA-AAAA-AAAA","requestedUtc":"2026-08-16T12:00:00+00:00","reboot":true}""",
+                ProtocolJson.Default.RetryRequest)!.Reboot);
     }
 
     [Fact]

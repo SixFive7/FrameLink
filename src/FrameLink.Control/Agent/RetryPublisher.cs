@@ -44,11 +44,24 @@ public sealed class RetryPublisher(AgentConnectionRegistry registry, ILogger<Ret
     /// </param>
     /// <param name="requestedUtc">When the operator asked.</param>
     /// <param name="cancellationToken">Cancellation.</param>
+    /// <param name="reboot">
+    /// Whether the frame should restart once the budget is reset — the remote half of the stopped
+    /// screen's second button.
+    /// </param>
+    /// <remarks>
+    /// <b>"Given the agent is connected" is enforced here and nowhere else.</b> The lookup below is
+    /// the whole of it: a frame with no socket in the registry cannot be reached, so the operator
+    /// is told rather than being left believing a frame is restarting. There is no queue and no
+    /// replay — the same reasoning as the plain retry, and sharper, because a restart delivered
+    /// hours later would take the frame's photographs away for a minute for a decision nobody
+    /// remembers making.
+    /// </remarks>
     public async Task<RetryOutcome> RetryAsync(
         string deviceId,
         string? resource,
         DateTimeOffset requestedUtc,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool reboot = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deviceId);
 
@@ -68,6 +81,7 @@ public sealed class RetryPublisher(AgentConnectionRegistry registry, ILogger<Ret
             // route with no resource segment means all of them.
             Resource = string.IsNullOrWhiteSpace(resource) ? null : resource.Trim(),
             RequestedUtc = requestedUtc,
+            Reboot = reboot,
         };
 
         try
@@ -80,7 +94,9 @@ public sealed class RetryPublisher(AgentConnectionRegistry registry, ILogger<Ret
                     cancellationToken)
                 .ConfigureAwait(false);
 
-            logger.RetrySent(deviceId, request.Resource ?? "everything that gave up");
+            logger.RetrySent(
+                deviceId,
+                (request.Resource ?? "everything that gave up") + (reboot ? ", and to restart" : string.Empty));
             return RetryOutcome.Sent;
         }
         catch (Exception exception) when (exception is System.Net.WebSockets.WebSocketException
