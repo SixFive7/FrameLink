@@ -373,6 +373,54 @@ public sealed class AgentProcessDeadlineTests
     }
 
     [Fact]
+    public void The_gate_in_front_of_the_microphone_array_can_be_bounded_now_and_is()
+    {
+        // <b>The in-code justification for waiting forever here was that the tool could wait
+        // forever anyway</b> — "a hung tool wedges the caller today, with or without this gate" —
+        // so bounding the gate bought a second way to report a working array as absent and nothing
+        // else. That was true, and the premise is gone.
+        Assert.NotEqual(Timeout.InfiniteTimeSpan, XvfHost.ConversationWait);
+        Assert.True(XvfHost.ConversationWait > TimeSpan.Zero);
+
+        // Strictly longer than one holder's whole deadline, which is the property that keeps a
+        // legitimate queue from ever failing: three things in the process hold this gate, so at most
+        // two can be ahead of any waiter, and each may spend its whole deadline.
+        Assert.True(XvfHost.ConversationWait > ProcessDeadline.Array * 2);
+        Assert.Equal(ProcessDeadline.Array * 3, XvfHost.ConversationWait);
+    }
+
+    [Fact]
+    public async Task A_caller_that_cannot_get_the_array_gate_is_told_so_rather_than_left_waiting()
+    {
+        using var held = new SemaphoreSlim(0, 1);
+        var tool = new XvfHost(new MemorySystemFiles(), new BlockingRunner(held), new FakeUserSession());
+
+        // One conversation in flight, holding the process-wide gate for as long as this test likes.
+        var first = tool.RunAsync("/opt/framelink", [XvfHost.VersionCommand], TestContext.Current.CancellationToken);
+
+        try
+        {
+            var second = await tool.RunAsync(
+                "/opt/framelink",
+                [XvfHost.GpoReadCommand],
+                TimeSpan.FromMilliseconds(50),
+                TestContext.Current.CancellationToken);
+
+            // It comes back as an ordinary timeout, so the pass reads it as the drift it is and the
+            // loops beside the pass convert it exactly as they convert every other one.
+            Assert.True(second.TimedOut);
+            Assert.False(second.Succeeded);
+            Assert.Contains(XvfHost.Binary, second.Combined, StringComparison.Ordinal);
+            Assert.Contains("held the tool for longer than", second.Combined, StringComparison.Ordinal);
+        }
+        finally
+        {
+            held.Release();
+            await first;
+        }
+    }
+
+    [Fact]
     public void Durations_are_written_in_the_register_the_rest_of_the_agent_uses()
     {
         Assert.Equal("30 seconds", ProcessDeadline.Describe(TimeSpan.FromSeconds(30)));
@@ -501,10 +549,25 @@ public sealed class AgentProcessDeadlineTests
     public async Task A_command_that_never_answered_leaves_the_screen_handover_loop()
     {
         using var caller = new CancellationTokenSource();
+        var clock = new ManualClock();
+
+        // <b>The loop is given a way out, so a regression fails rather than spins.</b> This clock
+        // does not really wait, so a filter that swallowed the timeout would leave RunAsync turning
+        // over as fast as the machine allows and the test would hang instead of failing. Stopping it
+        // after a few ticks means a swallowed timeout comes back as "RunAsync returned" -- which is
+        // the assertion below, failing in milliseconds and saying what it means.
+        clock.OnDelay = _ =>
+        {
+            if (clock.Delays.Count >= 3)
+            {
+                caller.Cancel();
+            }
+        };
+
         var handover = new ScreenHandover(
             new RecordingVirtualTerminals(TtyTerminal.ProductTerminal),
             new TimingOutRunner(),
-            new ManualClock(),
+            clock,
             new RecordingLog());
 
         // <b>Both halves of the mechanism in one assertion.</b> The call site has to convert the
@@ -600,6 +663,26 @@ public sealed class AgentProcessDeadlineTests
                 standardOutput: string.Empty,
                 standardError: string.Empty,
                 treeKilled: true));
+    }
+
+    /// <summary>A runner that does not answer until it is let go.</summary>
+    private sealed class BlockingRunner(SemaphoreSlim release) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(
+            string executable,
+            IReadOnlyList<string> arguments,
+            CancellationToken cancellationToken) =>
+            RunAsync(executable, arguments, ProcessDeadline.Array, cancellationToken);
+
+        public async Task<ProcessResult> RunAsync(
+            string executable,
+            IReadOnlyList<string> arguments,
+            TimeSpan deadline,
+            CancellationToken cancellationToken)
+        {
+            await release.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return new ProcessResult(0, string.Empty, string.Empty);
+        }
     }
 
     /// <summary>What one call site asked for.</summary>

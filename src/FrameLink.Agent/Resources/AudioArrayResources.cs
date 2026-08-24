@@ -660,22 +660,74 @@ public sealed class XvfHost
     /// there is exactly one agent process per frame and exactly one array per agent.
     /// </para>
     /// <para>
-    /// The wait is unbounded on purpose. The only thing that can hold it long is an
+    /// <b>The wait is bounded now, and the argument that said it should not be has been removed
+    /// rather than overruled.</b> It read: "the only thing that can hold it long is an
     /// <c>xvf_host</c> that hangs, and <c>HostProcessRunner</c> already awaits that with no timeout
     /// wherever it is called from — so a hung tool wedges the caller today, with or without this
-    /// gate, and a bounded wait here would buy nothing except a second way to report a working
-    /// array as absent.
+    /// gate, and a bounded wait here would buy nothing except a second way to report a working array
+    /// as absent." Every clause of that was true, and its premise is gone: the tool now has
+    /// <see cref="ProcessDeadline.Array"/> and cannot hold this gate indefinitely, so a bounded wait
+    /// here is no longer a second way to fail a working array.
+    /// </para>
+    /// <para>
+    /// <b>What the bound is, and why it is a multiple rather than the deadline itself.</b> Exactly
+    /// three things in the process ever hold this — the audio block inside the graph, the firmware
+    /// reporter beside it and the firmware flash — so at most two holders can be ahead of any
+    /// waiter, and each of those can legitimately spend its whole deadline. Three times
+    /// <see cref="ProcessDeadline.Array"/> covers every ordering of that queue with a margin, so the
+    /// bound can only be reached by something the deadline cannot see: a future caller that holds
+    /// the gate across more than one bounded call, or across a retry. That is the case this is
+    /// defence against, and it is the case that would otherwise have quietly restored the old
+    /// defect at one remove.
+    /// </para>
+    /// <para>
+    /// <b>Failing the wait is a timeout like any other</b>, not a special path: the caller gets a
+    /// result with <see cref="ProcessResult.TimedOut"/> set and a sentence naming the command and
+    /// the wait, so the reconcile pass reads it as the drift it is and the loops beside the pass
+    /// convert it the same way they convert every other one.
     /// </para>
     /// </remarks>
     private static readonly SemaphoreSlim Conversation = new(1, 1);
 
+    /// <summary>The longest a caller may wait for <see cref="Conversation"/>.</summary>
+    /// <remarks>
+    /// Three holders exist in the process, so at most two can be ahead of any waiter and each may
+    /// spend its whole <see cref="ProcessDeadline.Array"/>. See the remark on
+    /// <see cref="Conversation"/> for why this is bounded at all.
+    /// </remarks>
+    public static readonly TimeSpan ConversationWait = ProcessDeadline.Array * 3;
+
     /// <summary>Runs one command against the array, from the binary's own directory.</summary>
+    public Task<ProcessResult> RunAsync(
+        string root,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken) =>
+        RunAsync(root, arguments, ConversationWait, cancellationToken);
+
+    /// <summary>
+    /// The same, for a caller that is not willing to queue for <see cref="ConversationWait"/>.
+    /// </summary>
+    /// <param name="root">The tree the tool was found under.</param>
+    /// <param name="arguments">The command to send.</param>
+    /// <param name="gate">
+    /// How long to wait for <see cref="Conversation"/> before giving up on getting the tool at all.
+    /// </param>
+    /// <param name="cancellationToken">The caller's token.</param>
+    /// <remarks>
+    /// <b>A real capability rather than a seam, and the difference matters for how it reads.</b>
+    /// Queueing behind another conversation is a cost a caller may or may not be able to afford —
+    /// the pass can wait, and something answering a person might not — so how long to queue belongs
+    /// to the call. It is also what makes the expiry assertable at all: the default is minutes by
+    /// design, and a test that waited for it would be a test nobody runs.
+    /// </remarks>
     public async Task<ProcessResult> RunAsync(
         string root,
         IReadOnlyList<string> arguments,
+        TimeSpan gate,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(gate, TimeSpan.Zero);
 
         var directory = ToolDirectory(root);
         var vector = new List<string>(arguments.Count + 4)
@@ -688,7 +740,21 @@ public sealed class XvfHost
 
         vector.AddRange(arguments);
 
-        await Conversation.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (!await Conversation.WaitAsync(gate, cancellationToken).ConfigureAwait(false))
+        {
+            return new ProcessResult(
+                -1,
+                string.Empty,
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{Binary} {string.Join(' ', arguments)} was not started: another conversation with "
+                        + $"the microphone array held the tool for longer than "
+                        + $"{ProcessDeadline.Describe(gate)}."))
+            {
+                TimedOut = true,
+                Deadline = gate,
+            };
+        }
 
         try
         {
