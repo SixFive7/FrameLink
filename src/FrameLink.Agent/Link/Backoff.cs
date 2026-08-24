@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-
 namespace FrameLink.Agent.Link;
 
 /// <summary>
@@ -14,8 +12,28 @@ namespace FrameLink.Agent.Link;
 /// broken one.
 /// </para>
 /// <para>
-/// Jittered because a household power cut restarts every frame at the same instant, and a fleet
-/// that reconnects in lockstep turns the operator's own recovery into a thundering herd.
+/// <b>Not jittered, and the removal was a decision rather than a simplification.</b> Every delay
+/// here is now a pure function of the failure count, so two runs of the same build on the same
+/// hardware wait exactly the same amount of time — which is what makes a difference in elapsed
+/// time between two captured runs mean that something actually happened differently. The
+/// operator's instruction was "no timers and jitter or anything", and the reason it matters
+/// beyond tidiness is
+/// <c>reference/reconcile-determinism.md</c> §3.1: the reconcile retry's delay is <i>persisted</i>
+/// as <see cref="Reconcile.ResourceLedgerEntry.NextAttemptUtc"/> and the loop wakes at the
+/// earliest pending one, so with two resources in backoff at the same time a jittered delay would
+/// have decided which resource ran first. That was unreachable only because the attempt budget is
+/// three and one escalation stops the pass — a guarantee held by a different number in a different
+/// file. Removing the jitter removes the hazard outright rather than leaving it standing behind a
+/// number nobody would think to check before changing.
+/// </para>
+/// <para>
+/// <b>What it costs is stated rather than hidden.</b> A household power cut restarts every frame
+/// at the same instant, and without jitter a fleet reconnects in lockstep: six frames behind one
+/// router hand one self-hosted container six simultaneous handshakes, status reports and telemetry
+/// flushes at 1 s, 2 s, 4 s … 30 s. That is survivable at this fleet's size and is the price of a
+/// schedule a person can predict. If it ever stops being survivable, the shape to reach for is a
+/// fraction derived from the device id — one code path, still a pure function, and spread across a
+/// fleet because no two frames share an id.
 /// </para>
 /// </remarks>
 public sealed class Backoff
@@ -28,31 +46,14 @@ public sealed class Backoff
 
     private readonly TimeSpan _initial;
     private readonly TimeSpan _cap;
-    private readonly double _jitter;
-    private readonly Func<double>? _fraction;
 
     /// <summary>Creates a schedule.</summary>
     /// <param name="initial">Wait after the first failure.</param>
-    /// <param name="cap">Hard ceiling, before jitter.</param>
-    /// <param name="jitter">Fraction of the delay that may be shaved off, 0 to 1.</param>
-    /// <param name="fraction">
-    /// Source of the jitter fraction in [0,1). Injected only so tests can pin the extremes;
-    /// production uses the cryptographic generator, which sidesteps the seeded-<c>Random</c>
-    /// lockstep problem entirely.
-    /// </param>
-    public Backoff(
-        TimeSpan? initial = null,
-        TimeSpan? cap = null,
-        double jitter = 0.2,
-        Func<double>? fraction = null)
+    /// <param name="cap">Hard ceiling.</param>
+    public Backoff(TimeSpan? initial = null, TimeSpan? cap = null)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(jitter);
-        ArgumentOutOfRangeException.ThrowIfGreaterThan(jitter, 1.0);
-
         _initial = initial ?? DefaultInitial;
         _cap = cap ?? DefaultCap;
-        _jitter = jitter;
-        _fraction = fraction;
     }
 
     /// <summary>The ceiling this schedule was built with.</summary>
@@ -81,10 +82,6 @@ public sealed class Backoff
             ticks = capTicks;
         }
 
-        var shave = _jitter <= 0 ? 0 : (long)(ticks * _jitter * NextFraction());
-        return TimeSpan.FromTicks(ticks - shave);
+        return TimeSpan.FromTicks(ticks);
     }
-
-    private double NextFraction() =>
-        _fraction?.Invoke() ?? RandomNumberGenerator.GetInt32(0, 1000) / 1000.0;
 }

@@ -271,7 +271,7 @@ public sealed class AgentControlLinkTests
         Assert.False(hub.Current.Connected);
     }
 
-    private static Backoff Fast() => new(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), jitter: 0);
+    private static Backoff Fast() => new(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2));
 
     [Fact]
     public async Task A_retry_pushed_down_a_live_socket_reaches_the_reconciler()

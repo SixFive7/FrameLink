@@ -526,7 +526,7 @@ public sealed class AgentMemoryTests
             clock,
             NullLog.Instance,
             () => [new Uri("https://framelink.example.org/")],
-            new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), jitter: 0));
+            new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2)));
 
         clock.OnDelay = _ =>
         {

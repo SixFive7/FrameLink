@@ -410,7 +410,7 @@ internal sealed class VirtualFrame : IAsyncDisposable
 
             // Jitter off so a test never waits for a value it cannot predict; the cap is what
             // bounds the whole test, and the schedule's shape is asserted rather than its numbers.
-            new Backoff(TimeSpan.FromMilliseconds(40), TimeSpan.FromMilliseconds(160), jitter: 0))
+            new Backoff(TimeSpan.FromMilliseconds(40), TimeSpan.FromMilliseconds(160)))
         {
             HardwareSerial = Serial,
             Uplink = uplink,

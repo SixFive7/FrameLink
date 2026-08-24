@@ -349,3 +349,33 @@ Direction 3 is strictly better than direction 2 on the link half and costs a has
 recommended *yet* only because six frames do not need it and an unwritten hash function is a place
 for a bug. If the fleet grows, or if the link reconnect ever needs to be replayable, it is the right
 shape and it is a small change from where direction 2 leaves things.
+
+
+---
+
+## Decided and implemented, 2026-08-24
+
+**The operator chose direction 5 — remove jitter entirely, both call sites — over §7.5's
+recommendation of direction 2.** `Backoff` no longer takes a `jitter` or a `fraction`: its
+`Delay(n)` is the undiminished doubling, capped, and a pure function of `n`. The nine test call
+sites that passed `jitter: 0` and the two that pinned the extremes with a `fraction` seam are gone
+with it, replaced by one property — two schedules built the same way answer identically, for ever
+— and by an assertion that **the agent binary now contains no source of randomness at all**, which
+closes §2.1's "exactly one call to a random source" at zero.
+
+What this changes about the analysis above:
+
+- **§3.1's near-miss is gone rather than bounded.** The persisted `NextAttemptUtc` is still
+  persisted and the loop still wakes at the earliest pending one, but the instant that feeds it is
+  now a pure function of the attempt number, so two resources in backoff at the same time can no
+  longer be ordered by chance. The guarantee no longer lives in `AttemptBudget = 3` in another
+  file, and §6's recommendation 3 — put a comment on `AttemptBudget` saying so — is therefore moot
+  rather than done.
+- **§7.1's cost is now paid rather than argued about.** A household power cut restarts every frame
+  at the same instant and they reconnect in lockstep: six frames, one router, one self-hosted
+  container, six simultaneous handshakes at 1 s, 2 s, 4 s … 30 s. That is stated in `Backoff`'s own
+  remarks rather than hidden, together with the shape to reach for if it ever stops being
+  survivable — §7.4's direction 3, a fraction derived from the device id, which is still a pure
+  function and still replayable.
+- **Class B loses its only entry that could ever have reached the route.** Everything else in §4
+  is untouched.

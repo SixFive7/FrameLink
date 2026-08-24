@@ -99,7 +99,7 @@ public sealed class AgentConnectionLeakTests
             clock,
             NullLog.Instance,
             () => [Endpoint],
-            new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2), jitter: 0));
+            new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(2)));
 
         clock.OnDelay = _ =>
         {
@@ -175,7 +175,7 @@ public sealed class AgentConnectionLeakTests
         // §4.1 is "retry forever", not "retry until a budget runs out": an unreachable Fleet
         // Manager is silence, and §2.6 says silence is never an answer to stop on.
         var factory = new TrackingTransportFactory { Behaviour = ServerBehaviour.RefuseConnection };
-        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), jitter: 0);
+        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
         var clock = new ManualClock();
 
         var link = await RunAsync(factory, 500, hub: null, clock, backoff);
@@ -215,7 +215,7 @@ public sealed class AgentConnectionLeakTests
             clock,
             NullLog.Instance,
             () => [Endpoint],
-            backoff ?? new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4), jitter: 0));
+            backoff ?? new Backoff(TimeSpan.FromMilliseconds(1), TimeSpan.FromMilliseconds(4)));
 
         clock.OnDelay = _ =>
         {
@@ -309,7 +309,7 @@ public sealed class AgentBackoffTests
     [Fact]
     public void No_failures_means_no_wait()
     {
-        var backoff = new Backoff(jitter: 0);
+        var backoff = new Backoff();
 
         Assert.Equal(TimeSpan.Zero, backoff.Delay(0));
     }
@@ -317,7 +317,7 @@ public sealed class AgentBackoffTests
     [Fact]
     public void The_delay_doubles_until_it_reaches_the_cap_and_then_stops()
     {
-        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(8), jitter: 0);
+        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(8));
 
         Assert.Equal(TimeSpan.FromSeconds(1), backoff.Delay(1));
         Assert.Equal(TimeSpan.FromSeconds(2), backoff.Delay(2));
@@ -335,7 +335,7 @@ public sealed class AgentBackoffTests
         // Doubling into a TimeSpan overflows to a negative value around the fortieth failure, which
         // on a frame is roughly a month of a genuinely absent Fleet Manager — rare enough to ship
         // and catastrophic enough to matter.
-        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30), jitter: 0);
+        var backoff = new Backoff(TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(30));
 
         var delay = backoff.Delay(failures);
 
@@ -343,12 +343,73 @@ public sealed class AgentBackoffTests
     }
 
     [Fact]
-    public void Jitter_only_ever_shortens_the_wait_and_stays_inside_its_fraction()
+    public void The_schedule_is_a_pure_function_of_the_failure_count_with_no_jitter_left_in_it()
     {
-        var full = new Backoff(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), jitter: 0.2, fraction: () => 1.0);
-        var none = new Backoff(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10), jitter: 0.2, fraction: () => 0.0);
+        // The jitter is gone from both call sites, and this is what replaced the test that pinned
+        // its extremes. What the operator asked for is a frame whose waits are predictable — "no
+        // timers and jitter or anything" — so the property to hold is that two schedules built the
+        // same way answer identically, for ever, rather than that a shave stays inside a fraction.
+        //
+        // It matters beyond tidiness because the reconcile retry's delay is *persisted* as the
+        // ledger's NextAttemptUtc and the loop wakes at the earliest pending one: a jittered delay
+        // was one raised attempt budget away from deciding which resource ran first
+        // (reference/reconcile-determinism.md §3.1).
+        var first = new Backoff(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(5));
+        var second = new Backoff(TimeSpan.FromSeconds(10), TimeSpan.FromMinutes(5));
 
-        Assert.Equal(TimeSpan.FromSeconds(8), full.Delay(1));
-        Assert.Equal(TimeSpan.FromSeconds(10), none.Delay(1));
+        foreach (var failures in Enumerable.Range(0, 12))
+        {
+            Assert.Equal(first.Delay(failures), second.Delay(failures));
+        }
+
+        // And the sequence itself is the undiminished doubling, so nothing shaves the wait at all.
+        Assert.Equal(TimeSpan.Zero, first.Delay(0));
+        Assert.Equal(TimeSpan.FromSeconds(10), first.Delay(1));
+        Assert.Equal(TimeSpan.FromSeconds(20), first.Delay(2));
+        Assert.Equal(TimeSpan.FromSeconds(40), first.Delay(3));
+    }
+
+    [Fact]
+    public void No_source_of_randomness_is_left_in_the_agent_binary()
+    {
+        // reference/reconcile-determinism.md §2.1 records that the whole agent contained exactly
+        // one call to a random source, in Backoff, and that it produced a duration rather than a
+        // choice. Removing the jitter removes the last one, and this is the assertion that says so
+        // out loud — a future RandomNumberGenerator or Random in the agent fails here rather than
+        // quietly reintroducing a run-to-run difference nothing measures.
+        var agent = Path.GetDirectoryName(typeof(Backoff).Assembly.Location)!;
+        var sources = Directory.EnumerateFiles(
+            Path.Combine(SolutionRoot(), "src", "FrameLink.Agent"),
+            "*.cs",
+            SearchOption.AllDirectories);
+
+        Assert.NotEmpty(agent);
+
+        foreach (var file in sources)
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var text = File.ReadAllText(file);
+
+            Assert.DoesNotContain("RandomNumberGenerator", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("new Random(", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("Random.Shared", text, StringComparison.Ordinal);
+        }
+    }
+
+    private static string SolutionRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "FrameLink.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        Assert.NotNull(directory);
+        return directory!.FullName;
     }
 }
