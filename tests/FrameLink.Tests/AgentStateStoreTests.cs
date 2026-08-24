@@ -145,6 +145,25 @@ public sealed class AgentStateStoreTests
         Assert.Equal("true"u8.ToArray(), files.Store.ReadBytes("kiosk.offline-mode"));
     }
 
+    [Fact]
+    public void Text_that_cannot_be_encoded_throws_rather_than_being_quietly_mangled()
+    {
+        // The load-bearing half of StrictUtf8, and a test that exists only because mutating the
+        // flag beside it proved nothing was asserting this. Encoding.UTF8 — the static anybody
+        // would reach for instead — substitutes U+FFFD, which would turn a value that cannot be
+        // encoded into a value that was written; File.WriteAllText threw, and so does this. It
+        // throws while the argument is being evaluated, before the staging file is opened, so a
+        // value that cannot be written leaves nothing behind at all.
+        using var files = new TemporaryStore();
+        files.Store.EnsureReady();
+
+        Assert.Throws<EncoderFallbackException>(
+            () => files.Store.WriteText("device-name", "bad \ud800 name"));
+
+        Assert.False(File.Exists(files.Store.PathOf("device-name" + FileStateStore.StagingSuffix)));
+        Assert.Null(files.Store.ReadText("device-name"));
+    }
+
     // -----------------------------------------------------------------------------------------
     // An unreadable journal is a fault, and absent is not unreadable
     // -----------------------------------------------------------------------------------------

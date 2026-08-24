@@ -537,12 +537,21 @@ public sealed class AgentHost
             Log = _log,
             Offered = () => ReconcileVoice.HasStopped(hub.Current),
 
-            // The console stage has one gesture and the browser stage has two buttons, so the hold
-            // is the *restart*: it is the recovery, and the frame's own screen says so in
-            // ReconcileVoice.RetryLine. A console-only frame therefore cannot be switched off from
-            // the panel — a second hold length would be an invented gesture, and the honest answer
-            // is that the off switch lives on the browser screen and in the Fleet Manager.
-            Retry = () => _ = recovery.RestartAsync("Somebody holding the panel", CancellationToken.None),
+            // Decision 92. The browser stage draws §2.5 rung 5's two buttons side by side; this
+            // surface can read no coordinates, so the two verbs are two lengths of its one gesture
+            // — three seconds to restart, ten to switch off, decided when the finger comes off and
+            // explained in words by ReconcileVoice.TouchLines while it is still down.
+            //
+            // This is what the console had been missing, and it was missing it on exactly the frames
+            // that have nothing else: a frame with no kiosk stack yet, which is every frame during
+            // its first provisioning, could be restarted from the panel and could not be switched
+            // off from anywhere a person standing in front of it could see.
+            //
+            // Both land on the one FrameRecovery above, so a hold here and a click in the Fleet
+            // Manager cannot come to mean different things — including the refusal: a firmware
+            // write in flight turns both of them down and says what to wait for.
+            Restart = () => _ = recovery.RestartAsync("Somebody holding the panel", CancellationToken.None),
+            Shutdown = () => _ = recovery.ShutdownAsync("Somebody holding the panel for ten seconds", CancellationToken.None),
 
             // Decision 91, through the reader that already exists rather than through a second one.
             // A firmware screen outranks the retry whenever one is up, brings its own five-second

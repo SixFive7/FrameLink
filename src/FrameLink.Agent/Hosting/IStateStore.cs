@@ -102,11 +102,22 @@ public sealed class FileStateStore : IStateStore
     /// mark, and a throw rather than a substitution for text that cannot be encoded.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Spelled out here so that routing <see cref="WriteText"/> through the atomic path changed
-    /// where the bytes go and nothing whatever about what they are. A byte-order mark would break
-    /// every consumer that reads one of these files as a bare value, and the throwing fallback is
-    /// the behaviour the callers already had — a silent upgrade to replacement characters would
-    /// have been a second change hiding inside this one.
+    /// where the bytes go and nothing whatever about what they are. The throwing fallback is the
+    /// load-bearing half: <see cref="Encoding.UTF8"/>, the static anybody would reach for instead,
+    /// substitutes <c>U+FFFD</c> and would quietly turn a value that cannot be encoded into a value
+    /// that was written, where every caller of this method has always had it throw.
+    /// </para>
+    /// <para>
+    /// <b>The no-byte-order-mark argument documents the intent and does not enforce it.</b>
+    /// <see cref="Encoding.GetBytes(string)"/> never writes a preamble whatever that flag says, so
+    /// what actually keeps a mark out of these files is that the bytes go straight to the stream
+    /// rather than through a <see cref="StreamWriter"/>. Worth saying because a mark would break
+    /// every consumer that reads one of these as a bare value — a systemd <c>EnvironmentFile</c>, a
+    /// shell reading <c>device-name</c> — and because it is why the test for it asserts the bytes
+    /// on disk instead of trusting the flag.
+    /// </para>
     /// </remarks>
     private static readonly UTF8Encoding StrictUtf8 =
         new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
