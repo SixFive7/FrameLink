@@ -324,7 +324,7 @@ public sealed class AgentControlLinkTests
     [Fact]
     public async Task A_shutdown_pushed_down_a_live_socket_reaches_the_power_switch_and_not_the_retry()
     {
-        // Decision 92, and the whole reason it is a kind of its own. A shutdown that arrived on the
+        // Decision 94, and the whole reason it is a kind of its own. A shutdown that arrived on the
         // retry's path would clear budgets and reconcile a frame whose operator had asked for it to
         // be off, so the dispatch is asserted from both sides: the shutdown hook is called, and the
         // retry hook is not.

@@ -194,7 +194,7 @@ public sealed class AgentTouchRetryTests
     [Fact]
     public void Nothing_happens_while_the_finger_is_down_however_long_it_stays_there()
     {
-        // Decision 92, and the property everything else about this gesture rests on. A hold that
+        // Decision 94, and the property everything else about this gesture rests on. A hold that
         // restarted the frame the instant it reached three seconds could never reach ten, so two
         // hold lengths on one finger force the decision to the release. Nothing acts before then —
         // not at three seconds, not at ten, not at thirty.
@@ -360,7 +360,7 @@ public sealed class AgentTouchRetryTests
     public void The_console_explains_both_gestures_and_names_the_server_when_there_is_no_touchscreen()
     {
         // Decision 77, and the whole point of it: the sentences are chosen from what the agent
-        // found rather than from what was assumed. Decision 92 adds the second verb, and names
+        // found rather than from what was assumed. Decision 94 adds the second verb, and names
         // *both* buttons in the no-touchscreen case — a sentence naming only the restart would
         // leave somebody who wanted the frame off believing there was nowhere to do it.
         Assert.Equal(

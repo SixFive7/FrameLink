@@ -501,7 +501,7 @@ public static class StageRenderer
             // Deliberately above the technical block: Render truncates the head from the bottom on a
             // console too short to hold it, so the block that gets dropped first is the one to be
             // photographed rather than the one telling the person in the room what to do with their
-            // finger (decision 92).
+            // finger (decision 94).
             foreach (var line in ReconcileVoice.TouchLines(status.Touch))
             {
                 AddField(lines, string.Empty, line, inner, colour);
@@ -567,7 +567,7 @@ public static class StageRenderer
     /// The activity block — one line, or two while a finger is deciding between two verbs.
     /// </summary>
     /// <remarks>
-    /// A list rather than a string because of that second line and nothing else (decision 92). The
+    /// A list rather than a string because of that second line and nothing else (decision 94). The
     /// bar's tail has room for about twenty characters beside it, which is enough for a word and not
     /// enough for a sentence — and the sentence is the half that has to say what letting go now
     /// would do <i>and</i> what holding on would do instead. Squeezing both into the tail would
@@ -593,7 +593,7 @@ public static class StageRenderer
         // lift. Nothing about it claims the reconciler is doing anything.
         if (status.Touch.HoldingSince is not null && status.Touch.TwoWay)
         {
-            // Decision 92: one finger, two verbs, and the release is what chooses. So the bar is
+            // Decision 94: one finger, two verbs, and the release is what chooses. So the bar is
             // not counting down to anything — it is showing where in the gesture the finger has got
             // to — and the word beside it plus the sentence under it both come from the same
             // TouchRetryState.Commit the release will consult. A screen that promised one verb and

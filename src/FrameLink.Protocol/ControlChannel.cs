@@ -77,7 +77,7 @@ public static class ControlWire
 
     /// <summary>
     /// Server to agent. <b>Switch this frame off</b> — §2.5 rung 5's other button, pressed from the
-    /// Fleet Manager (decision 92).
+    /// Fleet Manager (decision 94).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -348,7 +348,7 @@ public sealed record RetryRequest
 
 /// <summary>
 /// <b>Switch this frame off</b> — the payload of <see cref="ControlWire.KindShutdown"/>
-/// (decision 92). <b>Frozen once shipped.</b>
+/// (decision 94). <b>Frozen once shipped.</b>
 /// </summary>
 /// <remarks>
 /// <para>

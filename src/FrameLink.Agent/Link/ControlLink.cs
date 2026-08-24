@@ -112,7 +112,7 @@ public sealed class ControlLink
     /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
     public Action<RetryRequest>? OnRetry { get; init; }
 
-    /// <summary>Invoked when the operator asks this frame to switch off (decision 92).</summary>
+    /// <summary>Invoked when the operator asks this frame to switch off (decision 94).</summary>
     public Action<ShutdownRequest>? OnShutdown { get; init; }
 
     /// <summary>Invoked when the Fleet Manager pushes who to contact (§2.7 item 8).</summary>

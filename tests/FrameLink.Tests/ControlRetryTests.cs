@@ -217,7 +217,7 @@ public sealed class ControlRetryTests
     }
 
     // -----------------------------------------------------------------------------------------
-    // Decision 92: §2.5 rung 5's other button, and the only remote action nothing can undo
+    // Decision 94: §2.5 rung 5's other button, and the only remote action nothing can undo
     // -----------------------------------------------------------------------------------------
 
     [Fact]

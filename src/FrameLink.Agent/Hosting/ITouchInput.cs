@@ -47,7 +47,7 @@ public enum TouchCommit
 /// the same snapshot and neither has to be woken to keep it moving.
 /// </param>
 /// <param name="RestartAt">
-/// <b>The earlier of the two marks, or null when this hold means only one thing (decision 92).</b>
+/// <b>The earlier of the two marks, or null when this hold means only one thing (decision 94).</b>
 /// </param>
 /// <remarks>
 /// <para>

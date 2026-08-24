@@ -546,7 +546,7 @@ public static class ReconcileVoice
 
     /// <summary>
     /// §2.7 item 9 — <b>how to restart and how to switch off at the frame</b>, or where the buttons
-    /// are instead (decision 92).
+    /// are instead (decision 94).
     /// </summary>
     /// <remarks>
     /// <para>

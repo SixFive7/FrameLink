@@ -74,7 +74,7 @@ public sealed record AttemptContext
     public Action<RetryRequest>? OnRetry { get; init; }
 
     /// <summary>
-    /// Invoked when the operator asks this frame to switch off (§2.5 rung 5, decision 92).
+    /// Invoked when the operator asks this frame to switch off (§2.5 rung 5, decision 94).
     /// </summary>
     /// <remarks>
     /// Optional like every other hook here, and the one whose absence is safe: a build that does not
@@ -403,7 +403,7 @@ public sealed class ConnectionAttempt : IAsyncDisposable
 
                 if (string.Equals(envelope.Kind, ControlWire.KindShutdown, StringComparison.Ordinal))
                 {
-                    // §2.5 rung 5's other button, decision 92. The only inbound message whose
+                    // §2.5 rung 5's other button, decision 94. The only inbound message whose
                     // success is a frame this socket can never reach again -- which is why it is
                     // read here, on a live socket, and never queued anywhere for later.
                     if (envelope.PayloadAs(ProtocolJson.Default.ShutdownRequest) is { } shutdown)

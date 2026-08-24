@@ -52,7 +52,7 @@ public sealed record TouchRetryServices
     public required Action Restart { get; init; }
 
     /// <summary>
-    /// What the longer hold does — switch the frame off (decision 92).
+    /// What the longer hold does — switch the frame off (decision 94).
     /// </summary>
     /// <remarks>
     /// The second of §2.5 rung 5's two buttons, on the surface that had only ever offered the
@@ -121,7 +121,7 @@ public sealed class TouchRetry
     public static TimeSpan RestartHold { get; } = TimeSpan.FromSeconds(3);
 
     /// <summary>
-    /// How long a finger has to stay down for a shutdown (decision 92).
+    /// How long a finger has to stay down for a shutdown (decision 94).
     /// </summary>
     /// <remarks>
     /// Seven seconds past the restart mark, on a screen that spends all seven of them saying what

@@ -28,7 +28,7 @@ namespace FrameLink.Control.Endpoints;
 /// will carry out.
 /// </para>
 /// <para>
-/// <b>Four routes now, and the fourth is not a retry</b> (decision 92).
+/// <b>Four routes now, and the fourth is not a retry</b> (decision 94).
 /// <c>POST /api/devices/{id}/shutdown</c> resets nothing, names no resource and is offered against a
 /// frame with nothing wrong with it. It lives here because this is where an operator looks for what
 /// they may do to a frame, and because it shares the two properties that matter — a live socket or a
@@ -88,7 +88,7 @@ public static class RetryEndpoints
             RetryAsync(deviceId, resource: null, devices, retries, time, cancellationToken, reboot: true));
 
         // §2.5 rung 5's other button, and the only route here that is not a retry in any sense
-        // (decision 92). No resource, no budget, no attempt: it is the power switch, and it is
+        // (decision 94). No resource, no budget, no attempt: it is the power switch, and it is
         // deliberately not conditional on anything having gone wrong, because an off switch that
         // only worked on broken frames would be no off switch at all.
         app.MapPost("/api/devices/{deviceId}/shutdown", (

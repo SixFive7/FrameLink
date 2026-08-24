@@ -3,7 +3,7 @@ using FrameLink.Protocol;
 namespace FrameLink.Control.Agent;
 
 /// <summary>
-/// Sends §2.5 rung 5's <b>shutdown</b> down the control channel (decision 92).
+/// Sends §2.5 rung 5's <b>shutdown</b> down the control channel (decision 94).
 /// </summary>
 /// <remarks>
 /// <para>

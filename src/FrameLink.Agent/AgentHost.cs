@@ -566,7 +566,7 @@ public sealed class AgentHost
             Log = _log,
             Offered = () => ReconcileVoice.HasStopped(hub.Current),
 
-            // Decision 92. The browser stage draws §2.5 rung 5's two buttons side by side; this
+            // Decision 94. The browser stage draws §2.5 rung 5's two buttons side by side; this
             // surface can read no coordinates, so the two verbs are two lengths of its one gesture
             // — three seconds to restart, ten to switch off, decided when the finger comes off and
             // explained in words by ReconcileVoice.TouchLines while it is still down.
@@ -676,7 +676,7 @@ public sealed class AgentHost
                 }
             },
 
-            // §2.5 rung 5's other button, pressed two hundred kilometres away (decision 92). Its own
+            // §2.5 rung 5's other button, pressed two hundred kilometres away (decision 94). Its own
             // kind rather than a flag on the retry, because an agent that did not understand a flag
             // would do the retry — clearing budgets and reconciling on a frame whose operator had
             // just asked for it to be off — whereas an agent that does not understand a kind does
