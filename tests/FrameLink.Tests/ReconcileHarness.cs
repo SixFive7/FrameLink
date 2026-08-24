@@ -25,7 +25,9 @@ namespace FrameLink.Tests;
 /// </remarks>
 internal sealed class ReconcileHarness : IDisposable
 {
-    private readonly TemporaryStore _store = new();
+    private readonly TemporaryStore? _owned;
+    private readonly IStateStore _stateStore;
+    private readonly string _root;
 
     public ReconcileHarness(params IResource[] resources)
         : this(new ReconcileOptions { Countdown = TimeSpan.Zero }, resources)
@@ -46,10 +48,57 @@ internal sealed class ReconcileHarness : IDisposable
     /// loop agree on what a boot is.
     /// </remarks>
     public ReconcileHarness(ReconcileOptions options, MutableBootIdentity? boot, params IResource[] resources)
+        : this(options, boot, owned: new TemporaryStore(), borrowed: null, resources)
     {
+    }
+
+    /// <summary>
+    /// A second loop over the state directory of <paramref name="previous"/> — <b>the same frame
+    /// after a real reboot</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every other test here crosses the reboot boundary <i>inside one process</i>, which is what
+    /// makes the ladder assertable — and which is exactly why "the attempt count survives the
+    /// reboot the retry causes" was never actually tested. The journal caches its state in memory,
+    /// so a single harness proves nothing about what reaches the card: the counts could live only
+    /// in that cache and every in-process test would still pass while a real frame forgot its
+    /// budget at every boot and reconciled for ever.
+    /// </para>
+    /// <para>
+    /// This builds a fresh journal, a fresh loop and a fresh boot id over the same directory, and
+    /// does not own it: disposing this harness leaves the files alone for the one that made them.
+    /// </para>
+    /// </remarks>
+    public static ReconcileHarness Rebooted(
+        ReconcileHarness previous,
+        ReconcileOptions options,
+        params IResource[] resources)
+    {
+        ArgumentNullException.ThrowIfNull(previous);
+
+        var harness = new ReconcileHarness(options, boot: null, owned: null, previous._stateStore, resources)
+        {
+            Clock = { UtcNow = previous.Clock.UtcNow },
+        };
+
+        return harness;
+    }
+
+    private ReconcileHarness(
+        ReconcileOptions options,
+        MutableBootIdentity? boot,
+        TemporaryStore? owned,
+        IStateStore? borrowed,
+        params IResource[] resources)
+    {
+        _owned = owned;
+        _stateStore = borrowed ?? owned!.Store;
+        _root = owned?.Root ?? string.Empty;
+
         Boot = boot ?? new MutableBootIdentity();
         Boundary = new InProcessRebootBoundary(Boot);
-        Journal = new ReconcileJournal(_store.Store, Log);
+        Journal = new ReconcileJournal(_stateStore, Log);
         Graph = new ResourceGraph(resources);
         Hub = new AgentStatusHub(AgentStatusFactory.Starting());
         Countdown = new RebootCountdown(Clock);
@@ -106,10 +155,10 @@ internal sealed class ReconcileHarness : IDisposable
 
     public ReconcileLoop Loop { get; }
 
-    public IStateStore Store => _store.Store;
+    public IStateStore Store => _stateStore;
 
     /// <summary>The state directory, so a second loop can be built over the same journal.</summary>
-    public string Root => _store.Root;
+    public string Root => _root;
 
     /// <summary>Runs one pass.</summary>
     public Task<PassOutcome> PassAsync() => Loop.RunPassAsync(TestContext.Current.CancellationToken);
@@ -151,7 +200,7 @@ internal sealed class ReconcileHarness : IDisposable
     public static ResourceStatus StatusOf(PassOutcome outcome, string name) =>
         outcome.Statuses.Single(status => string.Equals(status.Name, name, StringComparison.Ordinal));
 
-    public void Dispose() => _store.Dispose();
+    public void Dispose() => _owned?.Dispose();
 }
 
 /// <summary>A telemetry sink that records, and can be told whether the link is up.</summary>

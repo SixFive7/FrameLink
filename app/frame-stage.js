@@ -167,6 +167,25 @@ function overlay() {
   return element;
 }
 
+// One shape for every button on the repair screen, because they all obey the same two rules: the
+// press is sent once and the label then says what is happening, and v1's touch shield must not
+// block them (§2.7 item 4's exemption, which the stopped screen's two buttons need just as much).
+function action(label, kind, pressed) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  button.style.cssText = [
+    'padding:16px 34px', 'font-size:20px', 'border-radius:10px',
+    'border:1px solid #3a3a3a', 'background:#1b1b1b', 'color:#e8e8e8', 'cursor:pointer',
+    'touch-action:manipulation', 'pointer-events:auto',
+  ].join(';');
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    button.textContent = pressed;
+    send({ kind });
+  });
+  return button;
+}
+
 function line(text, style) {
   const node = document.createElement('div');
   node.textContent = text;
@@ -327,31 +346,54 @@ function render(stage) {
 
   // §2.7 items 7, 8 and 9 — the stopped frame. Everything here is static: no counter, no bar, no
   // countdown, because nothing is happening and a screen that suggests otherwise is what made a
-  // frame look like it was rebooting for ever.
+  // frame look like it was rebooting for ever. It sits here until somebody acts, locally or from
+  // the Fleet Manager; nothing on it expires.
+  //
+  // The plain half first, worded by the agent for somebody with no computer experience. The
+  // technical block is at the bottom, after the buttons, because nobody in the room reads it — it
+  // is there to be photographed.
+  for (const said of stage.supportPlain || []) {
+    element.appendChild(line(said, 'font-size:18px;color:#e8e8e8;max-width:44em;margin-top:8px'));
+  }
+
   if (stage.stoppedLine) element.appendChild(line(stage.stoppedLine, 'font-size:18px;color:#e58f8f;max-width:50em;margin-top:10px'));
   if (stage.escalationLine) element.appendChild(line(stage.escalationLine, 'font-size:16px;color:#9a9a9a;max-width:40em'));
   if (stage.contactLine) element.appendChild(line(stage.contactLine, 'font-size:19px;color:#e8e8e8;max-width:40em;margin-top:6px'));
 
-  // §2.5 rung 5: retry is pressable by whoever is standing at the frame, not only from the Fleet
-  // Manager. It sends the same reset the Fleet Manager's retry sends, over the channel that is
-  // already open, and it is offered only when something has actually given up — a button that
-  // resets nothing teaches the person that the button does nothing.
-  if (stage.canRetry) {
-    const retry = document.createElement('button');
-    retry.textContent = 'Try again';
-    retry.style.cssText = [
-      'margin-top:14px', 'padding:16px 34px', 'font-size:20px', 'border-radius:10px',
-      'border:1px solid #3a3a3a', 'background:#1b1b1b', 'color:#e8e8e8', 'cursor:pointer',
-      // The same exemption §2.7 item 4 gives "Reboot now": this is a screen where v1's touch
-      // shield must not block input.
-      'touch-action:manipulation', 'pointer-events:auto',
+  // §2.5 rung 5, in the operator's own shape: two buttons and no timer. "Shutdown -> stops
+  // everything. Or reboot -> forces a new retry." Both are pressable by whoever is standing at the
+  // frame rather than only from the Fleet Manager, both go over the channel that is already open,
+  // and both appear only once something has actually given up — a button that changes nothing
+  // teaches the person that buttons change nothing.
+  if (stage.canRetry || stage.canShutdown) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:14px;align-items:center;justify-content:center;margin-top:18px;flex-wrap:wrap';
+
+    if (stage.canRetry) {
+      row.appendChild(action(stage.restartLabel || 'Restart and try again', 'restart', 'Restarting…'));
+    }
+
+    if (stage.canShutdown) {
+      row.appendChild(action(stage.shutdownLabel || 'Shut down', 'shutdown', 'Shutting down…'));
+    }
+
+    element.appendChild(row);
+  }
+
+  if (stage.supportTechnical && stage.supportTechnical.length > 0) {
+    if (stage.technicalHeading) {
+      element.appendChild(line(stage.technicalHeading, 'font-size:14px;color:#7a7a7a;margin-top:22px'));
+    }
+
+    const block = document.createElement('div');
+    block.style.cssText = [
+      'margin-top:6px', 'padding:12px 16px', 'border:1px solid #2a2a2a', 'border-radius:8px',
+      'background:#141414', 'color:#9a9a9a', 'font-family:ui-monospace,monospace', 'font-size:13px',
+      'line-height:1.5', 'text-align:left', 'max-width:60em', 'white-space:pre-wrap',
+      'word-break:break-word',
     ].join(';');
-    retry.addEventListener('click', () => {
-      retry.disabled = true;
-      retry.textContent = 'Trying again…';
-      send({ kind: 'retry' });
-    });
-    element.appendChild(retry);
+    block.textContent = stage.supportTechnical.join('\n');
+    element.appendChild(block);
   }
 
   if (typeof stage.countdownSeconds === 'number') {

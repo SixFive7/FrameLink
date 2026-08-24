@@ -307,11 +307,212 @@ public static class ReconcileVoice
         }
 
         var tries = resource?.Attempts is > 0 ? resource.Attempts : status.Reconcile.Attempt;
-        var counted = tries == 1
-            ? string.Create(CultureInfo.InvariantCulture, $"{name} failed after 1 try")
-            : string.Create(CultureInfo.InvariantCulture, $"{name} failed after {tries} tries");
+        var counted = resource is { Attempted: false }
+            ? string.Create(CultureInfo.InvariantCulture, $"{name} cannot be put right by this frame")
+            : tries == 1
+                ? string.Create(CultureInfo.InvariantCulture, $"{name} failed after 1 try")
+                : string.Create(CultureInfo.InvariantCulture, $"{name} failed after {tries} tries");
 
         return resource?.Delta is { Length: > 0 } delta ? $"{counted}, {delta}" : counted;
+    }
+
+    /// <summary>
+    /// The heading above the technical block, on both surfaces and in the event trail.
+    /// </summary>
+    public const string TechnicalHeading = "Technical detail, for whoever helps you:";
+
+    /// <summary>The label on the button that restarts the frame and tries again.</summary>
+    /// <remarks>
+    /// <b>It says what it does in the order it does it.</b> The operator's two buttons are
+    /// <i>shutdown</i> and <i>reboot, which forces a new retry</i>, and a button labelled only
+    /// "Try again" would hide the restart from the person pressing it — on a screen in a living
+    /// room, where the frame going dark for a minute is the visible half of what happens next.
+    /// </remarks>
+    public const string RestartButton = "Restart and try again";
+
+    /// <summary>The label on the button that switches the frame off.</summary>
+    public const string ShutdownButton = "Shut down";
+
+    /// <summary>
+    /// How many times this was tried, in plain words — or that it was not tried at all.
+    /// </summary>
+    /// <remarks>
+    /// <b>A gate is the case this exists for.</b> It reaches rung 2 with the budget declared spent
+    /// and nothing attempted, so the ordinary sentence would tell a household the frame had tried
+    /// three times and restarted three times when it had read one value once. The alternative
+    /// wording is not a softer version of the same claim: it says the frame cannot fix this, which
+    /// is the fact that decides whether waiting is any use.
+    /// </remarks>
+    public static string TriesLine(ResourceStatus resource)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+
+        if (!resource.Attempted)
+        {
+            return "The frame did not try to put this right, because there is nothing it could do about it. "
+                + "Somebody has to look at it.";
+        }
+
+        var tries = resource.Attempts > 0 ? resource.Attempts : 1;
+
+        return tries == 1
+            ? "It tried once, restarting the frame to check, and it will not try again on its own."
+            : string.Create(
+                CultureInfo.InvariantCulture,
+                $"It tried {tries} times, restarting the frame each time to check, and it will not try again on its own.");
+    }
+
+    /// <summary>
+    /// <b>The plain half of §2.7's stopped screen</b> — everything a person with no computer
+    /// experience can act on, and nothing else.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Written to <see cref="Firmware.ArrayGateRuling"/>'s pattern, because that pattern was
+    /// built for exactly this reader and works.</b> Two halves, kept apart on purpose: the person
+    /// standing in front of the frame is a family member who has never opened a terminal, and the
+    /// person they will forward this to needs the values. A single message pitched between the two
+    /// is useless to both.
+    /// </para>
+    /// <para>
+    /// Every line comes off the row that gave up, so a frame with two stopped resources can never
+    /// pair one resource's sentence with another's numbers. Empty on a frame that has not stopped.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> SupportPlain(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!HasStopped(status))
+        {
+            return [];
+        }
+
+        var lines = new List<string>(5);
+        var resource = Stopped(status);
+
+        if (resource is null)
+        {
+            // The narration knows the frame has stopped and the pass has not published the row
+            // yet. Saying the little that is certain beats saying nothing for a pass.
+            lines.Add("Something it needs is not right, and it has stopped trying to fix it.");
+            return lines;
+        }
+
+        // Suppressed against everything the surfaces already print, which is the headline, the
+        // detail, and whatever the live narration is still carrying. A frame that gives up without
+        // a reboot in between — a refused reboot is the case — has the narration for this very
+        // resource still published, and the same sentence at two sizes one under the other is the
+        // defect measured on 2026-08-16 with the roles reversed.
+        if (resource.Detected is { Length: > 0 } detected
+            && !string.Equals(detected, Headline(status), StringComparison.Ordinal)
+            && !string.Equals(detected, Detected(status), StringComparison.Ordinal))
+        {
+            lines.Add(detected);
+        }
+
+        if (resource.WhyItMatters is { Length: > 0 } why
+            && !string.Equals(why, Detail(status), StringComparison.Ordinal)
+            && !string.Equals(why, WhyItMatters(status), StringComparison.Ordinal))
+        {
+            lines.Add(why);
+        }
+
+        lines.Add(TriesLine(resource));
+
+        if (resource.Attempted && resource.Gloss is { Length: > 0 } gloss)
+        {
+            lines.Add($"What it tried: {gloss}");
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// <b>The technical half</b> — the block somebody photographs and sends on (§2.7 item 7).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>key: value</c> pairs, one per line, no prose. This is the one screen in the product where
+    /// density beats brevity: the person reading it is going to be asked to relay it, and a message
+    /// trimmed to fit is a message they have to be asked follow-up questions about.
+    /// </para>
+    /// <para>
+    /// <b>Every value is rendered, never re-derived</b> (decision 70). The delta is the string §2.5
+    /// rung 2 recorded, the change is the resource's own verbatim <see cref="ResourceAction"/>, and
+    /// the counts are the ledger's. A value that arrives with newlines in it — the hardware gate's
+    /// whole refusal is one — is split into its own lines rather than flattened into a paragraph,
+    /// because the structure of that message is half of what makes it readable.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> SupportTechnical(AgentStatus status)
+    {
+        ArgumentNullException.ThrowIfNull(status);
+
+        if (!HasStopped(status))
+        {
+            return [];
+        }
+
+        var resource = Stopped(status);
+        var lines = new List<string>(10);
+
+        Add(lines, "resource", resource?.Name ?? status.Reconcile.Resource);
+
+        if (resource is not null)
+        {
+            Add(
+                lines,
+                "tried",
+                resource.Attempted
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{resource.Attempts} of {resource.AttemptBudget}")
+                    : string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"nothing was attempted (this is a precondition, not a repair); budget {resource.AttemptBudget} declared spent"));
+
+            Add(lines, "delta", resource.Delta);
+            Add(lines, "last change", resource.Attempted ? resource.Action : null);
+            Add(
+                lines,
+                "escalations",
+                resource.Escalations > 0
+                    ? string.Create(CultureInfo.InvariantCulture, $"{resource.Escalations}")
+                    : null);
+        }
+
+        Add(
+            lines,
+            "reported",
+            status.Reconcile.Escalations > 0 || resource?.Escalations > 0
+                ? resource?.Kind is ResourceStatusKind.Escalated || status.Reconcile.AdminNotified
+                    ? "yes, the Fleet Manager has it"
+                    : "no, the Fleet Manager could not be reached"
+                : null);
+
+        Add(lines, "device", status.DeviceId);
+        Add(lines, "serial", status.HardwareSerial);
+        Add(lines, "agent", status.AgentVersion);
+
+        return lines;
+
+        static void Add(List<string> lines, string label, string? value)
+        {
+            if (value is not { Length: > 0 })
+            {
+                return;
+            }
+
+            var parts = value.Split('\n');
+
+            lines.Add($"{label}: {parts[0].TrimEnd('\r')}");
+
+            for (var index = 1; index < parts.Length; index++)
+            {
+                lines.Add(parts[index].TrimEnd('\r'));
+            }
+        }
     }
 
     /// <summary>
@@ -367,8 +568,8 @@ public static class ReconcileVoice
     public static string RetryLine(TouchRetryState touch) => touch.Available
         ? string.Create(
             CultureInfo.InvariantCulture,
-            $"Touch the screen and hold for {(int)touch.Hold.TotalSeconds} seconds to try again.")
-        : "This frame has no touchscreen — the Try again button is in the Fleet Manager.";
+            $"Touch the screen and hold for {(int)touch.Hold.TotalSeconds} seconds to restart this frame and try again.")
+        : "This frame has no touchscreen — the button that restarts it and tries again is in the Fleet Manager.";
 
     /// <summary>
     /// §2.7 item 8 — who to contact, in one sentence a non-technical reader can act on.

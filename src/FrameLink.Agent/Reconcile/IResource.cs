@@ -186,6 +186,55 @@ public sealed record ResourceStatus
     /// <summary>Which dependency is holding this resource up (§2.2).</summary>
     public string? BlockedBy { get; init; }
 
+    /// <summary>
+    /// What was detected, in the resource's own plain language — §2.7 item 1, carried on the row
+    /// rather than beside it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Present only on a row that has given up, and that is the whole reason it exists.</b> The
+    /// loop publishes <see cref="State.Narration"/> while it is <i>acting</i>, and the pass that
+    /// escalates is very often not that pass: attempt 3 writes its change, the machine reboots, and
+    /// the new process comes back, verifies, finds the value still wrong and gives up — with a
+    /// narration nobody has published in this process at all. So the two sentences a person can
+    /// actually act on were missing from exactly the screen §2.7 wrote them for.
+    /// </para>
+    /// <para>
+    /// It sits on the row rather than on the status because a frame can have more than one resource
+    /// that gave up, and a screen reading the plain half from one place and the delta from another
+    /// would eventually pair one resource's sentence with another's numbers.
+    /// </para>
+    /// <para>
+    /// Deliberately <i>not</i> on <see cref="ResourceReport"/>: the Fleet Manager already receives
+    /// both sentences in the escalation event's summary, and putting them on every row of every
+    /// report would grow the per-pass payload by two strings times eighty resources to say
+    /// something nothing reads.
+    /// </para>
+    /// </remarks>
+    public string? Detected { get; init; }
+
+    /// <summary>Why it matters, in the resource's own words (§2.7 item 2).</summary>
+    public string? WhyItMatters { get; init; }
+
+    /// <summary>
+    /// Whether anything was actually tried before this resource gave up.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>False for a gate, and the screen would otherwise lie about it.</b> A gate reaches §2.5
+    /// rung 2 with the budget <i>declared</i> spent rather than spent — that is the whole point of
+    /// <see cref="IResource.IsGate"/>, no Act and no reboot — so a row carrying
+    /// <c>Attempts = 3</c> is saying how much budget is gone, not how many times anything happened.
+    /// Rendered without this flag it produced <i>"firmware.xvf3800.recognised failed after 3
+    /// tries"</i> about a unit that was read exactly once and never touched.
+    /// </para>
+    /// <para>
+    /// True everywhere else, including the reboot-refused and conflict paths: those really did act,
+    /// and the count really is a count.
+    /// </para>
+    /// </remarks>
+    public bool Attempted { get; init; } = true;
+
     /// <summary>How many times the operator has been notified about this resource (§2.5).</summary>
     public int Escalations { get; init; }
 

@@ -476,6 +476,15 @@ public static class StageRenderer
                 AddField(lines, "Stopped", stopped, inner, colour);
             }
 
+            // The plain half (§2.7 item 7, and the operator's "as much relevant information as
+            // possible"). It is written for the person in the room and carries no numbers at all;
+            // the technical block below carries nothing else. ArrayGateRuling's refusals are the
+            // pattern, and the two halves are kept apart there for the same reason.
+            foreach (var line in ReconcileVoice.SupportPlain(status))
+            {
+                AddField(lines, string.Empty, line, inner, colour);
+            }
+
             if (status.Reconcile.EscalationLine is { Length: > 0 } escalation)
             {
                 AddField(lines, string.Empty, escalation, inner, colour);
@@ -488,6 +497,22 @@ public static class StageRenderer
             // frame without one — every frame whose panel overlay has not been applied yet — names
             // the Fleet Manager, which is then true rather than a hedge.
             AddField(lines, string.Empty, ReconcileVoice.RetryLine(status.Touch), inner, colour);
+
+            // The technical half, last, because it is the part nobody in the room reads: it is
+            // there to be photographed. Every line is already a complete `key: value` pair — the
+            // splitting happens in ReconcileVoice so both surfaces show the same block — so this
+            // never hands a multi-line value to a wrapper that would flatten it.
+            var technical = ReconcileVoice.SupportTechnical(status);
+            if (technical.Count > 0)
+            {
+                lines.Add(Compose([], inner, colour));
+                AddField(lines, string.Empty, ReconcileVoice.TechnicalHeading, inner, colour);
+
+                foreach (var line in technical)
+                {
+                    AddField(lines, string.Empty, line, inner, colour);
+                }
+            }
         }
 
         return lines;

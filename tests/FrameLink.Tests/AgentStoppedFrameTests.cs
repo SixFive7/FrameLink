@@ -444,7 +444,7 @@ public sealed class AgentStoppedFrameTests
         // panel overlay has not been applied yet.
         var frame = StageRenderer.Render(Stopped, DateTimeOffset.UnixEpoch, tick: 0, 160, 30, colour: false);
 
-        Assert.Contains("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
+        Assert.Contains("the button that restarts it and tries again is in the Fleet Manager", frame, StringComparison.Ordinal);
         Assert.DoesNotContain("hold for", frame, StringComparison.Ordinal);
     }
 }

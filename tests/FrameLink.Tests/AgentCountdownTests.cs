@@ -779,7 +779,7 @@ public sealed class AgentReconcileNarrationTests
             colour: false);
 
         Assert.Contains("Ask Jori — 06 12 34 56 78.", frame, StringComparison.Ordinal);
-        Assert.Contains("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
+        Assert.Contains("the button that restarts it and tries again is in the Fleet Manager", frame, StringComparison.Ordinal);
     }
 
     [Fact]

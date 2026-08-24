@@ -273,7 +273,22 @@ public sealed class BrowserStage
             StoppedLine = ReconcileVoice.StoppedLine(status),
             EscalationLine = hasStopped ? status.Reconcile.EscalationLine : null,
             ContactLine = hasStopped ? ReconcileVoice.ContactLine(status.Contact) : null,
+
+            // The operator's two buttons, offered together and only on a frame that has stopped.
+            // The labels travel with them for the same reason every other sentence does: the
+            // wording is decided once, in ReconcileVoice, so the console and the page cannot come
+            // to describe the same press differently.
             CanRetry = hasStopped,
+            CanShutdown = hasStopped,
+            RestartLabel = hasStopped ? ReconcileVoice.RestartButton : null,
+            ShutdownLabel = hasStopped ? ReconcileVoice.ShutdownButton : null,
+
+            // §2.7 item 7 in the shape the operator asked for: as much relevant information as
+            // possible, in two halves — one a person with no computer experience can act on, one
+            // they can photograph and send to somebody technical.
+            SupportPlain = hasStopped ? ReconcileVoice.SupportPlain(status) : null,
+            SupportTechnical = hasStopped ? ReconcileVoice.SupportTechnical(status) : null,
+            TechnicalHeading = hasStopped ? ReconcileVoice.TechnicalHeading : null,
             CountdownSeconds = status.Reconcile.Countdown is { } countdown
                 ? (int)countdown.Remaining(now).TotalSeconds
                 : null,

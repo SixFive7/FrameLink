@@ -675,7 +675,8 @@ public sealed class ReconcileLoop
                         AttemptsWithin(pending.Attempt, _services.Options.AttemptBudget),
                         observation.Delta,
                         pending.Change,
-                        cancellationToken)
+                        cancellationToken,
+                        pending.Gloss)
                     .ConfigureAwait(false);
 
             if (failed.Kind.HasGivenUp())
@@ -1089,6 +1090,15 @@ public sealed class ReconcileLoop
                 Attempts = attempt,
                 Delta = observation.Delta,
                 Change = action.Change,
+
+                // The gloss is deliberately *not* written here, and the reason is worth recording
+                // because writing it looks obviously right. Every path that reaches a give-up
+                // carries the gloss with it — the failure paths pass it to RecordFailureAsync, and
+                // a process that died mid-apply reads it back off PendingApply — while a change
+                // that succeeds has its whole entry rebuilt by Held(), which keeps four fields and
+                // drops the rest. So a copy here would be superseded on failure and erased on
+                // success: a line no behaviour depends on, which is a line that will eventually be
+                // wrong without anything noticing.
                 NextAttemptUtc = null,
             }));
 
@@ -1181,7 +1191,7 @@ public sealed class ReconcileLoop
                 // be mid-apply.
                 var delta = $"expected a reboot to prove '{change}', observed: {crossing.Detail ?? "the reboot was refused"}";
                 _services.Journal.Update(state => state with { Pending = null });
-                var failed = await RecordFailureAsync(resource, attempt, delta, change, cancellationToken)
+                var failed = await RecordFailureAsync(resource, attempt, delta, change, cancellationToken, gloss)
                     .ConfigureAwait(false);
 
                 return await FinishAsync(
@@ -1259,7 +1269,7 @@ public sealed class ReconcileLoop
 
                 var failed = IsConflict(reverted)
                     ? await GiveUpOnConflictAsync(resource, reverted, after, cancellationToken).ConfigureAwait(false)
-                    : await RecordFailureAsync(resource, attempt, after.Delta, change, cancellationToken)
+                    : await RecordFailureAsync(resource, attempt, after.Delta, change, cancellationToken, gloss)
                         .ConfigureAwait(false);
 
                 return await FinishAsync(
@@ -1320,19 +1330,36 @@ public sealed class ReconcileLoop
     }
 
     /// <summary>The escalation ladder of §2.5, one rung at a time.</summary>
+    /// <param name="resource">The resource that failed.</param>
+    /// <param name="attempt">Which attempt this was.</param>
+    /// <param name="delta">Expected versus observed, in the one form §2.5 rung 2 requires.</param>
+    /// <param name="change">The exact change that was tried.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    /// <param name="gloss">
+    /// The plain-language gloss on <paramref name="change"/>, where the caller has one.
+    /// </param>
+    /// <remarks>
+    /// The gloss is optional because two of the four callers genuinely have none: a gate never
+    /// acted, and a conflict give-up is reporting a change that <i>worked</i>. Where it is absent
+    /// the stored one is kept rather than overwritten with null - the ledger's copy is the only one
+    /// that survives the reboot between the attempt and the verdict.
+    /// </remarks>
     private async Task<ResourceStatus> RecordFailureAsync(
         IResource resource,
         int attempt,
         string delta,
         string change,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? gloss = null)
     {
         var options = _services.Options;
 
         if (attempt < options.AttemptBudget)
         {
             // Rung 1: retry with a growing delay. The wait exists to stop a reboot loop wearing
-            // the hardware (§2.4), not to be polite about it.
+            // the hardware (§2.4), not to be polite about it. The delay is a pure function of
+            // the attempt number - the jitter that used to shave it is gone, so two runs of the
+            // same fault on the same frame wait exactly the same amount of time.
             var wait = _retry.Delay(attempt);
             var next = _services.Clock.UtcNow + wait;
 
@@ -1343,6 +1370,7 @@ public sealed class ReconcileLoop
                     Attempts = attempt,
                     Delta = delta,
                     Change = change,
+                    Gloss = gloss ?? ReconcileJournal.EntryFor(state, resource.Name).Gloss,
                     NextAttemptUtc = next,
                 }));
 
@@ -1382,6 +1410,8 @@ public sealed class ReconcileLoop
 
         _services.Log.Fail($"{resource.Name}: this frame has stopped reconciling and is waiting for a person.");
 
+        var kept = gloss ?? previous.Gloss;
+
         _services.Journal.Update(state => ReconcileJournal.WithEntry(
             state,
             ReconcileJournal.EntryFor(state, resource.Name) with
@@ -1391,6 +1421,7 @@ public sealed class ReconcileLoop
                 EscalationNotified = notified,
                 Delta = delta,
                 Change = change,
+                Gloss = kept,
                 NextAttemptUtc = null,
             }));
 
@@ -1404,6 +1435,14 @@ public sealed class ReconcileLoop
             Kind = notified ? ResourceStatusKind.Escalated : ResourceStatusKind.Degraded,
             Delta = delta,
             Action = change,
+            Gloss = kept,
+
+            // The two sentences the person in front of the frame can act on, carried on the row
+            // that gave up so the screen never has to pair one resource's words with another's
+            // numbers. This is the pass that stops the frame, so this is where they have to be.
+            Detected = resource.Detected,
+            WhyItMatters = resource.WhyItMatters,
+            Attempted = !resource.IsGate,
             Attempts = attempt,
             AttemptBudget = options.AttemptBudget,
             Escalations = escalations,
@@ -1483,6 +1522,15 @@ public sealed class ReconcileLoop
             Kind = notified ? ResourceStatusKind.Escalated : ResourceStatusKind.Degraded,
             Delta = entry.Delta,
             Action = entry.Change,
+            Gloss = entry.Gloss,
+
+            // Every later pass on a stopped frame comes through here, including the first pass of a
+            // process that booted into an escalation it inherited from the ledger. The row has to
+            // carry the plain half then too, or the screen would say less after a restart than it
+            // said before one.
+            Detected = resource.Detected,
+            WhyItMatters = resource.WhyItMatters,
+            Attempted = !resource.IsGate,
             Attempts = Spent(entry),
             AttemptBudget = _services.Options.AttemptBudget,
             Escalations = entry.Escalations,

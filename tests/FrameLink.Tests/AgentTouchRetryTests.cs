@@ -302,11 +302,11 @@ public sealed class AgentTouchRetryTests
         // Decision 77, and the whole point of it: the sentence is chosen from what the agent found
         // rather than from what was assumed.
         Assert.Equal(
-            "This frame has no touchscreen — the Try again button is in the Fleet Manager.",
+            "This frame has no touchscreen — the button that restarts it and tries again is in the Fleet Manager.",
             ReconcileVoice.RetryLine(TouchRetryState.None));
 
         Assert.Equal(
-            "Touch the screen and hold for 3 seconds to try again.",
+            "Touch the screen and hold for 3 seconds to restart this frame and try again.",
             ReconcileVoice.RetryLine(new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(3), null)));
     }
 
@@ -321,8 +321,8 @@ public sealed class AgentTouchRetryTests
             40,
             colour: false);
 
-        Assert.Contains("Touch the screen and hold for 3 seconds to try again.", frame, StringComparison.Ordinal);
-        Assert.DoesNotContain("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
+        Assert.Contains("Touch the screen and hold for 3 seconds to restart this frame and try again.", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("is in the Fleet Manager", frame, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -333,7 +333,7 @@ public sealed class AgentTouchRetryTests
         // frame the Fleet Manager really is where the button is.
         var frame = StageRenderer.Render(Stopped, DateTimeOffset.UnixEpoch, tick: 0, 160, 40, colour: false);
 
-        Assert.Contains("the Try again button is in the Fleet Manager", frame, StringComparison.Ordinal);
+        Assert.Contains("the button that restarts it and tries again is in the Fleet Manager", frame, StringComparison.Ordinal);
         Assert.DoesNotContain("hold for", frame, StringComparison.Ordinal);
     }
 

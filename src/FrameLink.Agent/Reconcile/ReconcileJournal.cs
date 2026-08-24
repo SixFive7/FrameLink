@@ -129,6 +129,20 @@ public sealed record ResourceLedgerEntry
 
     /// <summary>The last change made.</summary>
     public string? Change { get; init; }
+
+    /// <summary>
+    /// The plain-language gloss on <see cref="Change"/> — §2.7 item 3's second register, made
+    /// durable for the same reason <see cref="Delta"/> is.
+    /// </summary>
+    /// <remarks>
+    /// <b>Without this the plain half of the repair screen dies with the process that wrote it.</b>
+    /// The gloss is composed by the resource during its Act and published as narration, and the
+    /// pass that gives up is usually a <i>different</i> process — attempt 3 writes, the machine
+    /// reboots, and the frame that comes back is the one that verifies, fails and stops. It then
+    /// had the exact command and the expected-versus-observed delta, both durable, and none of the
+    /// sentence explaining what that command was for.
+    /// </remarks>
+    public string? Gloss { get; init; }
 }
 
 /// <summary>Everything the loop persists under <c>/var/lib/fl-agent</c>.</summary>

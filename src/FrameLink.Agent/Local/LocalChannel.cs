@@ -43,6 +43,35 @@ public sealed record PageMessage
     public const string KindRetry = "retry";
 
     /// <summary>
+    /// Somebody pressed <b>Restart and try again</b> on the stopped screen.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The operator's second button, and it is a stronger verb than <see cref="KindRetry"/>.</b>
+    /// A retry resets the attempt budget and lets the next ordinary pass pick it up; this resets the
+    /// budget <i>and</i> restarts the frame, which is what the operator specified: "reboot -> forces
+    /// a new retry". It is the same reset with a reboot after it, not a second recovery path.
+    /// </para>
+    /// <para>
+    /// <see cref="KindRetry"/> stays handled because a page can outlive the agent that served it
+    /// (§2.10's page-freshness rule exists for exactly that), and a stale page pressing the old
+    /// button must still clear the budget rather than doing nothing.
+    /// </para>
+    /// </remarks>
+    public const string KindRestart = "restart";
+
+    /// <summary>
+    /// Somebody pressed <b>Shut down</b> on the stopped screen.
+    /// </summary>
+    /// <remarks>
+    /// <b>"Stops everything", in the operator's words.</b> It is the only affordance in the product
+    /// that ends with the frame off, and it exists because the alternative a household reaches for
+    /// is the wall socket — which is a write-cache and an SD card away from a frame that does not
+    /// come back. Nothing schedules it, nothing retries it, and no timer produces it.
+    /// </remarks>
+    public const string KindShutdown = "shutdown";
+
+    /// <summary>
     /// Somebody at the frame took whatever the firmware screen was offering (decision 91).
     /// </summary>
     /// <remarks>
@@ -216,7 +245,7 @@ public sealed record StageMessage
     public string? ContactLine { get; init; }
 
     /// <summary>
-    /// §2.7 item 9 — whether "Try again" should be offered on this screen (decision 72).
+    /// §2.7 item 9 — whether the restart-and-try-again button should be offered (decision 72).
     /// </summary>
     /// <remarks>
     /// True exactly when something has given up. A retry with a full budget already available
@@ -224,6 +253,40 @@ public sealed record StageMessage
     /// harm as a button that is not wired up.
     /// </remarks>
     public bool CanRetry { get; init; }
+
+    /// <summary>Whether the second button — <b>shut down</b> — should be offered.</summary>
+    /// <remarks>
+    /// <b>It appears with the first and never on its own.</b> The two buttons are one decision the
+    /// person is being asked to make: try again, or stop. Offering the off switch on a screen that
+    /// was not asking anything would put a power-off on a working frame's photographs.
+    /// </remarks>
+    public bool CanShutdown { get; init; }
+
+    /// <summary>The label on the restart button, worded once by the agent.</summary>
+    public string? RestartLabel { get; init; }
+
+    /// <summary>The label on the shutdown button, worded once by the agent.</summary>
+    public string? ShutdownLabel { get; init; }
+
+    /// <summary>
+    /// The plain half of the stopped screen — the part a person with no computer experience acts
+    /// on.
+    /// </summary>
+    /// <remarks>
+    /// Composed in <see cref="State.ReconcileVoice"/> so the page and the console say the same
+    /// thing, and a list rather than a paragraph so a surface can space the sentences apart.
+    /// </remarks>
+    public IReadOnlyList<string>? SupportPlain { get; init; }
+
+    /// <summary>The technical block, one <c>key: value</c> pair per entry.</summary>
+    /// <remarks>
+    /// Rendered in a monospaced block and never wrapped into prose: this is the thing somebody
+    /// photographs and sends on, and its shape is half of what makes it readable.
+    /// </remarks>
+    public IReadOnlyList<string>? SupportTechnical { get; init; }
+
+    /// <summary>The heading above <see cref="SupportTechnical"/>.</summary>
+    public string? TechnicalHeading { get; init; }
 
     /// <summary>
     /// §2.10's annotation, rendered only at fault level.
@@ -394,6 +457,12 @@ public sealed class LocalChannel
 
     /// <summary>Raised when somebody presses "Try again" at the frame (§2.5 rung 5).</summary>
     public event Action? RetryRequested;
+    /// <summary>Raised when the page asks for the restart of §2.5 rung 5's two buttons.</summary>
+    public event Action? RestartRequested;
+
+    /// <summary>Raised when the page asks the frame to switch itself off.</summary>
+    public event Action? ShutdownRequested;
+
 
     /// <summary>
     /// Raised when somebody at the frame answers the firmware screen (decision 91).
@@ -550,6 +619,12 @@ public sealed class LocalChannel
                 break;
             case PageMessage.KindRetry:
                 RetryRequested?.Invoke();
+                break;
+            case PageMessage.KindRestart:
+                RestartRequested?.Invoke();
+                break;
+            case PageMessage.KindShutdown:
+                ShutdownRequested?.Invoke();
                 break;
             case PageMessage.KindArrayFlash:
                 ArrayFlashAnswered?.Invoke();
