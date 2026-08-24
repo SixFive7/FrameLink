@@ -427,6 +427,35 @@ public sealed class AgentHost
                 development),
         };
 
+        // Decision 79. The floor wraps the boundary rather than sitting inside the loop, so it holds
+        // for every caller of the boundary and needs to know nothing about resources, attempts or
+        // escalations — which is the whole requirement, because the livelock it exists for is one
+        // where nothing is failing. Decision 91 wraps that again, outermost, so a firmware write in
+        // progress refuses the reboot before the floor even counts it. Not an exception to §2.4: the
+        // resource still has no say and still reboots for every change, and a refusal is an outcome
+        // §2.4 already has a first-class answer for — the change is written, it cannot be proven, it
+        // spends an attempt and reaches a person.
+        //
+        // A local rather than an initialiser expression because the loop is no longer the only
+        // caller: a supervised loop that ends restarts the frame through this same chain, so a
+        // firmware write holds it off and the floor counts it, exactly as they do for a resource.
+        var rebootFloor = new RebootFloor(
+            new SystemRebootBoundary(new SystemdControl(), _log),
+            journal,
+            _clock,
+            _log,
+            reconcileOptions.RebootFloorCount,
+            reconcileOptions.RebootFloorWindow);
+
+        var reboots = new RebootHold(rebootFloor, () => flashWindow.Reason, _log);
+
+        // The backstop under the ladder, and the only protection here that does not read the
+        // journal. Its size is the ladder's own budget so the two can never promise different
+        // numbers of restarts, and its file is counted rather than parsed so that a card which has
+        // gone read-only, been wiped, or is truncating every write can only ever cost this frame
+        // restarts — never hand it fresh ones.
+        var allowance = new RebootAllowance(store, _log, reconcileOptions.AttemptBudget);
+
         var loop = new ReconcileLoop(new ReconcileServices
         {
             Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
@@ -466,25 +495,7 @@ public sealed class AgentHost
             Interlock = interlock,
             Journal = journal,
             Boot = boot,
-            // Decision 79. The floor wraps the boundary rather than sitting inside the loop, so it
-            // holds for every caller of the boundary and needs to know nothing about resources,
-            // attempts or escalations — which is the whole requirement, because the livelock it
-            // exists for is one where nothing is failing.
-            // Decision 91 wraps that again, outermost, so a firmware write in progress refuses the
-            // reboot before the floor even counts it. Not an exception to §2.4: the resource still
-            // has no say and still reboots for every change, and a refusal is an outcome §2.4
-            // already has a first-class answer for — the change is written, it cannot be proven, it
-            // spends an attempt and reaches a person.
-            Reboots = new RebootHold(
-                new RebootFloor(
-                    new SystemRebootBoundary(new SystemdControl(), _log),
-                    journal,
-                    _clock,
-                    _log,
-                    reconcileOptions.RebootFloorCount,
-                    reconcileOptions.RebootFloorWindow),
-                () => flashWindow.Reason,
-                _log),
+            Reboots = reboots,
             Countdown = countdown,
             Telemetry = outbox,
             Hub = hub,
@@ -496,13 +507,31 @@ public sealed class AgentHost
             DeviceId = identity.DeviceId,
         };
 
+        // <b>What "try again" means to everything a person can press.</b> Three callers reach it —
+        // the button on the repair page, the hold on the panel, and an inbound retry from the Fleet
+        // Manager — and decision 72's rule is that they must not come to mean different things, so
+        // there is one function rather than three call sites.
+        //
+        // It clears three things, and all three are already documented as behaving this way.
+        // Decision 67's reasoning covers all of them: a person has arrived. Decision 79's floor
+        // grants a fresh window, which its own remarks promise and which nothing had ever called —
+        // so a frame that had reached the floor could not be recovered by the button built for it.
+        // The restart allowance is refilled for the same reason. And the attempt budgets are
+        // cleared last, because that is the one of the three the walk reads on its next pass.
+        IReadOnlyList<string> ResetEveryBudget()
+        {
+            rebootFloor.Forget();
+            allowance.Refill();
+            return loop.ResetExhaustedBudgets();
+        }
+
         // The other end of the local channel's retry, now that there is a loop to reset. Nothing
         // is forced: the budget is cleared and the walk picks it up on its next pass, which is
         // exactly what the Fleet Manager's retry does, for the reason RetryRequest records — a
         // transient needing two attempts would defeat a single forced one.
         retryFromFrame = () =>
         {
-            var reset = loop.ResetExhaustedBudgets();
+            var reset = ResetEveryBudget();
             _log.Info(reset.Count > 0
                 ? $"Somebody at the frame asked it to try again: {string.Join(", ", reset)}."
                 : "Somebody at the frame asked it to try again; nothing had given up.");
@@ -514,7 +543,7 @@ public sealed class AgentHost
         // mean different things (decision 72's rule, applied to the verb that grew.)
         recovery = new FrameRecovery(new FrameRecoveryServices
         {
-            ResetBudgets = loop.ResetExhaustedBudgets,
+            ResetBudgets = ResetEveryBudget,
             SystemControl = new SystemdControl(),
             Log = _log,
 
@@ -640,7 +669,7 @@ public sealed class AgentHost
                     return;
                 }
 
-                var reset = loop.ResetExhaustedBudgets();
+                var reset = ResetEveryBudget();
                 if (reset.Count > 0)
                 {
                     _log.Info($"The Fleet Manager asked this frame to try again: {string.Join(", ", reset)}.");
@@ -823,82 +852,98 @@ public sealed class AgentHost
         var why = DescribeEnd(ended);
         _log.Fail($"The '{ended.Name}' loop ended while the agent was still running: {why}");
 
+        var ranFor = _clock.UtcNow - startedUtc;
+
         var verdict = AgentLoopFailures.Record(
             journal,
             reconcileOptions,
             ended.Name,
             ended.Purpose,
             why,
-            _clock.UtcNow - startedUtc,
+            ranFor,
             notified: false);
 
         // The same screen with the same information, through the same ledger every resource uses:
         // ReconcileLoop.HasStopped now reads this entry, decision 68 stops the pass around it, and
         // the row is rendered from the ledger by the walk's own orphan path. Published here as well
         // as journalled, because the loop that ended may be the one that would have published it.
-        hub.Publish(status => status with
+        void Report(AgentLoopVerdict current) => hub.Publish(status => status with
         {
-            Resources = WithRow(status.Resources, verdict.Row),
+            Resources = WithRow(status.Resources, current.Row),
             Drifted = true,
             Reconcile = status.Reconcile with
             {
-                LoopState = verdict.Stopped ? LoopStateNames.Escalated : LoopStateNames.Reconciling,
-                Resource = verdict.Resource,
+                LoopState = current.Stopped ? LoopStateNames.Escalated : LoopStateNames.Reconciling,
+                Resource = current.Resource,
                 Phase = null,
-                Attempt = verdict.Attempts,
-                AttemptBudget = verdict.Budget,
+                Attempt = current.Attempts,
+                AttemptBudget = current.Budget,
                 Countdown = null,
-                Escalations = verdict.Row.Escalations,
+                Escalations = current.Row.Escalations,
                 AdminNotified = false,
             },
         });
 
-        try
+        async Task AnnounceAsync(AgentLoopVerdict current)
         {
-            await outbox.EventAsync(
-                new DeviceEvent
-                {
-                    DeviceId = identity.DeviceId,
-                    Kind = verdict.Stopped ? DeviceEventKinds.Escalation : DeviceEventKinds.Drift,
-                    OccurredUtc = _clock.UtcNow,
-                    Resource = verdict.Resource,
-                    Summary = $"{AgentLoopFailures.Detected} {AgentLoopFailures.WhyItMatters}",
-                    Delta = verdict.Row.Delta,
-                    Attempts = verdict.Attempts,
-                },
-                CancellationToken.None).ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
-        {
-            // The buffer this writes to is on the same card the journal is on, and the failure
-            // being reported may well be the reason it cannot be written. A second exception raised
-            // here would replace the reason in the log with a consequence of it, which is exactly
-            // how the original twenty-nine-minute stall stayed unexplained.
-            _log.Fail($"The failure of '{ended.Name}' could not be reported to the Fleet Manager: {exception.Message}");
-        }
-
-        if (!verdict.Stopped)
-        {
-            // Attempts one and two: stand down and let the unit's Restart=always bring the agent
-            // straight back. That is this failure's version of "the system reboots and tries
-            // again" — the thing that failed is a piece of this process, and a fresh process is the
-            // cheapest honest retry. The only thing that must not happen is the reason going
-            // unrecorded (§1.2.3), and it is now in the ledger as well as in the log.
-            _log.Fail(
-                $"Standing down so the agent restarts: attempt {verdict.Attempts} of {verdict.Budget} on '{ended.Name}'.");
-
-            await shutdown.CancelAsync().ConfigureAwait(false);
-            await SettleAsync(running).ConfigureAwait(false);
-            return ExitCodes.Unrecoverable;
+            try
+            {
+                await outbox.EventAsync(
+                    new DeviceEvent
+                    {
+                        DeviceId = identity.DeviceId,
+                        Kind = current.Stopped ? DeviceEventKinds.Escalation : DeviceEventKinds.Drift,
+                        OccurredUtc = _clock.UtcNow,
+                        Resource = current.Resource,
+                        Summary = $"{AgentLoopFailures.Detected} {AgentLoopFailures.WhyItMatters}",
+                        Delta = current.Row.Delta,
+                        Attempts = current.Attempts,
+                    },
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                // The buffer this writes to is on the same card the journal is on, and the failure
+                // being reported may well be the reason it cannot be written. A second exception
+                // raised here would replace the reason in the log with a consequence of it, which is
+                // exactly how the original twenty-nine-minute stall stayed unexplained.
+                _log.Fail($"The failure of '{ended.Name}' could not be reported to the Fleet Manager: {exception.Message}");
+            }
         }
 
-        // Attempt three. <b>It does not restart again</b> — that is the operator's rule for every
-        // other failure and this is not a special case. The surviving loops keep running so the
-        // screen says what happened and the two buttons on it still work, and the frame waits for
-        // a person exactly as it does for a resource that has given up.
-        _log.Fail(
-            $"'{ended.Name}' has ended {verdict.Attempts} times. This frame has stopped and is waiting for a person: "
-            + "restart it or shut it down from its own screen, or restart it from the Fleet Manager.");
+        // <b>Reported before the restart is asked for, never after.</b> `systemctl reboot` returns
+        // as soon as the job is queued and the machine is gone a second or two later, which is not
+        // long enough to be sure a write to the telemetry buffer has landed. A frame that announced
+        // the failure only after asking for the restart would lose the announcement for exactly the
+        // two attempts that take one.
+        Report(verdict);
+        await AnnounceAsync(verdict).ConfigureAwait(false);
+
+        // <b>Attempts one and two reboot the frame; the third does not.</b> The decision is a
+        // function of its own rather than a block here, because it is the one behaviour on this path
+        // that a test can drive end to end — wipe the journal before every boot and assert that the
+        // cascade still stops after three, which is the whole of what the operator asked for.
+        var decided = await AgentLoopFailures
+            .RestartOrStopAsync(
+                journal,
+                reconcileOptions,
+                allowance,
+                reboots,
+                verdict,
+                ranFor,
+                why,
+                _log,
+                CancellationToken.None)
+            .ConfigureAwait(false);
+
+        if (decided.Refusal is { Length: > 0 })
+        {
+            // The restart was refused, so the ladder ended there instead of on the third attempt.
+            // Both the row and the event changed, so both are sent again — the first pair said a
+            // loop had died, and this pair says the frame is not coming back on its own.
+            Report(decided.Verdict);
+            await AnnounceAsync(decided.Verdict).ConfigureAwait(false);
+        }
 
         try
         {
@@ -906,9 +951,14 @@ public sealed class AgentHost
         }
         catch (OperationCanceledException)
         {
-            // Somebody pressed a button, systemd stopped the unit, or an update is standing this
-            // process aside.
+            // Somebody pressed a button, systemd stopped the unit, the machine is going down for the
+            // restart asked for above, or an update is standing this process aside.
         }
+
+        // The surviving loops each own something — a browser session, a child process, a socket, a
+        // GPIO claim — and this is the one path that used to leave them to process death. It costs
+        // nothing on the way to a reboot, and it is what stops a shutdown from being a kill.
+        await SettleAsync(running).ConfigureAwait(false);
 
         return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Unrecoverable;
     }

@@ -24,14 +24,21 @@ public readonly record struct RebootAllowanceGrant(bool Granted, int Remaining, 
 /// <remarks>
 /// <para>
 /// <b>The gap it closes.</b> §2.5's ladder of three is durable state, and every protection built on
-/// it inherits the durable state's failure modes. A frame whose card has gone read-only, whose
-/// state directory has been removed, or whose journal is truncated on every boot reads an empty
-/// ledger, calls the loop death that just happened <i>attempt one of three</i>, restarts, and reads
-/// an empty ledger again. Nothing about that is a failure the ladder can see, because from the
-/// ladder's point of view it is always the first attempt. <see cref="RebootFloor"/> — decision 79 —
-/// does not help: its list of recent reboots lives in the same journal, so it comes back empty
-/// alongside everything else. This project has already produced a 55-boot cascade from a single
-/// zero, and that is the shape of it.
+/// it inherits the durable state's failure modes. An empty ledger makes the loop death that just
+/// happened <i>attempt one of three</i>, so the frame restarts, reads an empty ledger again, and
+/// nothing about that is a failure the ladder can see: from the ladder's point of view it is always
+/// the first attempt. This project has already produced a 55-boot cascade from a single zero, and
+/// that is the shape of it.
+/// </para>
+/// <para>
+/// <b>Two ways a ledger comes back empty are left, and this is what covers them.</b>
+/// <see cref="ReconcileJournal.Unreadable"/> now tells a lost record apart from an absent one, and
+/// <see cref="RebootFloor"/> refuses while it is set — so a journal that is there and cannot be
+/// parsed no longer buys anything. What that cannot cover is a journal that is <i>genuinely
+/// absent</i>, which is deliberately read as a first boot and is what a wiped state directory, a
+/// re-flashed card and a script that tidies <c>/var/lib</c> all look like; and a journal that reads
+/// perfectly and cannot be <i>written</i>, where every counter stays honestly at its old value for
+/// ever and no read ever fails. Neither is a fault any reader of that file can see.
 /// </para>
 /// <para>
 /// <b>So this counts down rather than up, and absence means exhausted.</b> A counter of restarts
