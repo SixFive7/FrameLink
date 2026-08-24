@@ -12,6 +12,14 @@ using FrameLink.Agent.Update;
 using FrameLink.Control.Firmware;
 using FrameLink.Protocol;
 
+// The pin is one file, `src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs`, compiled into both
+// programs — so both namespaces above carry a type of each name and every unqualified use here
+// would be ambiguous. The agent's compilation is the one this file means everywhere; the Fleet
+// Manager's is named in full, once, where ControlArrayFlashTests checks the two agree.
+using XvfFirmwareImage = FrameLink.Agent.Firmware.XvfFirmwareImage;
+using XvfFirmwarePin = FrameLink.Agent.Firmware.XvfFirmwarePin;
+using XvfFirmwareRole = FrameLink.Agent.Firmware.XvfFirmwareRole;
+
 namespace FrameLink.Tests;
 
 /// <summary>
@@ -88,7 +96,7 @@ public sealed class AgentArrayFlashTests
         // content-addressed; the digest catches everything else.
         var pin = XvfFirmwarePin.Current;
 
-        Assert.Equal(3, pin.Images.Count);
+        Assert.Single(pin.Images);
 
         foreach (var image in pin.Images)
         {
@@ -109,12 +117,14 @@ public sealed class AgentArrayFlashTests
             Assert.DoesNotContain("path=xmos_firmwares/usb&", probe, StringComparison.Ordinal);
         }
 
-        // Recovery is a pair and both halves ship: the blank image erases a half-written partition
-        // and the fallback firmware goes back on afterwards. One without the other is a route with a
-        // hole in it.
-        Assert.Equal("4mb_all_ff.bin", pin.Recovery.Name);
-        Assert.Equal(4_194_304, pin.Recovery.SizeBytes);
-        Assert.Equal("2 0 6", pin.Fallback.Version);
+        // One image, and the singleness is the assertion. A v2.0.6 fallback and Seeed's 4 MiB
+        // all-0xFF erase image stood beside the target until 2026-08-24, and both went with the
+        // pre-flight that required them — XvfFirmwarePin carries the whole account. A second image
+        // arriving here should be somebody's decision, which is what this pins.
+        Assert.Single(pin.Images);
+        Assert.Equal(XvfFirmwareRole.Target, pin.Images[0].Role);
+        Assert.Equal("2 1 0", pin.Target.Version);
+        Assert.DoesNotContain(pin.Images, image => image.Name.Contains("all_ff", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -163,11 +173,11 @@ public sealed class AgentArrayFlashTests
 
         Assert.True((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
 
-        fixture.Damage(fixture.Pin.Recovery);
+        fixture.Damage(fixture.Pin.Target);
         var after = await resource.ObserveAsync(TestContext.Current.CancellationToken);
 
         Assert.False(after.InSync);
-        Assert.Contains("4mb_all_ff.bin", after.Observed, StringComparison.Ordinal);
+        Assert.Contains(fixture.Pin.Target.Name, after.Observed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -281,12 +291,19 @@ public sealed class AgentArrayFlashTests
     {
         // The version string is not the identity: the same version has shipped twice with different
         // bytes. So the authorisation names the digest, and a digest that is not the pinned one
-        // authorises nothing — including the digest of the *fallback* image, which is a real,
-        // verified, present file that this path must still never write.
+        // authorises nothing — including the digests of the two images this project used to pin and
+        // no longer does, which is the case a stale authorisation composed before the kit went
+        // would present.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
 
-        foreach (var wrong in new[] { fixture.Pin.Fallback.Sha256, fixture.Pin.Recovery.Sha256, "2.1.0", new string('0', 64) })
+        var retired = new[]
+        {
+            "c95fd3dec7597c72a24bc7e5212e6db136144956d5569f24b518ecfc1540ef09",
+            "cd3517473707d59c3d915b52a3e16213cadce80d9ffb2b4371958fb7acb51a08",
+        };
+
+        foreach (var wrong in new[] { retired[0], retired[1], "2.1.0", new string('0', 64) })
         {
             fixture.Settings[ArrayFirmwareFlash.AuthorisationKey] = wrong;
             var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
@@ -298,7 +315,14 @@ public sealed class AgentArrayFlashTests
     }
 
     // ---------------------------------------------------------------------------------------
-    // Pre-flight: never write without a verified image and a verified way back
+    // Pre-flight: never write an image this frame cannot prove is the pinned one
+    //
+    // A second pre-flight stood here — `A_missing_way_back_stops_the_write_before_it_starts` —
+    // which refused unless a v2.0.6 fallback and Seeed's 4 MiB erase image were both on the card
+    // and hashed to their pins. It went with the recovery kit on 2026-08-24. XvfFirmwarePin carries
+    // the account; the short version is that the erase had nothing to erase, the fallback was one
+    // commit's unexplained choice, and the gate was the single reason an offline frame could not
+    // flash an image it was already carrying.
     // ---------------------------------------------------------------------------------------
 
     [Fact]
@@ -317,26 +341,6 @@ public sealed class AgentArrayFlashTests
         Assert.Equal(ArrayFlashRefusal.ImageNotVerified, outcome.Refusal);
         Assert.Empty(fixture.Processes.Commands);
         Assert.Null(fixture.Files.Store.ReadText(ArrayFirmwareFlash.ConsumedFileName));
-    }
-
-    [Fact]
-    public async Task A_missing_way_back_stops_the_write_before_it_starts()
-    {
-        // Recovery must not depend on a network at the moment it is needed. A frame that cannot
-        // prove it holds the erase image and the known-good fallback has no rehearsed route back,
-        // so it does not take the route forward either.
-        foreach (var absent in new[] { XvfFirmwareRole.Recovery, XvfFirmwareRole.Fallback })
-        {
-            using var fixture = new FlashFixture();
-            await fixture.ReadyToFlashAsync();
-            fixture.Remove(fixture.Pin.Of(absent));
-            fixture.Authorise();
-
-            var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
-
-            Assert.Equal(ArrayFlashRefusal.RecoveryNotVerified, outcome.Refusal);
-            Assert.Empty(fixture.Processes.Commands);
-        }
     }
 
     [Fact]
@@ -528,10 +532,13 @@ public sealed class AgentArrayFlashTests
     }
 
     [Fact]
-    public async Task A_failed_write_is_never_retried_and_asks_for_a_person()
+    public async Task A_write_that_does_not_stick_is_repeated_three_times_and_then_asks_for_a_person()
     {
-        // "One attempt, not three." The authorisation is already spent by the time `dfu-util` runs,
-        // so this is structural rather than a policy a counter enforces.
+        // <b>The operator's reversal of "one attempt, never a second".</b> That design spent the
+        // authorisation before the write precisely so a failure could not be retried; three attempts
+        // is now the rule here as everywhere else. The bound is what this pins: three writes for one
+        // authorisation and not a fourth, on this tick or on any later one, and the authorisation
+        // spent once at the start rather than once per attempt.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
@@ -540,15 +547,83 @@ public sealed class AgentArrayFlashTests
 
         var flash = fixture.Flash();
         var first = await flash.TickAsync(TestContext.Current.CancellationToken);
-        await flash.TickAsync(TestContext.Current.CancellationToken);
+        var second = await flash.TickAsync(TestContext.Current.CancellationToken);
         await flash.TickAsync(TestContext.Current.CancellationToken);
 
         Assert.True(first.Flashed);
         Assert.False(first.Succeeded);
+        Assert.Equal(
+            ArrayFirmwareFlash.MaxAttempts,
+            fixture.Processes.Commands.Count(
+                line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal)));
+
+        // The three were one operation, so the ticks after it write nothing at all: the
+        // authorisation was spent before the first of them and a spent one authorises none.
+        Assert.Equal(ArrayFlashRefusal.AlreadyConsumed, second.Refusal);
+        Assert.Equal(fixture.Authorisation, fixture.Consumed);
+
+        Assert.Contains("somebody has to look at the unit", first.Summary, StringComparison.Ordinal);
+        Assert.Contains("3 of a possible 3 attempts", first.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_write_that_sticks_on_the_second_attempt_stops_there()
+    {
+        // The other half of the bound, and the reason the loop re-reads rather than counting: an
+        // array that came back on the pinned firmware is not written to again, whatever the attempt
+        // counter says.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.ReEnumerate = false;
+
+        var writes = 0;
+        fixture.Processes.Before = command =>
+        {
+            if (!command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            if (++writes == 2)
+            {
+                fixture.ReEnumerate = true;
+            }
+        };
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(2, writes);
+        Assert.Contains("2 of a possible 3 attempts", outcome.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_unit_that_never_comes_back_at_all_is_not_written_to_again()
+    {
+        // A board that is not on the bus cannot be detached into DFU mode, so a second `dfu-util -e`
+        // has nothing to talk to — and the way back from there is hands rather than another
+        // download. The retry stops on the evidence rather than spending its budget against a unit
+        // that is not there.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.ReEnumerate = false;
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                fixture.DetachArrays();
+            }
+        };
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(outcome.Succeeded);
         Assert.Single(
             fixture.Processes.Commands,
             line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
-        Assert.Contains("somebody has to look at the unit", first.Summary, StringComparison.Ordinal);
+        Assert.Contains("No microphone unit was on the bus after that attempt", outcome.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1332,11 +1407,13 @@ public sealed class AgentArrayFlashTests
     }
 
     [Fact]
-    public async Task A_finished_screen_nobody_answers_goes_away_on_its_own()
+    public async Task A_finished_screen_stays_until_somebody_acknowledges_it()
     {
-        // The completion screen waits for a person, and a frame flashed under the operator bypass
-        // has no person to wait for. Without a bound it would hold a household's photographs for
-        // ever over a write that had already finished.
+        // The operator's decision, and the reversal of the one this test used to pin: a completion
+        // screen had a fifteen-minute linger after which it took itself away, because a frame
+        // flashed under the bypass has nobody to press anything. It now stays, on both outcomes, so
+        // that nobody can miss the result of the one operation on this frame that cannot be undone.
+        // A whole day of ticks does not move it; taking its affordance does.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
@@ -1345,9 +1422,12 @@ public sealed class AgentArrayFlashTests
         await flash.TickAsync(TestContext.Current.CancellationToken);
         Assert.NotNull(fixture.Screen);
 
-        fixture.Clock.UtcNow += ArrayFlashApproval.CompletionLinger + TimeSpan.FromMinutes(1);
+        fixture.Clock.UtcNow += TimeSpan.FromHours(24);
         await flash.TickAsync(TestContext.Current.CancellationToken);
 
+        Assert.NotNull(fixture.Screen);
+
+        Assert.True(fixture.Approval.Answer("a hold on the panel"));
         Assert.Null(fixture.Screen);
     }
 
@@ -1488,53 +1568,23 @@ public sealed class AgentArrayFlashTests
     }
 
     // ---------------------------------------------------------------------------------------
-    // A wedged board: what the frame can see, and the way back it puts on its own screen
+    // An interrupted write: one screen, and it says the only true thing
+    //
+    // Two tests stood here and one of them is gone. A board that never came back used to get the
+    // vendor's Safe Mode gesture written out on the panel — power off, hold Mute, power on, watch
+    // for the blinking red LED — and this suite pinned every step of it. That screen, the detection
+    // behind it and the whole of this project's Safe Mode support went on 2026-08-24;
+    // ArrayFlashVoice carries the account and what it costs. What survives is the honest half,
+    // which now covers both cases.
     // ---------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task A_board_that_never_came_back_gets_the_way_back_on_the_frame_s_own_screen()
+    public async Task An_interrupted_write_says_the_frame_cannot_tell_rather_than_claiming_either()
     {
-        // The detectable case, and the reason it has to be a screen: an array that will not
-        // enumerate cannot beep, cannot answer the control tool and has no other way to say
-        // anything. The evidence is durable — a marker a previous process left, and an empty bus.
-        using var fixture = new FlashFixture();
-        await fixture.ReadyToFlashAsync();
-        fixture.Authorise();
-        fixture.Processes.Before = command =>
-        {
-            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
-            {
-                throw new OperationCanceledException("the power went off");
-            }
-        };
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
-
-        fixture.Processes.Before = null;
-        fixture.DetachArrays();
-
-        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
-        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
-
-        Assert.Equal(ArrayFlashRefusal.PreviousFlashUnfinished, outcome.Refusal);
-        Assert.Equal(ArrayFlashPhase.Wedged, prompt.Phase);
-
-        // The vendor's own Safe Mode gesture, in the order a pair of hands does it.
-        var body = string.Join(" ", prompt.Lines);
-        Assert.Contains("Take the power away", body, StringComparison.Ordinal);
-        Assert.Contains("Mute button", body, StringComparison.Ordinal);
-        Assert.Contains("put the power back on", body, StringComparison.Ordinal);
-        Assert.Contains("red light that blinks", body, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task A_board_that_is_still_answering_is_not_told_it_is_wedged()
-    {
-        // The honest half of the boundary. A unit that enumerates has not been proven well — this
-        // agent has no reading that separates a good flash from a bad one beyond a version a
-        // misbehaving unit can still report correctly — so the screen says a write was interrupted
-        // and says the frame cannot tell, rather than claiming either.
+        // A unit that enumerates has not been proven well — this agent has no reading that
+        // separates a good flash from a bad one beyond a version a misbehaving unit can still
+        // report correctly — so the screen says a write was interrupted and says the frame cannot
+        // tell, rather than claiming either.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
@@ -1557,36 +1607,45 @@ public sealed class AgentArrayFlashTests
 
         var body = string.Join(" ", prompt.Lines);
         Assert.Contains("cannot tell", body, StringComparison.Ordinal);
+
+        // And no recovery gesture, on this or any other screen. Safe Mode support was removed
+        // deliberately, so a panel that started offering it again would be a decision nobody took.
         Assert.DoesNotContain("Mute button", body, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void The_recovery_route_records_the_two_details_that_are_easy_to_miss()
+    public async Task A_board_that_never_came_back_gets_the_same_screen_and_no_recovery_gesture()
     {
-        // Both were established once by a previous workstream and would otherwise be rediscovered
-        // by whoever is holding the board. The first reads as a failure and is not; reacting to it
-        // by retrying is the documented route from a recoverable board to an unrecoverable one.
-        var steps = string.Join(" ", ArrayFlashRecovery.OperatorSteps);
+        // The case that used to be detected separately and told a household to hold the Mute
+        // button. It is no longer distinguished: a unit that is not on the bus at all gets the same
+        // sentence, because this project no longer supports the only route back from that state and
+        // the frame has nothing to offer beyond naming somebody to call.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.Processes.Before = command =>
+        {
+            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            {
+                throw new OperationCanceledException("the power went off");
+            }
+        };
 
-        Assert.Contains("96%", steps, StringComparison.Ordinal);
-        Assert.Contains("expected outcome, not a failure", steps, StringComparison.Ordinal);
-        Assert.Contains("Power-cycle", steps, StringComparison.Ordinal);
-        Assert.Contains("fails at 0%", steps, StringComparison.Ordinal);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => fixture.Flash().TickAsync(TestContext.Current.CancellationToken));
 
-        // And the erase comes before the power cycle, which comes before the next write. Out of
-        // order, the download fails at 0% and the person doing it has no idea why.
-        var erase = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
-            step => step.Contains("Erase", StringComparison.Ordinal));
-        var cycle = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
-            step => step.Contains("Power-cycle", StringComparison.Ordinal));
-        var write = ArrayFlashRecovery.OperatorSteps.ToList().FindIndex(
-            step => step.Contains("Write the pinned fallback", StringComparison.Ordinal));
+        fixture.Processes.Before = null;
+        fixture.DetachArrays();
 
-        Assert.True(erase >= 0 && erase < cycle && cycle < write);
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+        var prompt = Assert.IsType<ArrayFlashPrompt>(fixture.Screen);
 
-        // And the latch a person clears by hand is named, because nothing else lets the frame flash
-        // again and a route that ends with a frame nobody can use is not a route.
-        Assert.Contains(ArrayFlashWindow.MarkerFileName, steps, StringComparison.Ordinal);
+        Assert.Equal(ArrayFlashRefusal.PreviousFlashUnfinished, outcome.Refusal);
+        Assert.Equal(ArrayFlashPhase.Unfinished, prompt.Phase);
+
+        var body = string.Join(" ", prompt.Lines);
+        Assert.DoesNotContain("Mute button", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("red light", body, StringComparison.Ordinal);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1704,7 +1763,7 @@ public sealed class AgentArrayFlashTests
     }
 
     // ---------------------------------------------------------------------------------------
-    // The ladder: ten rungs, in the order that makes the first failure the useful one
+    // The ladder: nine rungs, in the order that makes the first failure the useful one
     // ---------------------------------------------------------------------------------------
 
     [Fact]
@@ -1778,119 +1837,22 @@ public sealed class AgentArrayFlashTests
     }
 
     // ---------------------------------------------------------------------------------------
-    // Rung 4: the board revision, which is a veto and never a permission
+    // The board-revision rung and its five tests were removed on 2026-08-24
+    //
+    // They pinned a veto: a revision somebody had typed into `audio.arrayBoardRevision` could refuse
+    // a write outright, could never be the only reason one proceeded, and could refuse a second time
+    // at the last rung by contradicting the unit the frame could actually read. A sixth test pinned
+    // the seam itself — one interface, one default — so that the operator's pending decision would
+    // be a one-line change.
+    //
+    // The decision was taken and it was to remove the gate: nothing in any published source
+    // distinguishes a V1.0 from a V1.1, v2.1.0 changes nothing board-specific, and the single
+    // contrary report is one unreproduced unit with a physically detached reset button. So it
+    // refused on no evidence, from a field a human typed with nothing to check it against.
+    // ArrayHardwareGate carries the full account. What did NOT go is the sentence in every refusal
+    // saying board revision is not readable from the unit at all —
+    // `Every_refusal_names_what_it_checked_and_what_it_expected` still asserts it, on every rung.
     // ---------------------------------------------------------------------------------------
-
-    [Fact]
-    public async Task A_recorded_board_revision_this_build_has_not_been_established_on_vetoes_the_write()
-    {
-        // V1.0 is attested only by silkscreen legible in two of Seeed's own product photographs.
-        // No customer photograph, review, teardown or issue report of one has ever been found, so
-        // whether it ever shipped is unknown and no allowlist entry claims it. A frame whose card
-        // says V1.0 is therefore a frame nothing here has been established against.
-        using var fixture = new FlashFixture();
-        await fixture.ReadyToFlashAsync();
-        fixture.Settings[ArrayBoardRevision.SettingKey] = "V1.0";
-        fixture.Authorise();
-
-        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
-        Assert.Contains("BoardRevisionRefused", outcome.Summary, StringComparison.Ordinal);
-        Assert.Contains("V1.0", outcome.Summary, StringComparison.Ordinal);
-        Assert.Null(fixture.Consumed);
-        Assert.DoesNotContain(
-            fixture.Processes.Commands,
-            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task A_recorded_board_revision_is_never_the_reason_a_write_proceeds()
-    {
-        // <b>The property that makes it a veto rather than a checkbox.</b> The card says V1.1, which
-        // is the one revision the allowlist has been established on — and the unit is a six-channel
-        // build, so it is refused anyway, on the rung that read the hardware. A recorded revision
-        // can stop a write and can never be the reason one happens.
-        using var fixture = new FlashFixture();
-        await fixture.ReadyToFlashAsync();
-        fixture.Settings[ArrayBoardRevision.SettingKey] = "V1.1";
-        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
-        fixture.Authorise();
-
-        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
-        Assert.Contains("UnknownBuildConfiguration", outcome.Summary, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task A_blank_recorded_board_revision_refuses_nothing()
-    {
-        // Absence is not a claim. Almost every frame in the fleet will never have a revision
-        // recorded — somebody would have to take the bar out and read the printing on it — so a
-        // default that refused would refuse the whole fleet.
-        using var fixture = new FlashFixture();
-        await fixture.ReadyToFlashAsync();
-        fixture.Settings[ArrayBoardRevision.SettingKey] = "   ";
-        fixture.Authorise();
-
-        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
-
-        Assert.Null(outcome.Refusal);
-        Assert.True(outcome.Flashed);
-    }
-
-    [Fact]
-    public void A_recorded_revision_that_contradicts_the_matched_profile_refuses_at_the_allowlist()
-    {
-        // Rung 10's half of the veto, and the half that makes it more than a checkbox. Suppose a
-        // second allowlist entry one day covers a revision this one does not: a frame whose card
-        // names that revision, whose hardware matches *this* entry, is a frame where the card and
-        // the bar disagree — and neither of them wins.
-        var narrow = Contradictory;
-
-        Assert.Equal(
-            ArrayGateVerdict.Recognised,
-            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current, "V1.4", null, narrow).Verdict);
-
-        // The same hardware, with a card naming a revision the entry it matches was never
-        // established on. V1.1 is a revision *some* entry knows, so rung 4 lets it through — the
-        // recorded value is not itself the problem — and rung 10 catches the contradiction between
-        // what was written down and the entry the frame's own readings actually matched.
-        var contradicted = ArrayHardwareGate.Judge(
-            Scan(Unit()),
-            XvfFirmwarePin.Current,
-            "V1.1",
-            null,
-            narrow);
-
-        Assert.Equal(ArrayGateVerdict.BoardRevisionRefused, contradicted.Verdict);
-        Assert.Equal(ArrayHardwareGate.Rungs, contradicted.Rung);
-        Assert.Contains("does not match", contradicted.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void The_board_revision_gate_is_one_object_so_the_pending_decision_is_one_change()
-    {
-        // The seam the operator's open question moves on. It is an interface with one default
-        // implementation, so changing the semantics means implementing it once and changing
-        // ArrayBoardRevision.Default — and no rung of the ladder moves, because no other rung reads
-        // the recorded value.
-        Assert.IsAssignableFrom<IBoardRevisionGate>(ArrayBoardRevision.Default);
-        Assert.Contains("veto", ArrayBoardRevision.Default.Semantics, StringComparison.Ordinal);
-
-        // A unit the ladder otherwise recognises, so a substituted gate cannot pass by the ladder
-        // failing somewhere earlier.
-        Assert.Equal(
-            ArrayGateVerdict.Recognised,
-            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current).Verdict);
-
-        Assert.Equal(
-            ArrayGateVerdict.BoardRevisionRefused,
-            ArrayHardwareGate
-                .Judge(Scan(Unit()), XvfFirmwarePin.Current, "V1.1", new RefuseEverythingRevisionGate())
-                .Verdict);
-    }
 
     // ---------------------------------------------------------------------------------------
     // Rung 8: newer than the pin, and how versions are compared
@@ -2124,8 +2086,6 @@ public sealed class AgentArrayFlashTests
         var crossed = ArrayHardwareGate.Judge(
             Scan(Unit(bcd: "0208", descriptor: "2 0 8", control: "2 0 8", profile: "ua-io16-6ch-sqr")),
             XvfFirmwarePin.Current,
-            null,
-            null,
             split);
 
         Assert.Equal(ArrayGateVerdict.NotOnTheAllowlist, crossed.Verdict);
@@ -2134,7 +2094,7 @@ public sealed class AgentArrayFlashTests
         // Either entry, whole, is recognised — so this is the conjunction failing and not a field.
         Assert.Equal(
             ArrayGateVerdict.Recognised,
-            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current, null, null, split).Verdict);
+            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current, split).Verdict);
     }
 
     [Fact]
@@ -2157,10 +2117,10 @@ public sealed class AgentArrayFlashTests
 
         // V1.0 is deliberately absent from what any entry claims: it is attested only in Seeed's own
         // product photographs and nobody has ever held one, so no entry can honestly say it was
-        // established on it. It stays in the attested list so a refusal can tell "a revision we have
-        // not been established against" from "a revision nobody has ever recorded".
+        // established on it. Nothing gates on either list now — the rung that did was removed — but
+        // the record of what each entry was measured against is worth keeping and is asserted here so
+        // a future entry cannot arrive claiming a board nobody has held.
         Assert.Equal(["V1.1"], ArrayHardwareGate.KnownBoardRevisions);
-        Assert.Contains("V1.0", ArrayBoardRevision.Attested);
 
         // And every entry says what established it, because an entry whose evidence reads "assumed"
         // is an entry that should not be there.
@@ -2386,7 +2346,6 @@ public sealed class AgentArrayFlashTests
                 pin),
             ArrayHardwareGate.Judge(Scan(Unit(serial: string.Empty)), pin),
             ArrayHardwareGate.Judge(Scan(Unit(serial: "209911441260500030")), pin),
-            ArrayHardwareGate.Judge(Scan(Unit()), pin, "V1.0"),
             ArrayHardwareGate.Judge(Scan(Unit(control: null, profile: null, hash: null, type: null)), pin),
             ArrayHardwareGate.Judge(Scan(Unit(control: null, profile: null)), pin),
             ArrayHardwareGate.Judge(Scan(Unit(profile: "ua-io48-sqr")), pin),
@@ -2398,26 +2357,9 @@ public sealed class AgentArrayFlashTests
             ArrayHardwareGate.Judge(
                 Scan(Unit(bcd: "0208", descriptor: "2 0 8", control: "2 0 8", profile: "ua-io16-6ch-sqr")),
                 pin,
-                null,
-                null,
                 split),
-            ArrayHardwareGate.Judge(Scan(Unit()), pin, "V1.1", null, Contradictory),
         ];
     }
-
-    /// <summary>
-    /// Two entries whose revisions differ, so a recorded value can pass rung 4 and fail rung 10.
-    /// </summary>
-    /// <remarks>
-    /// The shape rung 10's half of the veto needs, and it takes two entries to build: the recorded
-    /// revision has to be one <i>some</i> entry knows — otherwise rung 4 refuses first and the
-    /// contradiction is never reached — and absent from the entry the hardware actually matches.
-    /// </remarks>
-    private static KnownArrayProfile[] Contradictory { get; } =
-    [
-        Profile("an entry established only on V1.4", revisions: ["V1.4"]),
-        Profile("a sibling established on V1.1", skus: ["101991442"], revisions: ["V1.1"]),
-    ];
 
     /// <summary>The 66 mm square, as Seeed's published output gives it.</summary>
     private static double[] Square { get; } =
@@ -2501,7 +2443,8 @@ public sealed class AgentArrayFlashTests
             ruling.Message,
             StringComparison.Ordinal);
 
-        Assert.Contains("veto rather than a permission", ruling.Message, StringComparison.Ordinal);
+        // And that it says why no rung can ever gate on it, now that the rung that tried has gone.
+        Assert.Contains("no rung of this ladder gates on it", ruling.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2511,7 +2454,7 @@ public sealed class AgentArrayFlashTests
         // can only ever say what has already been established, so a version nobody here has seen
         // refuses by construction rather than by somebody remembering to add a case.
         Assert.Contains(XvfFirmwarePin.Current.Target.Version, ArrayHardwareGate.KnownFirmware);
-        Assert.Contains(XvfFirmwarePin.Current.Fallback.Version, ArrayHardwareGate.KnownFirmware);
+        Assert.Contains("2 0 6", ArrayHardwareGate.KnownFirmware);
         Assert.Contains("2 0 10", ArrayHardwareGate.KnownFirmware);
         Assert.DoesNotContain("2 0 9", ArrayHardwareGate.KnownFirmware);
     }
@@ -2566,7 +2509,7 @@ public sealed class AgentArrayFlashTests
         // the panel is not currently showing.
         var status = AgentStatusFactory.Green() with
         {
-            ArrayFlash = ArrayFlashVoice.Wedged(answerable: true, contact: null),
+            ArrayFlash = ArrayFlashVoice.Unfinished(answerable: true, contact: null),
         };
 
         var page = BrowserStage.Compose(status, DateTimeOffset.UnixEpoch);
@@ -2574,7 +2517,7 @@ public sealed class AgentArrayFlashTests
 
         Assert.Equal(status.ArrayFlash.Headline, page.FlashHeadline);
         Assert.Contains(status.ArrayFlash.Headline, console, StringComparison.Ordinal);
-        Assert.Contains("Mute button", console, StringComparison.Ordinal);
+        Assert.Contains("did not reach the end", console, StringComparison.Ordinal);
 
         // And the console gives the whole screen over to it rather than putting it below the
         // ordinary narration, which is where a person would read past the part that matters.
@@ -2744,23 +2687,6 @@ public sealed class AgentArrayFlashTests
     }
 }
 
-/// <summary>A board-revision gate that refuses everything, to prove the seam is consulted.</summary>
-/// <remarks>
-/// It exists because the pending decision is a decision about <i>this object</i>: if substituting an
-/// implementation did not change the verdict, the seam would be decoration and changing the
-/// semantics later would mean editing the ladder instead of one line.
-/// </remarks>
-internal sealed class RefuseEverythingRevisionGate : IBoardRevisionGate
-{
-    public string Semantics => "a fixture that refuses every recorded revision";
-
-    public BoardRevisionRuling BeforeReading(string? recorded, IReadOnlyList<string> known) =>
-        new(Refuses: true, "a fixture refused it", "a fixture refused it");
-
-    public BoardRevisionRuling AgainstProfile(string? recorded, KnownArrayProfile matched) =>
-        new(Refuses: true, "a fixture refused it", "a fixture refused it");
-}
-
 /// <summary>A frame with a synthetic pin, a synthetic bus and a recording <c>dfu-util</c>.</summary>
 /// <remarks>
 /// The pin is synthetic for the same reason <c>XvfHostFixture</c>'s is: the real one names three
@@ -2804,8 +2730,6 @@ internal sealed class FlashFixture : IDisposable
         foreach (var (name, directory, role, version) in ((string, string, XvfFirmwareRole, string)[])
         [
             ("respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin", "usb", XvfFirmwareRole.Target, "2 1 0"),
-            ("respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin", "usb", XvfFirmwareRole.Fallback, "2 0 6"),
-            ("4mb_all_ff.bin", "recover", XvfFirmwareRole.Recovery, ""),
         ])
         {
             // Seeded from the name's own bytes, not from its length. The first version of this
@@ -3176,7 +3100,6 @@ internal sealed class FlashFixture : IDisposable
     public ArrayRecognitionResource Recognition() => new(
         Files.Files,
         new XvfHost(Files.Files, Processes, _session),
-        new FleetValues(key => Settings.GetValueOrDefault(key)),
         Pin);
 
     /// <summary>The observe-only reporter, over the same frame.</summary>

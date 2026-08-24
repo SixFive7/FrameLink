@@ -35,34 +35,39 @@ public enum ArrayGateVerdict
     /// <summary>Rung 3 — the serial decodes, and its product code is not one this build knows.</summary>
     UnknownProductSku,
 
-    /// <summary>Rung 4 — the board revision somebody recorded for this frame vetoes the write.</summary>
-    BoardRevisionRefused,
+    // <b>A BoardRevisionRefused verdict stood here and is named rather than left as a gap.</b> It
+    // was rung 4: a board revision somebody had typed into `audio.arrayBoardRevision` could veto a
+    // write, and could veto it again at the last rung by contradicting the unit the frame could
+    // actually read. It went on 2026-08-24 with the whole seam behind it — see this class's remarks
+    // for the operator's reasoning, which is that the gate refused on no evidence. The rungs below
+    // are renumbered, and `Rungs` with them, so that a refusal saying "check 5 of 9" is counting the
+    // ladder that exists.
 
-    /// <summary>Rung 5 — the control tool is not installed, so nothing below can be read.</summary>
+    /// <summary>Rung 4 — the control tool is not installed, so nothing below can be read.</summary>
     ControlToolMissing,
 
-    /// <summary>Rung 5 — the tool is installed and the unit did not answer it.</summary>
+    /// <summary>Rung 4 — the tool is installed and the unit did not answer it.</summary>
     ControlSilent,
 
-    /// <summary>Rung 6 — the unit's build configuration is not the one the pinned image is built for.</summary>
+    /// <summary>Rung 5 — the unit's build configuration is not the one the pinned image is built for.</summary>
     UnknownBuildConfiguration,
 
-    /// <summary>Rung 7 — the USB descriptor and the control interface report different firmware.</summary>
+    /// <summary>Rung 6 — the USB descriptor and the control interface report different firmware.</summary>
     ReadingsDisagree,
 
-    /// <summary>Rung 8 — the firmware this unit runs is not one this build has ever been told about.</summary>
+    /// <summary>Rung 7 — the firmware this unit runs is not one this build has ever been told about.</summary>
     UnknownFirmware,
 
-    /// <summary>Rung 8 — the unit already runs something newer than the pinned target.</summary>
+    /// <summary>Rung 7 — the unit already runs something newer than the pinned target.</summary>
     FirmwareNewerThanTarget,
 
-    /// <summary>Rung 9 — the running firmware says it is driving a linear array, not a square one.</summary>
+    /// <summary>Rung 8 — the running firmware says it is driving a linear array, not a square one.</summary>
     MicArrayTypeUnexpected,
 
-    /// <summary>Rung 9 — the microphone coordinates it reports are not this board's 66 mm square.</summary>
+    /// <summary>Rung 8 — the microphone coordinates it reports are not this board's 66 mm square.</summary>
     MicArrayGeometryUnexpected,
 
-    /// <summary>Rung 10 — every field passed on its own and the whole tuple is on no allowlist entry.</summary>
+    /// <summary>Rung 9 — every field passed on its own and the whole tuple is on no allowlist entry.</summary>
     NotOnTheAllowlist,
 }
 
@@ -93,9 +98,11 @@ public enum ArrayGateVerdict
 /// <c>BOOT_STATUS</c>, <c>SERIAL_NUMBER</c>, <c>DFU_GETVERSION</c> — describes the <i>firmware</i>
 /// or the <i>unit</i>, never the board. The revision is silkscreen. So the one gate a reader of
 /// upstream issue #32 would reach for first, <i>refuse to write to a V1.1 board</i>, cannot be
-/// written from anything this record holds; what <see cref="ArrayBoardRevision"/> gates on instead
-/// is a value a human typed, which is a different kind of fact and is kept in a different place for
-/// exactly that reason.
+/// written from anything this record holds. It was briefly written from the only other place a
+/// revision could come from — a value a human read off the silkscreen and typed in — and that gate
+/// has since been removed; <see cref="ArrayHardwareGate"/>'s remarks carry the reasoning. The fact
+/// itself is unchanged and is still said in every refusal, because a person reading one and
+/// wondering why the frame does not simply check the board deserves the answer.
 /// </para>
 /// <para>
 /// <b><c>BLD_REPO_HASH</c> is carried and never gated on</b>, for a measured reason: it is a stable,
@@ -277,8 +284,14 @@ public sealed record KnownArrayProfile
     /// Not "every revision that exists" — <b>every revision somebody here has held in their hand and
     /// established this entry against</b>. V1.0 is attested only by Seeed's own product photographs
     /// and no customer photograph, review, teardown or issue report of one has ever been found, so
-    /// it is deliberately absent: whether it ever shipped is unknown, and an allowlist that covered
-    /// a board nobody has ever seen would not be an allowlist.
+    /// it is deliberately absent: whether it ever shipped is unknown, and an entry that claimed a
+    /// board nobody has ever seen would be claiming something.
+    /// <br/><br/>
+    /// <b>Nothing gates on this, and that is deliberate rather than an oversight.</b> It records
+    /// what the evidence for this entry was measured against; it is not compared to anything at run
+    /// time, because no software on this frame can read a board revision and the gate that compared
+    /// it against a typed-in value was removed on 2026-08-24. <see cref="ArrayHardwareGate"/>'s
+    /// remarks carry the reasoning.
     /// </remarks>
     public required IReadOnlyList<string> BoardRevisions { get; init; }
 
@@ -306,192 +319,39 @@ public sealed record KnownArrayProfile
         && (unit.MicArrayGeometry is not { } geometry || ArrayHardwareGate.IsSquareGeometry(geometry));
 }
 
-/// <summary>What the board-revision gate decided, and why in words a person can read.</summary>
-/// <param name="Refuses">Whether this ruling stops the write.</param>
-/// <param name="Plain">The plain-language reason, or empty when it does not refuse.</param>
-/// <param name="Technical">The compact technical reason, or empty.</param>
-public readonly record struct BoardRevisionRuling(bool Refuses, string Plain, string Technical)
-{
-    /// <summary>The ruling that stops nothing.</summary>
-    public static BoardRevisionRuling Allows { get; } =
-        new(Refuses: false, string.Empty, string.Empty);
-}
-
-/// <summary>
-/// Rung 4 — how the board revision somebody wrote down for this frame is allowed to matter.
-/// </summary>
-/// <remarks>
-/// <b>This is the seam the pending decision moves on.</b> See <see cref="ArrayBoardRevision"/>.
-/// </remarks>
-public interface IBoardRevisionGate
-{
-    /// <summary>One line naming this gate's semantics, for the technical block.</summary>
-    string Semantics { get; }
-
-    /// <summary>
-    /// Rung 4 — asked before the unit is spoken to at all, so it can only see what was typed.
-    /// </summary>
-    /// <param name="recorded">Whatever an operator wrote in the setting, trimmed, or null.</param>
-    /// <param name="known">Every revision any allowlist entry has been established on.</param>
-    BoardRevisionRuling BeforeReading(string? recorded, IReadOnlyList<string> known);
-
-    /// <summary>
-    /// Rung 10 — asked once a whole-profile match exists, so it can see a contradiction.
-    /// </summary>
-    /// <param name="recorded">Whatever an operator wrote in the setting, trimmed, or null.</param>
-    /// <param name="matched">The allowlist entry the unit's readable fields matched.</param>
-    BoardRevisionRuling AgainstProfile(string? recorded, KnownArrayProfile matched);
-}
-
-/// <summary>
-/// <b>PENDING OPERATOR DECISION — open question C.</b> How the operator-recorded board revision
-/// gates. This class is the whole of the seam; changing the semantics is changing
-/// <see cref="Default"/>.
-/// </summary>
-/// <remarks>
-/// <para>
-/// <b>The question.</b> The board revision is silkscreen and no software anywhere can read it, so
-/// the only way a fleet can know one is for a person to look at the board and type it in. That makes
-/// it a fact of a different kind from every other rung: unverifiable, absent by default, and wrong
-/// whenever somebody swaps a unit and forgets. The question the operator has not answered is what
-/// such a value is allowed to do.
-/// </para>
-/// <para>
-/// <b>What is built, and it is the recommendation already put to them: a veto, never a
-/// permission.</b> <see cref="VetoOnlyBoardRevisionGate"/> can refuse a write and can never be the
-/// only reason one proceeds. Concretely: a blank value permits nothing and refuses nothing, so
-/// every other rung still has to pass on its own; a recorded value this build has not been
-/// established against refuses at rung 4, before the unit is even spoken to; and a recorded value
-/// that contradicts the allowlist entry the unit's own readings matched refuses at rung 10 <i>even
-/// though the recorded value is a revision this build knows</i>. The last of those is the property
-/// that makes it a veto rather than a checkbox — the typed value can disagree with the hardware,
-/// and when it does, the hardware does not win either.
-/// </para>
-/// <para>
-/// <b>The two alternatives, so the seam is legible.</b> (a) <i>Required</i> — no frame is flashed
-/// until somebody has recorded a revision for it, which is the strongest gate and the one that
-/// stops a fleet dead if a household's frame was never surveyed. (b) <i>Advisory</i> — the value is
-/// recorded in the event trail and never refuses, which is the weakest and makes the field
-/// decoration. Both are a one-line change to <see cref="Default"/> plus one new implementation of
-/// <see cref="IBoardRevisionGate"/>; nothing else in the ladder moves, because no other rung reads
-/// the recorded value.
-/// </para>
-/// </remarks>
-public static class ArrayBoardRevision
-{
-    /// <summary>The fleet setting an operator records a frame's board revision in.</summary>
-    /// <remarks>
-    /// A per-device override in practice — a revision is a property of one physical board — but it
-    /// is an ordinary setting and nothing here stops somebody setting it fleet-wide. A fleet-wide
-    /// value that is right for one frame and wrong for another refuses the wrong ones, which is the
-    /// safe direction for a veto to fail in.
-    /// </remarks>
-    public const string SettingKey = "audio.arrayBoardRevision";
-
-    /// <summary>
-    /// Every revision that demonstrably exists anywhere, which is not the same as the allowlist.
-    /// </summary>
-    /// <remarks>
-    /// Two, and the evidence for each is thin: <c>V1.0</c> from silkscreen legible in two of Seeed's
-    /// own published product photographs, and <c>V1.1</c> from this project's two boards and from
-    /// upstream issue #32. A GitHub-wide search for <c>XVF3800 V1.1</c> returns exactly one result
-    /// in all of GitHub. There is no V1.2, no V2, no letter suffix and no dated revision in any
-    /// evidence. This list exists so a refusal can say <i>this is not a revision anybody has ever
-    /// recorded</i> separately from <i>this is not a revision we have been established against</i>,
-    /// which are different problems with different answers.
-    /// </remarks>
-    public static IReadOnlyList<string> Attested { get; } = ["V1.0", "V1.1"];
-
-    /// <summary>
-    /// The semantics in force. <b>Changing this one line changes the pending decision.</b>
-    /// </summary>
-    public static IBoardRevisionGate Default { get; } = new VetoOnlyBoardRevisionGate();
-
-    /// <summary>A recorded revision as this build compares it: trimmed, upper-cased, or null.</summary>
-    /// <remarks>
-    /// <c>v1.1</c>, <c>V1.1</c> and <c> V1.1 </c> are one person writing one thing down. A value
-    /// that normalises to nothing is treated as not recorded at all, because an operator who
-    /// cleared the field has not made a claim about the hardware.
-    /// </remarks>
-    public static string? Normalise(string? recorded)
-    {
-        var value = recorded?.Trim();
-        return value is { Length: > 0 } ? value.ToUpperInvariant() : null;
-    }
-}
-
-/// <summary>
-/// The default semantics: the recorded revision may refuse a write and may never permit one.
-/// </summary>
-/// <remarks>
-/// See <see cref="ArrayBoardRevision"/> for the decision this implements and for the alternatives.
-/// </remarks>
-public sealed class VetoOnlyBoardRevisionGate : IBoardRevisionGate
-{
-    /// <inheritdoc/>
-    public string Semantics =>
-        "veto-only — a recorded revision can refuse a write and can never be the only reason one proceeds";
-
-    /// <inheritdoc/>
-    public BoardRevisionRuling BeforeReading(string? recorded, IReadOnlyList<string> known)
-    {
-        ArgumentNullException.ThrowIfNull(known);
-
-        if (ArrayBoardRevision.Normalise(recorded) is not { } value)
-        {
-            // Absence permits nothing. Every rung below still has to pass on its own, which is what
-            // keeps this a veto: a frame nobody surveyed is flashed on the strength of what its
-            // hardware says, exactly as it would be if this gate did not exist.
-            return BoardRevisionRuling.Allows;
-        }
-
-        if (known.Contains(value, StringComparer.OrdinalIgnoreCase))
-        {
-            return BoardRevisionRuling.Allows;
-        }
-
-        var attested = ArrayBoardRevision.Attested.Contains(value, StringComparer.OrdinalIgnoreCase);
-
-        return new BoardRevisionRuling(
-            Refuses: true,
-            attested
-                ? "Somebody has written down which version of the microphone bar this frame has, and this update has "
-                    + "never been tried on that version."
-                : "Somebody has written down which version of the microphone bar this frame has, and it is not a "
-                    + "version anybody has ever recorded for this product.",
-            "recorded board revision " + value + " is "
-            + (attested
-                ? "attested but not one any allowlist entry has been established on"
-                : "not among the revisions attested anywhere (" + string.Join(", ", ArrayBoardRevision.Attested) + ")"));
-    }
-
-    /// <inheritdoc/>
-    public BoardRevisionRuling AgainstProfile(string? recorded, KnownArrayProfile matched)
-    {
-        ArgumentNullException.ThrowIfNull(matched);
-
-        if (ArrayBoardRevision.Normalise(recorded) is not { } value)
-        {
-            return BoardRevisionRuling.Allows;
-        }
-
-        if (matched.BoardRevisions.Contains(value, StringComparer.OrdinalIgnoreCase))
-        {
-            // Note what this does *not* do: it does not return "allowed because the revision
-            // matches". It returns "this ruling refuses nothing", and the write proceeds on the
-            // strength of the nine readable rungs. That distinction is the whole of the decision.
-            return BoardRevisionRuling.Allows;
-        }
-
-        return new BoardRevisionRuling(
-            Refuses: true,
-            "The version of the microphone bar somebody wrote down for this frame does not match the microphone bar "
-                + "the frame can actually see. One of the two is wrong, and nothing will be written until somebody "
-                + "has checked which.",
-            "recorded board revision " + value + " contradicts allowlist entry '" + matched.Name
-                + "', which has only been established on " + string.Join(", ", matched.BoardRevisions));
-    }
-}
+// == The board-revision seam was removed on 2026-08-24, and this is the account of it ========
+//
+// What stood here: BoardRevisionRuling, IBoardRevisionGate, ArrayBoardRevision -- which owned the
+// audio.arrayBoardRevision fleet setting and a list of attested revisions -- and
+// VetoOnlyBoardRevisionGate, the semantics in force. Together they were rung 4 of the ladder and a
+// second refusal at the last rung, and the whole seam existed so that a pending operator decision
+// (veto-only, required, or advisory) would be a one-line change rather than a rewrite.
+//
+// WHAT WAS BELIEVED. Upstream issue #32 reports the pinned firmware not booting on a board revision
+// V1.1, both of this project's boards are V1.1, and no software anywhere can read a revision off
+// this hardware -- so the one gate a reader of that issue reaches for first could only be built on
+// a value a person typed. A veto-only reading of that value looked like the careful answer: it
+// could refuse a write and could never be the only reason one proceeded.
+//
+// WHAT WAS THEN MEASURED. Nothing in any published source distinguishes a V1.0 from a V1.1 -- not
+// the descriptors, not the control tool's 177 commands, not the changelogs -- and v2.1.0 changes
+// nothing board-specific. The single contrary report is one unreproduced unit whose reset button is
+// physically detached and whose own reporter concludes the failure is independent of firmware
+// version, and it is contradicted by Frame #1, a V1.1 board running 2.0.10 with a real call on it.
+// So the gate refused on no evidence.
+//
+// AND THE SHAPE OF THE FACT WAS WRONG. Asked where the recorded value would come from, the honest
+// answer is: a human reads silkscreen and types it. That is a field with nothing to check it
+// against, absent by default, and silently wrong the moment somebody swaps a unit -- gating the one
+// operation on this frame that cannot be undone. The operator's decision is that such a field
+// should not exist, rather than that its semantics should be chosen.
+//
+// WHAT DID NOT GO. ArrayHardwareGate.RevisionNote still says, in every refusal this ladder
+// produces, that board revision is not readable from the unit at all. That is still true, it is
+// still the most surprising fact about this hardware, and somebody reading a refusal and wondering
+// why the frame does not simply check the board is owed the answer. It stopped being a gate; it did
+// not stop being worth saying. KnownArrayProfile.BoardRevisions also stays, as the record of what
+// each allowlist entry was established against -- evidence, read by nothing.
 
 /// <summary>
 /// One complete answer to <i>may this build write firmware to this unit?</i> — for two readers.
@@ -582,7 +442,7 @@ public sealed record ArrayGateRuling
 /// about?</i> — and refuses when the answer is no, rather than proceeding hopefully.
 /// </para>
 /// <para>
-/// <b>Ten rungs, and the order is the design.</b> Presence before identity, identity before talking
+/// <b>Nine rungs, and the order is the design.</b> Presence before identity, identity before talking
 /// to it, talking before interpreting what it says. The order is what makes the <i>first</i> failure
 /// the useful one: a frame with two arrays plugged in would otherwise be told its firmware is
 /// unrecognised, which is true, unhelpful, and about whichever unit happened to enumerate first.
@@ -603,12 +463,6 @@ public sealed record ArrayGateRuling
 /// XVF3800 SKUs</b>, and until this rung nothing in this project read it. It is the rung that
 /// catches a different Seeed product wearing the same USB ids — which the reSpeaker Flex, with its
 /// interchangeable circular and linear arrays, is exactly the shape of.
-/// </description></item>
-/// <item><description>
-/// <b>Does the board revision somebody recorded for this frame veto the write?</b> Fourth, before
-/// the unit is spoken to, because a value a human typed needs no device to check and a refusal that
-/// needs no device is the cheapest and clearest one available. See <see cref="ArrayBoardRevision"/>
-/// — <b>the semantics of this rung are the one thing here the operator has not settled.</b>
 /// </description></item>
 /// <item><description>
 /// <b>Does the unit answer the control tool at all?</b> Split in two, because "the tool is missing"
@@ -641,10 +495,9 @@ public sealed record ArrayGateRuling
 /// <see cref="ArrayExpectation"/>.
 /// </description></item>
 /// <item><description>
-/// <b>Is the complete observed tuple one entry on <see cref="Allowlist"/>?</b> Nine independent
+/// <b>Is the complete observed tuple one entry on <see cref="Allowlist"/>?</b> Eight independent
 /// checks passing is not the same claim as "this is a unit we recognise", and this rung is the
-/// difference. It is also where a recorded board revision that <i>contradicts</i> what the hardware
-/// says refuses, even when the recorded value is one this build knows.
+/// difference.
 /// </description></item>
 /// </list>
 /// <para>
@@ -681,7 +534,13 @@ public static class ArrayHardwareGate
     public const int SquarecularArrayType = 2;
 
     /// <summary>How many rungs the ladder has, so a refusal can say which one it is.</summary>
-    public const int Rungs = 10;
+    /// <remarks>
+    /// Nine since 2026-08-24, when the board-revision rung was removed. The number is here rather
+    /// than written into each refusal because a refusal saying <c>check 5 of 10</c> against a
+    /// nine-rung ladder is a small lie, and small lies in a technical block are the ones a person
+    /// relaying it down a telephone repeats.
+    /// </remarks>
+    public const int Rungs = 9;
 
     /// <summary>The sentence that stops anybody reading a refusal as "the board is wrong".</summary>
     /// <remarks>
@@ -689,12 +548,15 @@ public static class ArrayHardwareGate
     /// #32 reports the pinned firmware not booting on a V1.1 board, so <i>refuse to write to the
     /// wrong revision</i> is the first gate anybody would reach for and the first thing anybody
     /// reading a refusal will assume happened. It cannot be written from the device, and saying so
-    /// in every refusal is cheaper than one person, once, concluding that it silently was.
+    /// in every refusal is cheaper than one person, once, concluding that it silently was. There was
+    /// once a rung that gated on a typed-in revision; it was removed, and this sentence outlived it
+    /// deliberately — the gate went because it refused on no evidence, not because the fact stopped
+    /// being true.
     /// </remarks>
     public const string RevisionNote =
         "board revision is not readable from the unit at all — not in the USB descriptors and not in the control "
-        + "tool's command set — so the only revision this frame can gate on is one a person typed into "
-        + ArrayBoardRevision.SettingKey + ", and that value is a veto rather than a permission";
+        + "tool's command set — so no rung of this ladder gates on it, and none can: the revision is silkscreen, and "
+        + "the only value software could ever compare against is one a person read off the board and typed in";
 
     /// <summary>Half the width of the window a 66 mm square's coordinates must fall in, in metres.</summary>
     /// <remarks>
@@ -849,27 +711,17 @@ public static class ArrayHardwareGate
     /// </summary>
     /// <param name="scan">What <see cref="ReadAsync"/> saw.</param>
     /// <param name="pin">The images this build would write.</param>
-    /// <param name="recordedRevision">
-    /// Whatever an operator typed into <see cref="ArrayBoardRevision.SettingKey"/>, or null.
-    /// </param>
-    /// <param name="revision">
-    /// The semantics rung 4 and rung 10 apply to <paramref name="recordedRevision"/>. Defaults to
-    /// <see cref="ArrayBoardRevision.Default"/> — <b>the pending decision</b>.
-    /// </param>
     /// <param name="allowlist">
     /// The entries every rung measures against. Defaults to <see cref="Allowlist"/>; nothing in the
-    /// product passes anything else, and the suite does, so rung 10 can be watched refusing.
+    /// product passes anything else, and the suite does, so the last rung can be watched refusing.
     /// </param>
     public static ArrayGateRuling Judge(
         ArrayScan scan,
         XvfFirmwarePin pin,
-        string? recordedRevision = null,
-        IBoardRevisionGate? revision = null,
         IReadOnlyList<KnownArrayProfile>? allowlist = null)
     {
         ArgumentNullException.ThrowIfNull(pin);
 
-        var gate = revision ?? ArrayBoardRevision.Default;
         var target = pin.Target;
 
         // <b>The unions are derived here rather than read off the static properties, and the last
@@ -881,7 +733,6 @@ public static class ArrayHardwareGate
         // that split the union and watches it refuse a tuple assembled from both.
         var entries = allowlist ?? Allowlist;
         var skus = entries.SelectMany(profile => profile.ProductSkus).Distinct(StringComparer.Ordinal).ToList();
-        var revisions = entries.SelectMany(profile => profile.BoardRevisions).Distinct(StringComparer.Ordinal).ToList();
         var configurations = entries.Select(profile => profile.BuildConfiguration).Distinct(StringComparer.Ordinal).ToList();
         var firmware = entries.SelectMany(profile => profile.Firmware).Distinct(StringComparer.Ordinal).ToList();
 
@@ -906,8 +757,7 @@ public static class ArrayHardwareGate
                 "Check that the microphone bar's cable is pushed all the way into both the bar and the frame, then "
                     + "tell whoever looks after your frames.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         // ---- Rung 2: is there exactly one? -----------------------------------------------------
@@ -928,8 +778,7 @@ public static class ArrayHardwareGate
                 "Unplug every microphone bar except the one this frame is meant to use, then tell whoever looks after "
                     + "your frames.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         var unit = scan.Identity!.Value;
@@ -958,8 +807,7 @@ public static class ArrayHardwareGate
                 "Unplug the microphone bar, wait a few seconds, plug it back in, and tell whoever looks after your "
                     + "frames if this message comes back.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         if (!skus.Contains(sku, StringComparer.Ordinal))
@@ -981,35 +829,10 @@ public static class ArrayHardwareGate
                 "Tell whoever looks after your frames, and send them the technical detail below — it says exactly "
                     + "which bar this is.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 4: does the recorded board revision veto? -------------------------------------
-        // Fourth on purpose: it needs no device, so it is the cheapest refusal available and the
-        // clearest. It is also the one rung whose semantics are still open — see ArrayBoardRevision.
-        if (gate.BeforeReading(recordedRevision, revisions) is { Refuses: true } vetoed)
-        {
-            return Refuse(
-                ArrayGateVerdict.BoardRevisionRefused,
-                4,
-                "the board revision somebody recorded for this frame in " + ArrayBoardRevision.SettingKey,
-                vetoed.Technical,
-                "one of " + string.Join(", ", revisions) + ", or nothing recorded at all",
-                "This frame's microphone bar is a version this update has not been tried on",
-                [
-                    vetoed.Plain,
-                    "The frame cannot check this for itself — the version is only printed on the bar, and no software "
-                        + "can read printing. Somebody wrote it down, and this update has not been proven on it.",
-                ],
-                "Tell whoever looks after your frames. If the version written down is wrong, they can correct it and "
-                    + "the frame will try again.",
-                scan,
-                pin,
-                gate);
-        }
-
-        // ---- Rung 5: does it answer the control tool at all? -------------------------------------
+        // ---- Rung 4: does it answer the control tool at all? -------------------------------------
         if (unit.ControlVersion is null
             && unit.BuildConfiguration is null
             && unit.BuildRepositoryHash is null
@@ -1017,7 +840,7 @@ public static class ArrayHardwareGate
         {
             return Refuse(
                 ArrayGateVerdict.ControlToolMissing,
-                5,
+                4,
                 "whether this frame has the program that talks to the microphone unit",
                 "the control tool is not installed under " + XvfHost.AgentDirectory,
                 "xvf_host installed and answering, which the resource tool.xvf-host.installed keeps true",
@@ -1030,15 +853,14 @@ public static class ArrayHardwareGate
                 ],
                 "Nothing, for now. If this message is still here tomorrow, tell whoever looks after your frames.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         if (unit.ControlVersion is null || unit.BuildConfiguration is null)
         {
             return Refuse(
                 ArrayGateVerdict.ControlSilent,
-                5,
+                4,
                 "whether the microphone unit answers the control tool",
                 "VERSION answered " + Quote(unit.ControlVersion) + " and " + BuildConfigurationCommand
                     + " answered " + Quote(unit.BuildConfiguration),
@@ -1051,16 +873,15 @@ public static class ArrayHardwareGate
                 "Unplug the microphone bar's cable, wait ten seconds, and plug it back in. If this message comes "
                     + "back, tell whoever looks after your frames.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 6: is it the audio topology the pinned image is built for? ---------------------
+        // ---- Rung 5: is it the audio topology the pinned image is built for? ---------------------
         if (!configurations.Contains(unit.BuildConfiguration, StringComparer.Ordinal))
         {
             return Refuse(
                 ArrayGateVerdict.UnknownBuildConfiguration,
-                6,
+                5,
                 "the build configuration the microphone unit's firmware reports (" + BuildConfigurationCommand + ")",
                 unit.BuildConfiguration
                     + (string.Equals(unit.DescriptorVersion, target.Version, StringComparison.Ordinal)
@@ -1082,11 +903,10 @@ public static class ArrayHardwareGate
                 ],
                 "Do not try again. Tell whoever looks after your frames and send them the technical detail below.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 7: do the two independent firmware readings agree? -----------------------------
+        // ---- Rung 6: do the two independent firmware readings agree? -----------------------------
         // <b>VERSION is the authority and bcdDevice is the cheap corroborator, never the reverse.</b>
         // bcdDevice is 0xJJMP — major in the first byte, minor and patch in the two nibbles of the
         // second — so a minor or patch of 16 or more cannot be represented in it at all. 2.0.10 is
@@ -1100,7 +920,7 @@ public static class ArrayHardwareGate
         {
             return Refuse(
                 ArrayGateVerdict.ReadingsDisagree,
-                7,
+                6,
                 "the microphone unit's firmware version, read two independent ways",
                 "bcdDevice " + unit.BcdDevice + " = " + Quote(unit.DescriptorVersion) + ", VERSION = "
                     + Quote(unit.ControlVersion),
@@ -1115,11 +935,10 @@ public static class ArrayHardwareGate
                 "Switch the frame off at the wall, wait ten seconds, and switch it back on. If this message comes "
                     + "back, tell whoever looks after your frames.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 8: is the target a step forward, and is the version known? ---------------------
+        // ---- Rung 7: is the target a step forward, and is the version known? ---------------------
         // <b>Newer is asked first, and that ordering is the whole value of this rung.</b> Every
         // version this build knows is at or below the pin, so a unit running something newer is
         // always also a unit running something unknown — and answering "never been told about"
@@ -1130,7 +949,7 @@ public static class ArrayHardwareGate
         {
             return Refuse(
                 ArrayGateVerdict.FirmwareNewerThanTarget,
-                8,
+                7,
                 "whether the pinned firmware would move this unit forwards",
                 "the unit runs " + descriptor + " and the pin is " + target.Version,
                 "the unit running the same version as the pin, or an older one",
@@ -1145,15 +964,14 @@ public static class ArrayHardwareGate
                     + "the technical detail below to whoever maintains FrameLink — this frame is newer than the "
                     + "software knows about, and that is something they need to hear.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         if (!firmware.Contains(descriptor, StringComparer.Ordinal))
         {
             return Refuse(
                 ArrayGateVerdict.UnknownFirmware,
-                8,
+                7,
                 "the firmware version the microphone unit is running",
                 descriptor,
                 "one of " + string.Join(", ", firmware),
@@ -1166,18 +984,17 @@ public static class ArrayHardwareGate
                 "Tell whoever looks after your frames and send them the technical detail below. They will know "
                     + "whether this bar can be supported.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 9: does the firmware say it is driving this board's array? ---------------------
+        // ---- Rung 8: does the firmware say it is driving this board's array? ---------------------
         // Published expectations, never measured here: a contradicting reading refuses, an
         // unreadable one does not. ArrayExpectation carries the whole of that reasoning.
         if (unit.MicArrayType is { } arrayType && arrayType != SquarecularArrayType)
         {
             return Refuse(
                 ArrayGateVerdict.MicArrayTypeUnexpected,
-                9,
+                8,
                 "the microphone arrangement the running firmware believes it is driving ("
                     + MicArrayTypeCommand + ")",
                 arrayType.ToString(CultureInfo.InvariantCulture)
@@ -1192,15 +1009,14 @@ public static class ArrayHardwareGate
                 ],
                 "Tell whoever looks after your frames and send them the technical detail below.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
         if (unit.MicArrayGeometry is { } geometry && !IsSquareGeometry(geometry))
         {
             return Refuse(
                 ArrayGateVerdict.MicArrayGeometryUnexpected,
-                9,
+                8,
                 "the microphone coordinates the running firmware reports (" + MicArrayGeometryCommand + ")",
                 DescribeGeometry(geometry),
                 "four microphones at the corners of a 66 mm square, z = 0 — each coordinate "
@@ -1215,11 +1031,10 @@ public static class ArrayHardwareGate
                 ],
                 "Tell whoever looks after your frames and send them the technical detail below.",
                 scan,
-                pin,
-                gate);
+                pin);
         }
 
-        // ---- Rung 10: is the whole tuple one entry on the allowlist? -----------------------------
+        // ---- Rung 9: is the whole tuple one entry on the allowlist? ------------------------------
         var matched = entries.FirstOrDefault(profile => profile.Covers(unit));
 
         if (matched is null)
@@ -1239,30 +1054,7 @@ public static class ArrayHardwareGate
                 ],
                 "Tell whoever looks after your frames and send them the technical detail below.",
                 scan,
-                pin,
-                gate);
-        }
-
-        if (gate.AgainstProfile(recordedRevision, matched) is { Refuses: true } contradicted)
-        {
-            return Refuse(
-                ArrayGateVerdict.BoardRevisionRefused,
-                Rungs,
-                "the recorded board revision against the unit this frame can actually read",
-                contradicted.Technical,
-                "the recorded revision to be one '" + matched.Name + "' has been established on ("
-                    + string.Join(", ", matched.BoardRevisions) + ")",
-                "What is written down about this frame's microphone bar does not match the bar",
-                [
-                    contradicted.Plain,
-                    "The frame cannot settle this by itself: the version is printed on the bar and no software can "
-                        + "read printing, so somebody has to look.",
-                ],
-                "Tell whoever looks after your frames. Somebody needs to look at the writing on the microphone bar "
-                    + "and check it against what was recorded.",
-                scan,
-                pin,
-                gate);
+                pin);
         }
 
         return new ArrayGateRuling
@@ -1283,7 +1075,6 @@ public static class ArrayHardwareGate
                 matched.Name,
                 new ArrayScan(scan.Devices, unit, scan.BusEnumerable),
                 pin,
-                gate,
                 matched),
         };
     }
@@ -1513,8 +1304,7 @@ public static class ArrayHardwareGate
         IReadOnlyList<string> plain,
         string next,
         ArrayScan scan,
-        XvfFirmwarePin pin,
-        IBoardRevisionGate gate) => new()
+        XvfFirmwarePin pin) => new()
         {
             Verdict = verdict,
             Rung = rung,
@@ -1524,7 +1314,7 @@ public static class ArrayHardwareGate
             Headline = headline,
             Plain = plain,
             Next = next,
-            Technical = TechnicalBlock(verdict, rung, checked_, found, expected, scan, pin, gate, matched: null),
+            Technical = TechnicalBlock(verdict, rung, checked_, found, expected, scan, pin, matched: null),
         };
 
     private static IReadOnlyList<string> TechnicalBlock(
@@ -1535,7 +1325,6 @@ public static class ArrayHardwareGate
         string expected,
         ArrayScan scan,
         XvfFirmwarePin pin,
-        IBoardRevisionGate gate,
         KnownArrayProfile? matched)
     {
         var target = pin.Target;
@@ -1554,13 +1343,12 @@ public static class ArrayHardwareGate
             "  bus:        " + DescribeAttached(scan.Devices),
             "  pin:        " + target.Name + ", firmware " + target.Version + ", sha256 " + target.Sha256,
             // "no entry matched" would be true and misleading on any rung above the last one: the
-            // allowlist was never consulted, and a reader who saw it would conclude rung 10 fired.
+            // allowlist was never consulted, and a reader who saw it would conclude the last rung fired.
             "  allowlist:  " + string.Join("; ", Allowlist.Select(profile => profile.Name))
                 + (matched is not null ? " (matched: " + matched.Name + ")"
                     : rung < Rungs ? " (not reached — the ladder stopped at check "
                         + rung.ToString(CultureInfo.InvariantCulture) + ")"
                     : " (no entry matched)"),
-            "  revision:   " + gate.Semantics,
             "  note:       " + RevisionNote + ".",
             "  unverified: AEC_MIC_ARRAY_TYPE and AEC_MIC_ARRAY_GEO have never been read on this project's hardware; "
                 + "their expected values are Seeed's published output and XMOS's shipped default, so a reading that "

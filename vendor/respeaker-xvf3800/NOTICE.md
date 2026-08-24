@@ -43,14 +43,20 @@ Three reasons, in the order they matter.
 an embedded resource, so a frame that has an agent has the firmware — no GitHub, no Fleet Manager, no
 route to anywhere. The one operation on a frame that cannot be undone remotely should depend on
 nothing outside the executable performing it. The agent puts this image on the card from inside
-itself, and only reaches for the network for the two images that are **not** here.
+itself, and it is now the whole of what the pin names.
 
-That last sentence is the whole of the caveat, and it is worth stating plainly: **flashing offline
-is not yet possible, because the flash refuses to run without a way back.** The pre-flight in
-`ArrayFirmwareFlash.cs` requires the v2.0.6 fallback and the `4mb_all_ff.bin` erase image on the card
-before it will write anything, and neither is vendored. So today an offline frame reliably *has* the
-target image and still cannot *use* it. Vendoring the other two would close that, and whether to is
-the open question at the end of this notice.
+**That is new, and it is worth saying what changed.** This notice used to carry a caveat here: two
+more images were pinned — a v2.0.6 fallback and Seeed's 4 MiB all-`0xFF` erase image
+`4mb_all_ff.bin` — neither was vendored, and `ArrayFirmwareFlash`'s pre-flight refused to write
+anything unless both were on the card. So an offline frame reliably *had* the target image and
+reliably could not *use* it, which was the precise opposite of the reason these bytes are here. Both
+images and that pre-flight were removed on 2026-08-24. The evidence is in
+[the recovery-model reference](../../reference/xvf3800-recovery-model.md) and the decision is
+recorded as decision 93 in [version2.md](../../version2.md); the short version is that a DFU
+download already erases the upgrade section before it writes, Seeed's own documented recovery has no
+erase step, the corruption the erase image was published for was fixed in firmware from v2.0.9 and
+is caused by a command this repository sends nowhere, and the fallback version was one commit's
+unexplained choice. Offline flashing now works.
 
 **Upstream has already republished one filename with different contents.**
 `respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin` exists as two different binaries under one name,
@@ -93,7 +99,7 @@ is still honest about a limit rather than a gap: the bench flash reads its own c
 
 | Concern | Where it lives | Built? |
 | --- | --- | --- |
-| The pin — commit, digest, length, role | `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` | yes |
+| The pin — commit, digest, length, role | `src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs` | yes |
 | The resource that puts it on the card and re-hashes it | `src/FrameLink.Agent/Resources/XvfFirmwareImageResource.cs` | yes |
 | The interlocked write that is allowed to use it | `src/FrameLink.Agent/Firmware/ArrayFirmwareFlash.cs` | yes |
 | The bench flash | `tools/harness/flh/flash.py` | yes, but it does not read this directory yet |
@@ -146,24 +152,16 @@ Both deltas exceed their payload, by 49,560 raw and 28,022 gzipped. That differe
 the install path it feeds and the resource-table entry, not the image; a resource itself is stored
 verbatim, which is what the two "verbatim at offset" readings above establish directly.
 
-Two other images are pinned by this project and are **not** vendored here: the v2.0.6 fallback and
-the `4mb_all_ff.bin` erase image, both still fetched from upstream at their own pinned commits.
-Whether they join this directory is an open question and not an oversight — and, as noted above, it
-is the question that decides whether a frame can flash with no network, because the flash refuses
-without both of them on the card.
+**This is the only image this project pins.** Two others were, and are not any more; see the
+account above. Nothing in the code names a file — the csproj globs `vendor/respeaker-xvf3800/**/*.bin`,
+`XvfVendoredFirmware` keys on the name the pin already carries, and an image the binary does not
+carry falls to the download path, which is kept for exactly that case. So a second image joining the
+pin one day is: the file, a row in the table above, a pin entry, and a `upstream-review.json` note.
+No line of the csproj and no line of the accessor.
 
-Nothing in the code names a file. The csproj globs, `XvfVendoredFirmware` keys on the name the pin
-already carries, and an image that is not embedded falls to the download path it uses today. If the
-answer is yes, the change is: the two files, two rows in the table above, an expectation flipped in
-`AgentVendoredFirmwareTests.cs`, and the three `upstream-review.json` notes. No line of the csproj
-and no line of the accessor.
-
-**Compression makes that decision much cheaper than it looks.** Raw, the two absent images are
-5,128,192 bytes — half again the size of the whole agent. Gzipped, `4mb_all_ff.bin` is **4,098
-bytes**: it is 4,194,304 bytes of repeated `0xFF`, so it very nearly is not there at all. (That
-figure is computed here from the all-`0xFF` content the ledger records having measured byte by byte,
-not from the file, which is not in this repository.) The v2.0.6 fallback is a firmware image of the
-same 933,888 bytes and would land near the target's 300,074, though nobody has measured it because
-its bytes are not here either. So the honest shape of the trade is roughly 300 KB more on every
-agent download, not five megabytes — and it is that 300 KB, not the erase image, that is worth
-weighing.
+**And it is cheap, which is the fact that made the old open question tractable and is recorded here
+because it will be wanted again.** Gzipped, this 933,888-byte firmware image is 300,074 bytes — about
+300 KB on every agent download, since every frame pulls the binary over the hourly update feed on
+every release. A second firmware image would cost roughly the same again. An all-`0xFF` blob of
+4,194,304 bytes gzips to about 4,098 bytes and would cost effectively nothing, which is why size was
+never the argument against carrying it.

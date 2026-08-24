@@ -370,31 +370,30 @@ def _parser() -> argparse.ArgumentParser:
             "--write must be present; --authorise must name the pinned image's sha256; this\n"
             "harness's pin and the agent's must agree; the bytes on the frame must re-hash to\n"
             "the pin in the instant before dfu-util starts; and only alt 1, the Upgrade\n"
-            "partition, is ever written. Alt 0 is what Safe Mode boots from and is refused by\n"
+            "partition, is ever written. Alt 0 is the Factory partition and is refused by\n"
             "number. The agent must be held first, exactly as `read` requires.\n\n"
             "  fl.py array flash                    every gate, nothing run\n"
             "  fl.py array flash --simulate <what>  the whole system, with a generated stub in\n"
             "                                       place of dfu-util; no byte reaches the array\n"
             "  fl.py array flash --write --authorise <sha256>[:ticket]   the real write\n"
-            "  fl.py array flash --list-dfu         dfu-util -l, which WRITES NOTHING; in Safe\n"
-            "                                       Mode it lists a third alt setting, and that\n"
-            "                                       is the only proof Safe Mode was entered\n"
+            "  fl.py array flash --list-dfu         dfu-util -l, which WRITES NOTHING\n"
             "  fl.py array flash --clear-marker     after a person has looked at the unit\n"
-            "  fl.py array stage                    fetch and verify the three pinned images\n"
-            "  fl.py array clean                    remove the bench directory from the frame\n"
-            "  fl.py array runbook                  the Safe Mode recovery steps; needs no frame\n\n"
+            "  fl.py array stage                    fetch and verify the pinned image\n"
+            "  fl.py array clean                    remove the bench directory from the frame\n\n"
             "An interrupted write leaves a durable marker on the card and every later flash -\n"
             "agent or bench - is refused until a person removes it. That is deliberate: a\n"
-            "cgroup kill, a power cut and a crash all leave the same array behind, and\n"
-            "retrying a partial write is the documented route from a recoverable board to an\n"
-            "unrecoverable one. `array flash` writes an excessive debug log for every run and\n"
-            "cannot be told not to."
+            "cgroup kill, a power cut and a crash all leave the same array behind, so nothing\n"
+            "knows how far that write got, and a state nothing can measure is one a person\n"
+            "should look at. `array flash` writes an excessive debug log for every run and\n"
+            "cannot be told not to.\n\n"
+            "`array runbook` was removed on 2026-08-24 with this project's Safe Mode support.\n"
+            "See reference/xvf3800-recovery-model.md, which keeps the measured record."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p_array.add_argument(
         "action",
-        choices=("hold", "read", "release", "flash", "stage", "clean", "runbook"),
+        choices=("hold", "read", "release", "flash", "stage", "clean"),
         help="what to do",
     )
     p_array.add_argument(
@@ -717,16 +716,12 @@ def main(argv: list[str] | None = None) -> int:
             return int(outcome["exitCode"])
 
         if args.command == "array":
-            # The four actions that are not the three original ones. They are dispatched
-            # ahead of the progress.activity block because `runbook` needs no frame and no
-            # credential at all, and because `flash` opens its own debug log and writes its
-            # own artifact - wrapping it in a second one would give a flash two records of
-            # itself that could disagree.
-            if args.action == "runbook":
-                for line in flash_mod.recovery_runbook():
-                    ui.info(line)
-                return 0
-
+            # Dispatched ahead of the progress.activity block because `flash` opens its own
+            # debug log and writes its own artifact - wrapping it in a second one would give a
+            # flash two records of itself that could disagree. A `runbook` action stood beside
+            # this one and printed the Safe Mode procedure; it went on 2026-08-24 with the rest
+            # of this project's Safe Mode support, and reference/xvf3800-recovery-model.md
+            # keeps the measured record of what was dropped.
             if args.action == "flash" and args.clear_marker:
                 with flash_mod.ssh.connect() as mule:
                     existing = flash_mod.clear_marker(mule)

@@ -159,7 +159,7 @@ public static class ArrayFlashEndpoints
         loggers.CreateLogger(LogCategory).ArrayFlashAuthorised(
             deviceId,
             request.Unattended,
-            ArrayFlashPin.TargetVersion,
+            ArrayFlashPin.Target.Version,
             authorisation);
 
         await publisher.PushAsync(deviceId, cancellationToken).ConfigureAwait(false);
@@ -251,10 +251,10 @@ public static class ArrayFlashEndpoints
             Online = online,
             Target = new ArrayFlashTargetView
             {
-                Name = ArrayFlashPin.TargetName,
-                Version = ArrayFlashPin.TargetVersion,
-                Sha256 = ArrayFlashPin.TargetSha256,
-                SizeBytes = ArrayFlashPin.TargetSizeBytes,
+                Name = ArrayFlashPin.Target.Name,
+                Version = ArrayFlashPin.Target.Version,
+                Sha256 = ArrayFlashPin.Target.Sha256,
+                SizeBytes = ArrayFlashPin.Target.SizeBytes,
             },
             UnattendedPrefix = ArrayFlashPin.UnattendedPrefix,
             UnattendedWarning = ArrayFlashPin.UnattendedWarning,

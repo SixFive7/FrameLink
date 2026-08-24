@@ -74,8 +74,6 @@ export function describeRefusal(refusal: string): string {
 			return 'The authorisation names a different image';
 		case 'ImageNotVerified':
 			return 'The image on this frame is missing or does not match';
-		case 'RecoveryNotVerified':
-			return 'There is no verified way back on this frame';
 		case 'DfuUtilMissing':
 			return 'The writing program is not installed';
 		case 'NoArrayAttached':

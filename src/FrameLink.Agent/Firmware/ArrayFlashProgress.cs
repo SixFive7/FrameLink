@@ -431,23 +431,36 @@ public sealed class ArrayFlashProgressPump : IDisposable
     /// <param name="box">Where the newest reading lands.</param>
     /// <param name="log">Where a publish that failed is noted, once.</param>
     /// <param name="beat">How long a beat waits with nothing arriving.</param>
+    /// <param name="attempt">
+    /// Which of <see cref="ArrayFirmwareFlash.MaxAttempts"/> writes this is, counting from one.
+    /// </param>
     /// <remarks>
+    /// <para>
     /// <b>It takes the epoch here and publishes nothing here.</b> Claiming the screen is a lock and
     /// an increment — bounded, and safe on the writing thread — and every publish that follows, the
     /// first one included, happens on the task this starts. That is what makes it true that the
     /// writing thread never calls into the hub for the whole of the write.
+    /// </para>
+    /// <para>
+    /// <b>The attempt number goes to the screen and not into the reading.</b> A retry restarts the
+    /// bar at nothing, and a bar that resets with no words beside it says the frame has hung — which
+    /// is what a person reaches for the plug over. It is carried by the screen's owner rather than by
+    /// <see cref="ArrayFlashProgress"/> because the wire status is a frozen protocol contract and
+    /// this is a sentence rather than a measurement.
+    /// </para>
     /// </remarks>
     public static ArrayFlashProgressPump Start(
         ArrayFlashApproval approval,
         ArrayFlashProgressBox box,
         IAgentLog log,
-        TimeSpan? beat = null)
+        TimeSpan? beat = null,
+        int attempt = 1)
     {
         ArgumentNullException.ThrowIfNull(approval);
         ArgumentNullException.ThrowIfNull(box);
         ArgumentNullException.ThrowIfNull(log);
 
-        var pump = new ArrayFlashProgressPump(approval, box, log, approval.BeginWriting(), beat ?? DefaultBeat);
+        var pump = new ArrayFlashProgressPump(approval, box, log, approval.BeginWriting(attempt), beat ?? DefaultBeat);
 
         // Discarded on purpose. Nothing waits on this task — not the caller, not Dispose — because
         // anything that waited on it would be a way for the screen to reach the write.

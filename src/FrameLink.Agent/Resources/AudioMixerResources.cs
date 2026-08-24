@@ -1638,7 +1638,7 @@ public static class AudioCatalog
             // three reboots discovering that — and it depends on the control tool, so a frame that
             // is merely missing `xvf_host` is blocked behind something the reconciler fixes by
             // itself rather than escalated on something nobody needs to come out for.
-            new ArrayRecognitionResource(context.Files, tool, context.Values),
+            new ArrayRecognitionResource(context.Files, tool),
 
             // Positions 55–62. `firmware.xvf3800.version` used to sit at the head of this block,
             // and decision 90 took it out of the graph entirely: a DFU flash is the only Act that

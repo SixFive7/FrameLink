@@ -63,6 +63,35 @@
   </ItemGroup>
 
   <!--
+    The XVF3800 firmware pin, compiled from the AGENT'S file rather than restated here.
+
+    An operator authorising a flash needs the target image's name, version, digest and length; the
+    frame needs the same four values to decide what it may write. Those used to be two records held
+    equal string by string by ControlArrayFlashTests. They are now one file compiled twice — the
+    same reach-across as fl-agent.service above, and for the same reason: nothing hands one artifact
+    to both programs, and a second copy is a second chance for the Fleet Manager to offer an
+    authorisation every frame in the fleet would refuse.
+
+    NOT a ProjectReference. This server references FrameLink.Protocol and nothing else, deliberately
+    (§3.1), and the pin is not wire data — the protocol assembly holds frozen contracts and this is
+    a value a human bumps in a source edit that goes through the upstream-review.json gate.
+
+    FRAMELINK_CONTROL moves the linked types into FrameLink.Control.Firmware. The two programs are
+    separate Native AOT binaries that reference each other not at all, but the test project
+    references both, so one fully-qualified name in two assemblies would be ambiguous at every use.
+    The namespace split is what keeps ControlArrayFlashTests able to name each compilation and
+    assert they agree — which is now a check that both assemblies were built from the same file
+    rather than a check that two hand-written records still match.
+  -->
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);FRAMELINK_CONTROL</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\FrameLink.Agent\Firmware\XvfFirmwarePin.cs" Link="Firmware\XvfFirmwarePin.cs" />
+  </ItemGroup>
+
+  <!--
     The reviewed package baseline every frame's inventory is compared against.
 
     A file rather than a generated .cs, for the reason §7.1 gives about the base image pin: it is

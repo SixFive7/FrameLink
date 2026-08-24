@@ -379,9 +379,9 @@ somewhere in this repository.
    full commit SHA is content-addressed, which is the only thing that makes a pin possible with no
    release to point at. The digests are measured here rather than published — this publisher
    publishes none, and nobody signs a `checksums.txt` either, so a measured digest is no weaker.
-   Implemented in `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` and
+   Implemented in `src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs` and
    `src/FrameLink.Agent/Resources/XvfHostRelease.cs`.
-2. **Probe the file path, never the directory.** For the three firmware images this is the only
+2. **Probe the file path, never the directory.** For the firmware image this is the only
    probe that would catch a third republication of one filename, and a directory probe would report
    movement every time upstream adds an image for any product variant — which it did three times in
    2026. The one exception is deliberate and reasoned: `xvf-host-tool` probes the
@@ -445,9 +445,9 @@ checked on 2026-08-24 against the live upstream.
 
 | Concern | Where it lives |
 | --- | --- |
-| The four pinned upstream entries, their probes and their review notes | `upstream-review.json` |
+| The pinned upstream entries, their probes and their review notes | `upstream-review.json` |
 | The probe kinds, including `github-path-commit`, and the release-gate semantics | `tools/FrameLink.Upstream/` |
-| The three firmware pins, their digests and the flash interlocks | `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` |
+| The firmware pin, its digest and the flash interlocks | `src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs` |
 | The six control-tool files and their digests | `src/FrameLink.Agent/Resources/XvfHostRelease.cs` |
 | Why the tool is fetched rather than vendored | [decision 63](../version2.md) |
 | Why a firmware version is not a resource | [decision 90](../version2.md) |

@@ -4,6 +4,11 @@ using System.Security.Cryptography;
 using FrameLink.Agent.Firmware;
 using FrameLink.Control;
 using FrameLink.Control.Firmware;
+
+// The pin is one file compiled into both programs (src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs),
+// so both namespaces above carry a type of this name. The agent's is what an unqualified use means
+// here; the Fleet Manager's is named in full in the one test that checks the two compilations agree.
+using XvfFirmwarePin = FrameLink.Agent.Firmware.XvfFirmwarePin;
 using FrameLink.Protocol;
 
 namespace FrameLink.Tests;
@@ -42,17 +47,30 @@ public sealed class ControlArrayFlashTests
     [Fact]
     public void The_image_this_server_offers_is_the_image_the_frame_will_accept()
     {
-        // The Fleet Manager cannot reference FrameLink.Agent and the digest is on no wire, so it
-        // holds its own record — the same shape tools/harness/flh/flash.py uses and calls "the pin,
-        // held twice". This is the assertion that makes the second record safe: a bump on one side
-        // and not the other is a red test, rather than a console handing out authorisations every
-        // frame in the fleet answers with `NotThePinnedImage`.
-        var target = XvfFirmwarePin.Current.Target;
+        // This used to compare two hand-written records field by field, because the Fleet Manager
+        // cannot reference FrameLink.Agent and the digest is on no wire. There is now one record:
+        // src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs is <Compile Include>d across the project
+        // boundary, so the two programs are compiled from the same bytes rather than checked
+        // against each other.
+        //
+        // What is left to check is not nothing, and it is the reason this test survives the
+        // simplification: the two compilations are separate assemblies, and a build that linked a
+        // stale copy — a half-applied edit, a dirty obj directory, a csproj whose Compile item
+        // stopped resolving — would produce exactly the failure the old test guarded against, a
+        // console handing out authorisations every frame answers with `NotThePinnedImage`. So the
+        // agent's compilation is compared to the Fleet Manager's, by value, once.
+        var agent = XvfFirmwarePin.Current.Target;
+        var control = FrameLink.Control.Firmware.XvfFirmwarePin.Current.Target;
 
-        Assert.Equal(ArrayFlashPin.TargetName, target.Name);
-        Assert.Equal(ArrayFlashPin.TargetVersion, target.Version);
-        Assert.Equal(ArrayFlashPin.TargetSha256, target.Sha256);
-        Assert.Equal(ArrayFlashPin.TargetSizeBytes, target.SizeBytes);
+        Assert.Equal(agent.Name, control.Name);
+        Assert.Equal(agent.Version, control.Version);
+        Assert.Equal(agent.Sha256, control.Sha256);
+        Assert.Equal(agent.SizeBytes, control.SizeBytes);
+        Assert.Equal(agent.Commit, control.Commit);
+
+        // And what the endpoints actually hand out is that same record rather than a copy of it.
+        Assert.Equal(control.Sha256, ArrayFlashPin.Target.Sha256);
+        Assert.Equal(control.Name, ArrayFlashPin.Target.Name);
     }
 
     [Fact]

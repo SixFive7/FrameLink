@@ -34,11 +34,21 @@ of its own write. That is deliberate and it is the single most important design 
 this file. The marker means *a DFU write to this frame's array began and nothing knows how
 far it got*, and that sentence is exactly as true when the workstation started the write as
 when the agent did. A harness-private marker would leave the agent free to begin a second
-write onto a half-written Upgrade partition, which upstream issue #8 and issue #32 together
-document as the route from a recoverable board to an unrecoverable one. So an interrupted
-bench flash fuses the agent too, permanently, until a person removes the file — and
+write onto an Upgrade partition nothing knows the state of. So an interrupted bench flash
+fuses the agent too, permanently, until a person removes the file — and
 ``fl.py array flash --clear-marker`` is that person's tool, not this module's own escape
 hatch.
+
+**A correction, kept because it is the reason the marker survives a policy change.** This
+paragraph used to justify the marker by saying that retrying a partial write "is the route
+from a recoverable board to an unrecoverable one", citing upstream issues #8 and #32. That
+documentation was searched for on 2026-08-24 and does not exist; XMOS documents the opposite -
+*"Another download operation may be reattempted."* The agent now writes up to three times per
+authorisation for exactly that reason. What the marker rests on is the narrower and true
+statement: an interrupted write leaves a partition whose state nothing on the frame can
+measure, and the answer to a state you cannot measure is a person rather than another
+attempt. Retrying a *completed* write that did not stick is a different thing entirely, and
+that is the one the agent does.
 
 The five gates in front of a write, and why they are five
 ----------------------------------------------------------
@@ -71,26 +81,68 @@ And a sixth that is not about the write but about the room it happens in: the ag
 What this module will not do, ever
 -----------------------------------
 * **It will not write the Factory partition** (alt 0) or the DataPartition (alt 2).
-* **It will not write the recovery or fallback images.** Only the pinned *Target* is
-  writable. The ``4mb_all_ff.bin`` erase and the v2.0.6 restore belong to an attended Safe
-  Mode session with somebody's finger on the Mute button — decision 91's sequencing is
-  binding, and automating the recovery would be automating the half that needs hands.
-  :func:`recovery_runbook` prints those steps for a person to follow; it runs none of them.
+* **It will not write any image but the pinned Target.** There is only one pinned image now;
+  see the note on the recovery kit below.
 * **It will not enter Safe Mode**, because nothing in software can: the gesture is sampled
-  by the bootloader at power-on from a physical button.
+  by the bootloader at power-on from a physical button. Nor does it print the procedure any
+  more - see the note on Safe Mode support below.
 
-The two procedural details that are easy to miss
--------------------------------------------------
-Both are recorded here because one of them is not in the upstream instructions, and both
-have cost somebody a confusing hour:
+The recovery kit is gone, and this is the account of it
+--------------------------------------------------------
+Until 2026-08-24 this module pinned three images: the target, a v2.0.6 ``FALLBACK`` and
+Seeed's 4 MiB all-``0xFF`` ``RECOVERY`` erase image, and a ``recovery_runbook`` function
+printed a six-step procedure built around them. All of that went with the operator's decision
+to embed one target firmware and nothing else.
 
-* The ``4mb_all_ff.bin`` erase **terminates at about 96%** (4,030,464 of 4,194,304 bytes)
-  with ``dfuERROR status(8) = Cannot program memory due to received address that is out of
-  range``. **That is the expected outcome, not a failure** — the image is 4 MiB and the
-  partition is smaller, so the write runs off the end.
-* A **power cycle is required between the erase and the next write**, or the download fails
-  at 0% with the same status. This is not in upstream's recovery comment; it comes from
-  issue #32.
+What was measured, against XMOS's and Seeed's own sources and recorded in
+``reference/xvf3800-recovery-model.md``:
+
+* A DFU download **already erases the whole upgrade section before it writes** - XMOS's
+  ``lib_dfu``: *"on receiving the first DFU_DNLOAD command, the device starts to erase
+  FLASH_MAX_UPGRADE_SIZE bytes of the upgrade section"* - so a separate erase step has nothing
+  to do.
+* **Seeed's own documented recovery has no erase step**: enter Safe Mode, flash the firmware.
+  The string ``all_ff`` appears nowhere in the wiki, the DFU guide or the changelog; its
+  entire documentation is one GitHub issue comment.
+* The failure the erase image was published for is a configuration corrupted by
+  ``SAVE_CONFIGURATION``, which upstream says was **fixed in firmware from v2.0.9**, and which
+  this repository cannot cause because it sends that command nowhere.
+* ``v2.0.6`` as "the fallback" was one commit's unexplained choice. Neither upstream, nor
+  Seeed, nor decision 91 ever recommended it, and the maintainer's own recovery advice tracks
+  the newest image rather than an old one.
+
+What that costs, stated rather than glossed: a second known-good image on the card was
+insurance against the pinned target being bad on a board nobody has met - real, unquantified,
+and never observed here or upstream - and putting one back is now a pin bump and a release.
+The erase image was the only answer to a corrupted DataPartition, a failure this product
+cannot reach.
+
+Two procedural details went with the erase and are recorded here so nobody re-derives them
+while reading an old transcript: the ``all_ff`` write terminated at about 96% (4,030,464 of
+4,194,304 bytes) with ``dfuERROR status(8) = ... address that is out of range``, which was the
+expected outcome because the image is larger than the partition; and a power cycle was
+required between that erase and the next write, or the download failed at 0% with the same
+status. Neither applies to writing a firmware image, which is the only thing left.
+
+Safe Mode support went too, and that is a larger removal than the kit
+----------------------------------------------------------------------
+On the same day the operator dropped this project's *support* for Safe Mode entirely: no
+runbook here, no ``fl.py array runbook``, no on-screen recovery instructions on a frame, and
+no wedged-board detection. A board that has stopped presenting itself over USB goes back to
+the maintainer.
+
+Safe Mode itself cannot be dropped and nothing here pretends otherwise: it is firmware in the
+board's Factory partition, put there at manufacture, which no DFU write can touch, and it is
+entered by a physical gesture the bootloader samples at power-on. **It is also the only route
+back from a board that has stopped enumerating** - precisely the state in which this module's
+normal path is useless, because ``dfu-util -e`` needs a working device to detach. After this
+change the software has no recovery path for that state at all. That was said before the
+decision was taken; it is recorded here for whoever reads it afterwards.
+
+**The knowledge was not deleted.** ``reference/xvf3800-recovery-model.md`` is the measured
+record of what Safe Mode is, what the Factory partition guarantees, what the erase image
+actually did and what every recovery route costs. It stays exactly as it is. What went is the
+product's support for the procedure, not the finding behind it.
 
 Simulation
 ----------
@@ -127,7 +179,7 @@ from .config import RUNS_DIR, HarnessError
 # --- the pin, which this file holds as its own second record ----------------
 #: Where the agent keeps the same three digests. Parsed by :func:`cross_check_pin` so a bump
 #: on one side and not the other is a refusal rather than a surprise.
-AGENT_PIN_SOURCE = "src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs"
+AGENT_PIN_SOURCE = "src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs"
 
 
 @dataclass(frozen=True)
@@ -170,36 +222,10 @@ TARGET = Image(
     purpose="the firmware version this fleet converges on",
 )
 
-#: The version a person puts back by hand from Safe Mode when a write has gone wrong. Both
-#: of this project's arrays shipped with it, and upstream issue #32 reports it booting on
-#: every board revision anybody has tried - which is more than can be said for the target.
-FALLBACK = Image(
-    name="respeaker_xvf3800_usb_dfu_firmware_v2.0.6.bin",
-    directory="usb",
-    commit="ff421c45e1624f7b27da5e7f723a58cc69b3eb34",
-    sha256="c95fd3dec7597c72a24bc7e5212e6db136144956d5569f24b518ecfc1540ef09",
-    size_bytes=933_888,
-    role="Fallback",
-    version="2 0 6",
-    purpose="the version to put back by hand if a flash goes wrong",
-)
-
-#: The blank image that erases a half-written Upgrade partition. Not firmware: 4,194,304
-#: bytes of ``0xFF``, which is the erased state of NOR flash, written as a download because
-#: DFU has no erase command.
-RECOVERY = Image(
-    name="4mb_all_ff.bin",
-    directory="recover",
-    commit="0b73b3ffe908fb262a20fcff9f27f5a126f3c0a9",
-    sha256="cd3517473707d59c3d915b52a3e16213cadce80d9ffb2b4371958fb7acb51a08",
-    size_bytes=4_194_304,
-    role="Recovery",
-    version="",
-    purpose="the blank image that erases a half-written partition before the fallback goes on",
-)
-
-#: Every image this project pins. Order matters only for reporting.
-IMAGES = (TARGET, FALLBACK, RECOVERY)
+#: Every image this project pins. A one-tuple since the recovery kit went; it stays a tuple
+#: because :func:`cross_check_pin` walks it against the agent's own list and a second image
+#: joining the pin should be a data edit on both sides rather than a reshape.
+IMAGES = (TARGET,)
 
 #: The agent's own marker, which this module both reads and writes. See the module
 #: docstring: one marker, two writers, one meaning.
@@ -267,12 +293,13 @@ SIMULATIONS: dict[str, str] = {
         "outcome where the verify itself is substituted, not just the writer"
     ),
     "dfu-error": (
-        "the stub exits non-zero with the dfuERROR status(8) transcript upstream's erase "
-        "produces; nothing else is substituted"
+        "the stub exits non-zero with a dfuERROR status(8) transcript; nothing else is "
+        "substituted"
     ),
     "erase-out-of-range": (
-        "the stub reproduces the erase terminating at 96% with status(8) out of range, which "
-        "is the expected outcome of the recovery erase and reads exactly like a failure"
+        "the stub reproduces a write terminating at 96% with status(8) out of range. Kept "
+        "after the recovery kit went, because it is still the most confusing transcript this "
+        "device produces and the one a person is most likely to misread"
     ),
     "interrupted": (
         "the stub is started and then killed mid-write, exactly as a cgroup teardown or a "
@@ -620,9 +647,12 @@ def evaluate(
             "" if marker is None else
             "A previous firmware write on this frame never finished. A cgroup kill, a power "
             "cut and a crash all leave the same array behind, so nothing knows how far that "
-            "write got - and retrying a partial write is the documented route from a "
-            "recoverable board to an unrecoverable one. A person looks at the unit and "
-            "removes the file; `fl.py array flash --clear-marker` is how."
+            "write got - and a state nothing can measure is one a person should look at. "
+            "(This is NOT the claim that a write may not be repeated: XMOS documents that "
+            "another download may be reattempted, and the agent writes up to three times per "
+            "authorisation. What must not be repeated blindly is an INTERRUPTED write.) "
+            "A person looks at the unit and removes the file; "
+            "`fl.py array flash --clear-marker` is how."
         ),
         refusal="PreviousFlashUnfinished",
     ))
@@ -748,16 +778,10 @@ def evaluate(
             observed=(f"{path} sha256 {actual[:12]}" if actual else "absent from both directories"),
             why=(
                 "" if matches else
-                (f"{image.name} - {image.purpose} - is missing or does not match the pinned "
-                 "digest. " + (
-                     "An unverified image must never be written to an array."
-                     if image.role == "Target" else
-                     "This frame has no proven way back from a bad write, and fetching it at "
-                     "the moment it is wanted means fetching it onto a frame that is already "
-                     "in trouble."
-                 ))
+                f"{image.name} - {image.purpose} - is missing or does not match the pinned "
+                "digest. An unverified image must never be written to an array."
             ),
-            refusal="ImageNotVerified" if image.role == "Target" else "RecoveryNotVerified",
+            refusal="ImageNotVerified",
         ))
 
     # The array.
@@ -927,30 +951,16 @@ def _install_stub(mule: ssh.Mule, outcome: str, home: str) -> str:
     return path
 
 
-def recovery_runbook() -> list[str]:
-    """The Safe Mode recovery, as steps for a person. Nothing here runs any of them."""
-    return [
-        "Recovery is attended and physical. Nothing in this harness can enter Safe Mode:",
-        "the gesture is sampled by the bootloader at power-on from a physical button.",
-        "",
-        " 1. Unplug the array's USB-C completely. Press and hold the Mute button.",
-        "    While holding it, re-plug. The red LED should blink - that is Safe Mode.",
-        " 2. sudo dfu-util -l",
-        "    Expect THREE alt settings, including alt 2 'reSpeaker DFU DataPartition'.",
-        "    That third line is the only proof Safe Mode was entered. If it is absent,",
-        "    stop: a flash whose recovery route is unproven on this unit must not happen.",
-        f" 3. sudo dfu-util -e -a 1 -D <path>/{RECOVERY.name}",
-        "    EXPECT IT TO FAIL at about 96% / 4,030,464 bytes with",
-        "    'status(8) = Cannot program memory due to received address that is out of range'.",
-        "    THAT IS SUCCESS. The image is 4 MiB and the partition is smaller.",
-        " 4. POWER-CYCLE BACK INTO SAFE MODE before the next write. This step is not in",
-        "    upstream's instructions: a download attempted in the same session fails at 0%",
-        "    with the same status (upstream issue #32).",
-        f" 5. sudo dfu-util -a 1 -D <path>/{FALLBACK.name}",
-        f"    Back to {FALLBACK.version}, the version both of this project's arrays shipped",
-        "    with and the version upstream reports booting on every board revision tried.",
-        " 6. Power-cycle out of Safe Mode. Confirm with lsusb and `fl.py array read`.",
-    ]
+# `recovery_runbook()` stood here and printed the Safe Mode procedure for a person to follow.
+# It was removed on 2026-08-24 with the rest of this project's Safe Mode support, on the
+# operator's decision: a board that has stopped presenting itself over USB goes back to the
+# maintainer rather than being talked through a gesture down a telephone. Nothing in this
+# module gates on its absence, so removing it cannot refuse a write.
+#
+# The knowledge is not lost and is deliberately not restated here: reference/xvf3800-recovery-
+# model.md is the measured record of what Safe Mode is, why the Factory partition makes a bad
+# write survivable, and why it is nonetheless the only route back from a board that will not
+# enumerate - which is a route this software no longer offers.
 
 
 # --- artifacts ---------------------------------------------------------------
@@ -1005,12 +1015,18 @@ def consume(mule: ssh.Mule, authorisation: str) -> None:
     this line may authorise a second write.
 
     The bench reason: an operator who has armed the fleet setting *and* flashed from the
-    bench has authorised **one** write, not two. Without this, a bench flash that failed
-    would leave the frame's own ``audio.arrayFirmwareFlash`` still unspent, and the agent
-    would write the array again a minute after being released - which is precisely the
-    "retrying a partial write" that decision 91 calls the route from a recoverable board to
-    an unrecoverable one. Sharing the record is what makes "one attempt" true across both
-    writers rather than true of each writer separately.
+    bench has authorised **one operation**, not two. Without this, a bench flash would leave
+    the frame's own ``audio.arrayFirmwareFlash`` still unspent, and the agent would begin an
+    operation of its own a minute after being released - on an array a person has just been
+    writing to by hand, with no idea what state that left it in. Sharing the record is what
+    makes "one authorisation, one operation" true across both writers rather than true of
+    each writer separately.
+
+    Note what the agent's operation now is: up to ``ArrayFirmwareFlash.MaxAttempts`` writes,
+    the operator's decision of 2026-08-24, spending the authorisation once before the first of
+    them. That does not change this function's contract by a word - the record is still the
+    exact authorisation string, still written before anything starts, and still the thing that
+    stops a second *operation*.
     """
     encoded = _b64(authorisation + chr(10))
     staging = CONSUMED_PATH + ".new"
@@ -1235,8 +1251,6 @@ def flash(
                 _finish(record, directory, log)
                 ui.fail(record["outcome"])
                 ui.fail(f"The marker is deliberately still on the card at {MARKER_PATH}.")
-                for line in recovery_runbook():
-                    ui.info(line)
                 return record
 
             elapsed = time.monotonic() - started
@@ -1261,8 +1275,6 @@ def flash(
                 _finish(record, directory, log)
                 ui.fail(record["outcome"])
                 ui.info("Clear it with: python tools/harness/fl.py array flash --clear-marker")
-                for line in recovery_runbook():
-                    ui.info(line)
                 return record
 
             # The write returned, so the window closes - the same asymmetry the agent keeps.
@@ -1303,8 +1315,6 @@ def flash(
                     "further will be attempted without a new authorisation, and somebody "
                     "has to look at the unit."
                 )
-                for line in recovery_runbook():
-                    ui.info(line)
 
             if log:
                 log.pull_journal(mule, since="-30min")

@@ -160,17 +160,6 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		group: 'Audio',
 		suggest: false
 	},
-	'audio.arrayBoardRevision': {
-		label: 'Microphone board revision',
-		hint:
-			'Which hardware revision of the microphone bar this frame has, read off the printing on ' +
-			'the board itself — no software can read it. Set it per frame, not fleet-wide. Leaving it ' +
-			'blank changes nothing; filling it in can only ever *stop* a firmware write, never allow ' +
-			'one, and a value that disagrees with what the frame reads from the bar stops it too.',
-		kind: 'text',
-		group: 'Audio',
-		example: 'V1.1'
-	},
 	'repair.countdownSeconds': {
 		label: 'Repair countdown',
 		hint:

@@ -23,10 +23,15 @@ public enum ArrayFlashPhase
     /// <summary>The write finished and the array did not come back on the pinned firmware.</summary>
     Failed,
 
-    /// <summary>A write began, and no microphone unit is on the bus at all.</summary>
-    Wedged,
+    // <b>A Wedged phase stood here and is named rather than left as a gap.</b> It was the screen
+    // a frame showed when a write had begun and no microphone unit was on the bus at all: the
+    // vendor's Safe Mode gesture, five numbered steps, for somebody to perform with their hands. It
+    // went on 2026-08-24 with the whole of this project's Safe Mode support — see
+    // <see cref="ArrayFlashVoice"/> for the account and for what it costs. A write that did not
+    // finish now shows <see cref="Unfinished"/> whether or not the unit came back, because the one
+    // thing this frame can honestly say about either case is that it cannot tell.
 
-    /// <summary>A write began and did not finish, but a microphone unit is still answering.</summary>
+    /// <summary>A write began and did not finish.</summary>
     Unfinished,
 }
 
@@ -144,12 +149,24 @@ public sealed record ArrayFlashPrompt
 /// them the moment they are released.
 /// </para>
 /// <para>
-/// <b>The recovery screen is the one that has to work when nothing else does.</b> An array that will
-/// not enumerate cannot beep, cannot answer the control tool and cannot be diagnosed from a desk —
-/// so the instructions live on the panel, which is the surface that still works, and they are the
-/// vendor's own Safe Mode gesture: power off, hold Mute, power on, watch for the blinking red LED.
-/// Safe Mode lives in the <b>Factory</b> partition and a write touches the <b>Upgrade</b> partition,
-/// which is the whole reason a way back exists at all.
+/// <b>There is no recovery screen any more, and its removal is the largest thing on this page.</b>
+/// A screen used to stand here for an array that would not enumerate: the vendor's Safe Mode
+/// gesture — power off, hold Mute, power on, watch for the blinking red LED — five numbered steps
+/// written on the panel because the panel is the surface that still works when the microphone does
+/// not. On 2026-08-24 the operator dropped this project's support for Safe Mode entirely: no
+/// runbook, no on-screen instructions, no wedged-board detection. A board that has stopped
+/// presenting itself over USB goes back to the maintainer.
+/// <br/><br/>
+/// <b>What that costs, said once and not argued.</b> Safe Mode is firmware in the board's Factory
+/// partition that no DFU write can touch, and it is the <i>only</i> route back from a board that
+/// has stopped enumerating — which is exactly the state in which the agent's own write cannot help,
+/// because that write detaches a working device into DFU mode and there is no working device. After
+/// this change the software has no recovery path for that state at all.
+/// <br/><br/>
+/// <b>The knowledge was not deleted.</b> <c>reference/xvf3800-recovery-model.md</c> is the measured
+/// record — what Safe Mode is, what the Factory partition guarantees, what every recovery route
+/// actually costs — and it stands unchanged. What went is the product's support for the procedure,
+/// not the finding behind it.
 /// </para>
 /// </remarks>
 public static class ArrayFlashVoice
@@ -222,6 +239,10 @@ public static class ArrayFlashVoice
 
     /// <summary>The writing screen. Shown however the write came to be agreed to.</summary>
     /// <param name="progress">How far the write has got, or null before anything is known.</param>
+    /// <param name="attempt">
+    /// Which write of the operation this is, counting from one. Anything past the first says so on
+    /// the screen.
+    /// </param>
     /// <remarks>
     /// <para>
     /// It is drawn on a frame nobody approved locally too — an operator bypass means nobody was
@@ -235,18 +256,38 @@ public static class ArrayFlashVoice
     /// the plug, which is the exact outcome the screen exists to prevent. What goes in front of the
     /// warning is therefore a named stage and, while the bytes are moving, how far they have got.
     /// </para>
+    /// <para>
+    /// <b>A retry says it is a retry, and that sentence exists for the same reason as the stage
+    /// line.</b> The operator's decision lets one authorisation write up to
+    /// <c>ArrayFirmwareFlash.MaxAttempts</c> times, so somebody standing at a frame can watch the
+    /// bar reach the end and then start again from nothing — which, unexplained, is exactly what a
+    /// frame that has crashed and restarted its own screen looks like. It is deliberately not
+    /// alarming: it says what is happening and repeats that the power must stay on.
+    /// </para>
     /// </remarks>
-    public static ArrayFlashPrompt Writing(ArrayFlashProgress? progress = null) => new()
+    public static ArrayFlashPrompt Writing(ArrayFlashProgress? progress = null, int attempt = 1) => new()
     {
         Phase = ArrayFlashPhase.Writing,
         Headline = "Updating the microphone — please do not unplug this frame",
-        Lines =
-        [
-            StageLine(progress),
-            "This takes " + Duration + ".",
-            "Please leave the frame switched on until this screen says it has finished.",
-            "Taking the power away now can break the microphone for good.",
-        ],
+        Lines = attempt > 1
+            ?
+            [
+                StageLine(progress),
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"The first try did not take, so the frame is sending it again — this is try {attempt} of "
+                    + $"{ArrayFirmwareFlash.MaxAttempts}. Nothing is broken and there is nothing for you to do."),
+                "This takes " + Duration + ".",
+                "Please leave the frame switched on until this screen says it has finished.",
+                "Taking the power away now can break the microphone for good.",
+            ]
+            :
+            [
+                StageLine(progress),
+                "This takes " + Duration + ".",
+                "Please leave the frame switched on until this screen says it has finished.",
+                "Taking the power away now can break the microphone for good.",
+            ],
         Affordance = null,
         Answerable = false,
         Progress = progress,
@@ -313,7 +354,6 @@ public static class ArrayFlashVoice
         ArrayFlashPhase.Writing => "writing",
         ArrayFlashPhase.Succeeded => "succeeded",
         ArrayFlashPhase.Failed => "failed",
-        ArrayFlashPhase.Wedged => "wedged",
         ArrayFlashPhase.Unfinished => "unfinished",
         _ => "idle",
     };
@@ -343,55 +383,20 @@ public static class ArrayFlashVoice
         Alarming = !succeeded,
     };
 
-    /// <summary>
-    /// The recovery screen: no microphone unit is on the bus at all, and here is the way back.
-    /// </summary>
+    /// <summary>A write began and did not finish.</summary>
     /// <remarks>
-    /// <para>
-    /// <b>Five steps, in the order a pair of hands does them.</b> This is the vendor's documented
-    /// Safe Mode entry and the only route back from a half-written Upgrade partition. It is written
-    /// out on the frame rather than left to a support call because the frame is the thing the person
-    /// is standing next to, and because an array in this state has no other way to say anything —
-    /// there is no audio cue available from a microphone that will not enumerate.
-    /// </para>
-    /// <para>
-    /// <b>What it does not say is what happens after that</b>, and that is on purpose: the erase and
-    /// the re-write are an attended operation with a laptop, not something to talk somebody through
-    /// on a living-room screen. The last step names the operator, and the sequence they follow is
-    /// recorded in <see cref="ArrayFlashRecovery"/>.
-    /// </para>
-    /// </remarks>
-    public static ArrayFlashPrompt Wedged(bool answerable, OperatorContact? contact) => new()
-    {
-        Phase = ArrayFlashPhase.Wedged,
-        Headline = "The microphone is not answering",
-        Lines =
-        [
-            "The frame cannot find the microphone bar at all. There is a way to wake it up again, and it needs "
-                + "somebody to do it by hand:",
-            "1. Take the power away from the microphone bar completely.",
-            "2. Press and hold the Mute button on the microphone bar, and keep holding it.",
-            "3. Still holding it, put the power back on.",
-            "4. Watch for a red light that blinks. Once it is blinking you can let the button go.",
-            "5. Then say what you have done to whoever looks after your frames — they can put the rest right from there.",
-            ReconcileVoice.ContactLine(contact),
-        ],
-        Affordance = answerable ? "OK" : null,
-        Hold = ArrayFlashApproval.DismissHold,
-        Answerable = answerable,
-        Alarming = true,
-    };
-
-    /// <summary>
-    /// A write began and did not finish, and a microphone unit is still on the bus.
-    /// </summary>
-    /// <remarks>
-    /// <b>The honest half of the detection boundary.</b> An array that does not enumerate is
-    /// something this agent can see. An array that enumerates and misbehaves is not — the frame has
-    /// no reading that separates a good flash from a bad one beyond the version the unit reports,
-    /// and a unit can report the right version while behaving badly. So this screen says a write was
-    /// interrupted, and says the frame cannot tell whether the microphone is well, rather than
+    /// <b>The honest half of the detection boundary, and now the whole of it.</b> The frame has no
+    /// reading that separates a good flash from a bad one beyond the version the unit reports, and a
+    /// unit can report the right version while behaving badly. So this screen says a write was
+    /// interrupted and says the frame cannot tell whether the microphone is well, rather than
     /// claiming either.
+    /// <br/><br/>
+    /// <b>It no longer branches on whether the unit is on the bus.</b> It used to: a unit that had
+    /// not come back got a different screen carrying the Safe Mode gesture. That screen and the
+    /// detection behind it went with this project's Safe Mode support, so both cases now get this
+    /// one sentence — which was always the true one, because a unit that is answering is not
+    /// thereby well and a unit that is silent is not thereby recoverable by anybody standing at the
+    /// frame.
     /// </remarks>
     public static ArrayFlashPrompt Unfinished(bool answerable, OperatorContact? contact) => new()
     {
@@ -400,8 +405,7 @@ public static class ArrayFlashVoice
         Lines =
         [
             "This frame started updating its microphone and did not reach the end.",
-            "The microphone is still answering, so it may well be fine — but the frame cannot tell, and it will not "
-                + "try again on its own.",
+            "The frame cannot tell whether the microphone is well, and it will not try again on its own.",
             ReconcileVoice.ContactLine(contact),
         ],
         Affordance = answerable ? "OK" : null,
@@ -412,65 +416,31 @@ public static class ArrayFlashVoice
 
 }
 
-/// <summary>
-/// The sequence a person follows once the Safe Mode gesture has been done — recorded, never run.
-/// </summary>
-/// <remarks>
-/// <para>
-/// <b>Nothing in this product performs any of this.</b> Decision 91 makes exactly one write
-/// reachable from the agent — the pinned target image onto alt setting 1 — and recovery is an
-/// attended operation with somebody's finger on a button. What lives here is the sequence itself,
-/// beside the screen that tells a person to start it, because the two easy-to-miss details below
-/// were established once and would otherwise be rediscovered by whoever is holding the board.
-/// </para>
-/// <para>
-/// <b>The erase terminates at about 96% with an error, and that is the expected outcome.</b>
-/// <c>dfu-util</c> reports <c>dfuERROR status(8) … out of range</c> near the end of writing
-/// <c>4mb_all_ff.bin</c>; the erase has done its job and the message is not a failure to react to.
-/// What must not follow is <i>re-running the erase</i>, which is a different thing from re-running a
-/// write.
-/// </para>
-/// <para>
-/// <b>A correction, because this file used to say something stronger and it was not true.</b> It
-/// asserted that "retrying a partial write is the documented route from a recoverable board to an
-/// unrecoverable one". That documentation was searched for and does not exist, and XMOS documents
-/// the opposite: <i>"Another download operation may be reattempted."</i> The narrow, supported claim
-/// is the one above — the <c>all_ff</c> erase is the step not to repeat. Everything the single-use
-/// authorisation does is unchanged and was never resting on that sentence: a write is spent before
-/// it starts because an authorisation that survived a crash could authorise a second one, and a
-/// half-written partition is a state a person should look at because nothing on the frame can tell
-/// how far it got. Both of those stand on their own.
-/// </para>
-/// <para>
-/// <b>A power cycle is required between the erase and the next write</b>, or the download fails at
-/// 0%. It is absent from <i>Seeed's</i> instructions and present in XMOS's — <i>"the device must be
-/// rebooted before resuming the DFU procedure"</i> — and has been reported independently by a third
-/// party.
-/// </para>
-/// </remarks>
-public static class ArrayFlashRecovery
-{
-    /// <summary>The gesture, as the panel words it.</summary>
-    public static IReadOnlyList<string> SafeModeSteps { get; } =
-    [
-        "Take the power away from the microphone bar completely.",
-        "Press and hold the Mute button, and keep holding it.",
-        "Still holding it, put the power back on.",
-        "Watch for a red light that blinks; once it blinks, let go.",
-    ];
-
-    /// <summary>What an operator does from there, in order.</summary>
-    public static IReadOnlyList<string> OperatorSteps { get; } =
-    [
-        "Confirm Safe Mode was entered: the DFU tool lists a third alt setting on the unit.",
-        "Erase the Upgrade partition with the pinned 4mb_all_ff.bin.",
-        "Expect the erase to stop at about 96% with dfuERROR status(8) ... out of range. That is the expected outcome, not a failure. Do not run the erase again; go on to the next step.",
-        "Power-cycle the microphone unit. Without this the next download fails at 0%.",
-        "Write the pinned fallback firmware back onto the unit.",
-        "Read the version twice — the USB descriptor and the control tool — and check the two agree.",
-        "Remove " + ArrayFlashWindow.MarkerFileName + " from the agent's state directory, which is what lets this frame flash again.",
-    ];
-}
+// == ArrayFlashRecovery was removed on 2026-08-24, and this is the account of it =============
+//
+// It held two lists and ran neither: `SafeModeSteps`, the Mute-hold gesture as the panel worded it,
+// and `OperatorSteps`, the sequence a person followed afterwards — confirm Safe Mode by the third
+// alt setting, erase with 4mb_all_ff.bin, expect that erase to stop at 96% with an error that is
+// not a failure, power-cycle, write the fallback, read the version twice, remove the marker. Its
+// doc comment carried the two procedural details that were easy to get wrong and a correction to a
+// vendor claim this repository had made up.
+//
+// The operator removed this project's support for Safe Mode entirely: no runbook here, no
+// `fl.py array runbook`, no on-screen recovery instructions, no wedged-board detection. A board that
+// has stopped presenting itself over USB goes back to the maintainer. Half of these steps had
+// already gone with the recovery kit — the erase image and the fallback firmware are no longer
+// pinned, so four of the seven named files this frame does not carry.
+//
+// WHAT IT COSTS, said once. Safe Mode is firmware in the board's Factory partition that no DFU
+// write can touch, and it is the only route back from a board that has stopped enumerating — the
+// exact state in which ArrayFirmwareFlash cannot help, because its write detaches a *working*
+// device into DFU mode. The software now has no recovery path for that state.
+//
+// WHAT WAS NOT DELETED. reference/xvf3800-recovery-model.md is the measured record of all of it:
+// what the Factory partition guarantees, what the erase image did and did not do, the exact
+// arithmetic behind the 96% stop, and which recoveries need the gesture. It is unchanged. Nothing
+// in the flash path gates on any of this, so its absence cannot refuse a write — that was checked
+// rather than assumed.
 
 /// <summary>
 /// <b>The interlock no software can provide, provided by a person</b> — decision 91's largest
@@ -527,15 +497,18 @@ public sealed class ArrayFlashApproval
     /// <summary>How long it leaves the screen alone before asking again.</summary>
     public static TimeSpan RestWindow { get; } = TimeSpan.FromHours(6);
 
-    /// <summary>How long a finished screen waits for somebody who may never come.</summary>
-    /// <remarks>
-    /// The completion screen is dismissed by a person — the operator asked for an OK-to-continue
-    /// affordance rather than a silent resumption. A frame flashed under the operator bypass has
-    /// nobody to press it, so the screen cannot wait for ever without holding a household's photos
-    /// hostage over a write that has already finished. This is the bound; the outcome itself is in
-    /// the event trail, the journal and the Fleet Manager regardless of who read the screen.
-    /// </remarks>
-    public static TimeSpan CompletionLinger { get; } = TimeSpan.FromMinutes(15);
+    // <b>A CompletionLinger stood here and is named rather than left as a gap.</b> It was fifteen
+    // minutes, after which a finished screen took itself away, and its stated reason was that a
+    // frame flashed under the operator bypass has nobody to press anything — so the screen "cannot
+    // wait for ever without holding a household's photos hostage over a write that has already
+    // finished". The operator has decided the other way, on both outcomes: a completed write leaves
+    // a screen that stays until somebody acknowledges it. The trade is deliberate and it is worth
+    // stating, because the old reasoning was not wrong about the mechanism, only about which side of
+    // it matters. What is bought is that nobody can miss the result of the one operation on this
+    // frame that cannot be undone; what is paid is that a frame whose panel cannot be touched
+    // (Answerable is false, so Finished offers no affordance) now shows that screen until the agent
+    // restarts. The outcome itself is in the event trail, the journal and the Fleet Manager
+    // regardless of who read the screen, which is what makes the cost bearable rather than absent.
 
     private readonly AgentStatusHub _hub;
     private readonly IAgentClock _clock;
@@ -543,11 +516,11 @@ public sealed class ArrayFlashApproval
     private readonly Lock _gate = new();
 
     private long _writing;
+    private int _attempt = 1;
     private string? _approvedFor;
     private string? _asked;
     private DateTimeOffset? _askingSince;
     private DateTimeOffset? _restingUntil;
-    private DateTimeOffset? _shownAt;
 
     /// <summary>Creates the approval over one frame's screen.</summary>
     public ArrayFlashApproval(AgentStatusHub hub, IAgentClock clock, IAgentLog log)
@@ -721,7 +694,15 @@ public sealed class ArrayFlashApproval
     /// one is dropped rather than drawn.
     /// </para>
     /// </remarks>
-    public long BeginWriting() => Interlocked.Increment(ref _writing);
+    public long BeginWriting(int attempt = 1)
+    {
+        lock (_gate)
+        {
+            _attempt = attempt;
+        }
+
+        return Interlocked.Increment(ref _writing);
+    }
 
     /// <summary>Shows the write-in-progress screen, with whatever is known about it so far.</summary>
     /// <param name="epoch">The value <see cref="BeginWriting"/> returned for this write.</param>
@@ -733,7 +714,25 @@ public sealed class ArrayFlashApproval
             return;
         }
 
-        Publish(ArrayFlashVoice.Writing(progress));
+        Publish(ArrayFlashVoice.Writing(progress, Attempt));
+    }
+
+    /// <summary>Which write of the operation is on the screen, counting from one.</summary>
+    /// <remarks>
+    /// Held here rather than passed through every publish because <see cref="Refresh"/> recomposes a
+    /// screen from what is true now, and a refresh that had forgotten the attempt would take the
+    /// "trying again" sentence off the panel and the next beat would put it back — a screen that
+    /// blinks between two truths being worse than either.
+    /// </remarks>
+    public int Attempt
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _attempt;
+            }
+        }
     }
 
     /// <summary>Recomposes the current screen from what is true now.</summary>
@@ -765,16 +764,15 @@ public sealed class ArrayFlashApproval
             // watch or a settings push happened to land mid-write, and put it back on the next
             // reading — a screen that blinks between "41% done" and "getting ready" is worse than
             // one that never moved.
-            ArrayFlashPhase.Writing => ArrayFlashVoice.Writing(prompt.Progress),
+            ArrayFlashPhase.Writing => ArrayFlashVoice.Writing(prompt.Progress, Attempt),
             ArrayFlashPhase.Succeeded => ArrayFlashVoice.Finished(true, Answerable, contact),
             ArrayFlashPhase.Failed => ArrayFlashVoice.Finished(false, Answerable, contact),
-            ArrayFlashPhase.Wedged => ArrayFlashVoice.Wedged(Answerable, contact),
             ArrayFlashPhase.Unfinished => ArrayFlashVoice.Unfinished(Answerable, contact),
             _ => prompt,
         });
     }
 
-    /// <summary>Shows the outcome, and starts the clock on how long it stays there.</summary>
+    /// <summary>Shows the outcome, and leaves it there until somebody acknowledges it.</summary>
     public void Finished(bool succeeded)
     {
         // Before the screen is taken, not after. The progress pump is never waited for — waiting on
@@ -789,17 +787,19 @@ public sealed class ArrayFlashApproval
             _asked = null;
             _askingSince = null;
             _restingUntil = null;
-            _shownAt = _clock.UtcNow;
         }
 
         Publish(ArrayFlashVoice.Finished(succeeded, Answerable, _hub.Current.Contact));
     }
 
-    /// <summary>
-    /// Shows the recovery screen for a frame whose previous write did not finish.
-    /// </summary>
-    /// <param name="arrayAttached">Whether any microphone unit is on this frame's USB bus.</param>
-    public void Interrupted(bool arrayAttached)
+    /// <summary>Shows the screen for a frame whose previous write did not finish.</summary>
+    /// <remarks>
+    /// It took a <c>bool arrayAttached</c> until 2026-08-24 and chose between two screens with it:
+    /// a unit still on the bus got "the frame cannot tell", and a unit that had not come back got
+    /// the Safe Mode gesture. The second screen went with this project's Safe Mode support, so the
+    /// distinction has nothing left to decide and the argument went with it.
+    /// </remarks>
+    public void Interrupted()
     {
         var now = _clock.UtcNow;
 
@@ -809,49 +809,32 @@ public sealed class ArrayFlashApproval
             {
                 return;
             }
-
-            _shownAt ??= now;
         }
 
-        Publish(arrayAttached
-            ? ArrayFlashVoice.Unfinished(Answerable, _hub.Current.Contact)
-            : ArrayFlashVoice.Wedged(Answerable, _hub.Current.Contact));
+        Publish(ArrayFlashVoice.Unfinished(Answerable, _hub.Current.Contact));
     }
 
     /// <summary>Clears any screen this owns. The ordinary end of every tick that writes nothing.</summary>
     /// <remarks>
-    /// A completed or interrupted write's screen is the exception and is left alone until somebody
-    /// takes its affordance or <see cref="CompletionLinger"/> runs out, whichever comes first.
+    /// <b>It clears the question and nothing else.</b> A completed or interrupted write's screen is
+    /// not a question and is never taken away by a tick: it stays until somebody takes its
+    /// affordance, on both outcomes, which is the operator's decision and the reason there is no
+    /// linger left in this class. So every caller can go on ending its tick with this call and none
+    /// of them can silently retire a result.
     /// </remarks>
     public void Withdraw()
     {
-        if (Prompt is not { } prompt)
+        if (Prompt is not { Phase: ArrayFlashPhase.Asking })
         {
             return;
         }
-
-        if (prompt.Phase is ArrayFlashPhase.Asking)
-        {
-            lock (_gate)
-            {
-                _askingSince = null;
-            }
-
-            Publish(null);
-            return;
-        }
-
-        var now = _clock.UtcNow;
 
         lock (_gate)
         {
-            if (_shownAt is { } shown && now - shown < CompletionLinger)
-            {
-                return;
-            }
+            _askingSince = null;
         }
 
-        Dismiss();
+        Publish(null);
     }
 
     /// <summary>Puts the current screen away and rests before showing another.</summary>
@@ -863,7 +846,6 @@ public sealed class ArrayFlashApproval
 
         lock (_gate)
         {
-            _shownAt = null;
             _askingSince = null;
             _restingUntil = _clock.UtcNow + RestWindow;
         }

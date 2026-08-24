@@ -5,34 +5,30 @@ using System.Text;
 namespace FrameLink.Control.Firmware;
 
 /// <summary>
-/// The Fleet Manager's record of the three facts an operator needs in order to authorise a
-/// microphone-array firmware write (decision 91).
+/// The Fleet Manager's half of what an operator needs in order to authorise a microphone-array
+/// firmware write (decision 91): the authorisation's shape, and the warnings behind its bypass.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>This is a second record of facts the agent owns, and that is deliberate.</b> The authority is
-/// <c>XvfFirmwarePin.Current</c> and <c>ArrayFirmwareFlash</c> in <c>FrameLink.Agent</c>; this
-/// server cannot reference that assembly (it references <c>FrameLink.Protocol</c> and nothing
-/// else), and the digest is not on any wire — the agent's <c>array-firmware</c> event carries a
-/// sentence and its <c>firmware.xvf3800.image</c> resource report carries twelve characters of it.
-/// So the choice was between a second record and a new protocol field, and the repository already
-/// answers this shape three times: <c>tools/harness/flh/flash.py</c> holds the same pin and calls
-/// it "the pin, held twice … two records of one fact is how a bump stops being silent", the
-/// package baseline is a copy held equal to <c>reference/v1-state-inventory.txt</c> by
-/// <c>ControlPackageTests</c>, and the systemd unit is held equal to the agent's by
-/// <c>AgentSystemdUnitTests</c>.
+/// <b>The image itself is no longer restated here.</b> Its name, version, digest and length used to
+/// sit below as four <c>const</c>s held equal to the agent's by <c>ControlArrayFlashTests</c>,
+/// string by string. On the operator's decision there is now one definition:
+/// <see cref="XvfFirmwarePin"/> is the <i>agent's</i> file,
+/// <c>src/FrameLink.Agent/Firmware/XvfFirmwarePin.cs</c>, compiled into this assembly by a
+/// <c>&lt;Compile Include&gt;</c> that reaches across the project boundary — the same move the
+/// csproj already makes for <c>fl-agent.service</c>. Two records that must agree is a pair that will
+/// one day not; one file compiled twice cannot disagree with itself, and what the test now checks is
+/// that both assemblies were built from it.
 /// </para>
 /// <para>
-/// <b>Every value below is held equal to the agent's by <c>ControlArrayFlashTests</c></b>, which
-/// references both assemblies and compares field for field and string for string. A pin bump, or a
-/// reworded warning, that touches only one side is a red test rather than a Fleet Manager offering
-/// an authorisation every frame in the fleet would refuse.
-/// </para>
-/// <para>
-/// <b>The warning is copied and never reworded.</b> It is the text an operator accepts by taking
-/// the unattended bypass, and the agent emits it verbatim into the <c>array-flash</c> event of
-/// every unattended write — so the sentence an operator read and the sentence in the audit trail
-/// have to be one sentence. That is what the equality test enforces.
+/// <b>What is still a second record, and why it stays one.</b> The authorisation key, the unattended
+/// prefix and the four warning sentences below are <c>ArrayFirmwareFlash</c>'s, and that class
+/// cannot be linked here — it is the flash itself, and it reaches into the agent's filesystem,
+/// process runner, telemetry and panel. So those four values remain copies held equal by
+/// <c>ControlArrayFlashTests</c>. The warning in particular is copied and <b>never reworded</b>: it
+/// is the text an operator accepts by taking the unattended bypass, and the agent emits it verbatim
+/// into the <c>array-flash</c> event of every unattended write, so the sentence an operator read and
+/// the sentence in the audit trail have to be one sentence.
 /// </para>
 /// </remarks>
 public static class ArrayFlashPin
@@ -47,23 +43,14 @@ public static class ArrayFlashPin
     /// </remarks>
     public const string AuthorisationKey = "audio.arrayFirmwareFlash";
 
-    /// <summary>The file name upstream publishes for the image the fleet converges on.</summary>
-    public const string TargetName = "respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin";
-
-    /// <summary>The firmware version it carries, in <c>xvf_host</c>'s own spelling.</summary>
-    public const string TargetVersion = "2 1 0";
-
-    /// <summary>Its measured SHA-256 — the name an authorisation is made of.</summary>
+    /// <summary>The one image this server may ever compose an authorisation for.</summary>
     /// <remarks>
     /// A version string is not an identity here: upstream published
     /// <c>respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin</c> twice with different bytes, both
     /// answering <c>VERSION 2 0 10</c>. Only a digest names an image, which is why the operator
-    /// never types one and this server composes it.
+    /// never types one and this server composes it from the pin.
     /// </remarks>
-    public const string TargetSha256 = "60fee566253489709946a77b3fece58fbeb64ea1455279031ec84a87ca7b78d6";
-
-    /// <summary>Its exact length in bytes.</summary>
-    public const long TargetSizeBytes = 933_888;
+    public static XvfFirmwareImage Target => XvfFirmwarePin.Current.Target;
 
     /// <summary>
     /// The operator's scoped bypass, written inside a ticket as <c>&lt;prefix&gt;&lt;deviceId&gt;</c>
@@ -100,7 +87,7 @@ public static class ArrayFlashPin
 /// <remarks>
 /// <para>
 /// <b>Nothing an operator types reaches the parts that decide which frame is written.</b> The
-/// digest comes from <see cref="ArrayFlashPin.TargetSha256"/> and the device id comes from the
+/// digest comes from <see cref="ArrayFlashPin.Target"/> and the device id comes from the
 /// route the request arrived on — the same id the settings row is written against — so a
 /// composed authorisation cannot name a frame other than the one it is stored for. That is the
 /// whole reason this lives on the server rather than in the browser: a device id assembled in
@@ -162,7 +149,7 @@ public static class ArrayFlashTicket
             ticket.Append(' ').Append(ArrayFlashPin.UnattendedPrefix).Append(deviceId);
         }
 
-        return ArrayFlashPin.TargetSha256 + ":" + ticket;
+        return ArrayFlashPin.Target.Sha256 + ":" + ticket;
     }
 
     /// <summary>
@@ -214,7 +201,7 @@ public static class ArrayFlashTicket
 
     /// <summary>Whether this authorisation names the image this build knows how to authorise.</summary>
     public static bool NamesTheTarget(string authorisation) =>
-        string.Equals(DigestOf(authorisation), ArrayFlashPin.TargetSha256, StringComparison.OrdinalIgnoreCase);
+        string.Equals(DigestOf(authorisation), ArrayFlashPin.Target.Sha256, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// The device id the bypass in <paramref name="authorisation"/> names, or null when it carries

@@ -52,20 +52,17 @@ public sealed class AgentVendoredFirmwareTests
     }
 
     [Fact]
-    public void The_target_travels_inside_the_binary_and_the_recovery_pair_does_not()
+    public void Every_pinned_image_travels_inside_the_binary()
     {
         var pin = XvfFirmwarePin.Current;
 
-        Assert.True(XvfVendoredFirmware.Carries(pin.Target));
-
-        // Not an oversight and not a bug: the v2.0.6 fallback and 4mb_all_ff.bin are pinned but
-        // deliberately not vendored, and this asserts the state of that open question rather than
-        // approving of it. If they are ever vendored, this test is what says so out loud — and the
-        // change needed to make it pass is to flip the expectation, because nothing in the source
-        // names a file.
-        Assert.False(XvfVendoredFirmware.Carries(pin.Fallback));
-        Assert.False(XvfVendoredFirmware.Carries(pin.Recovery));
-
+        // This test used to assert the opposite of half the pin: a v2.0.6 fallback and
+        // 4mb_all_ff.bin were pinned and deliberately NOT vendored, and it recorded that open
+        // question rather than approving of it. The question was answered by removing the two
+        // images (XvfFirmwarePin carries the account), so what it now pins is the property that
+        // makes the vendoring worth anything — a frame with no route to anywhere has every byte
+        // this build would ever write.
+        Assert.All(pin.Images, image => Assert.True(XvfVendoredFirmware.Carries(image)));
         Assert.Equal([pin.Target.Name], XvfVendoredFirmware.Names);
     }
 
@@ -128,21 +125,33 @@ public sealed class AgentVendoredFirmwareTests
             target.SizeBytes,
             new FileInfo(files.Files.Resolve(XvfFirmwareInstaller.PathOf(target))).Length);
 
-        // And the install still reports Unreachable, which is the honest answer: the recovery pair
-        // is not vendored, so this frame does NOT yet have a proven way back and the resource must
-        // not go green. A result of Installed here would be the resource lying about the other two.
-        Assert.Equal(XvfFirmwareInstallResult.Unreachable, result);
+        // And the install reports Installed, which is now the honest answer and was not before: it
+        // used to report Unreachable, because two more images were pinned, were not vendored, and
+        // had to be fetched — so an offline frame could hold the target and still not flash it. The
+        // recovery kit went with the pre-flight that required it, so a frame with no route to
+        // anywhere now genuinely has everything this build would ever write.
+        Assert.Equal(XvfFirmwareInstallResult.Installed, result);
         Assert.Contains("from this agent's own binary", log.Transcript, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task The_embedded_image_is_placed_before_anything_that_needs_a_network()
     {
-        // Same three images, listed with the target last. The guarantee under test is that an
-        // offline frame still receives everything the binary carries — not that it happens to sit
-        // first in the pin today.
+        // The pinned image behind two the binary does not carry. The guarantee under test is that
+        // an offline frame still receives everything the binary carries — not that the embedded one
+        // happens to sit first in the pin, which it does today and might not tomorrow. The two
+        // stand-ins are fabricated here rather than taken from the pin, because the pin now names
+        // one image and the property being tested is about ordering rather than about them.
         var current = XvfFirmwarePin.Current;
-        var reordered = current with { Images = [current.Recovery, current.Fallback, current.Target] };
+        var reordered = current with
+        {
+            Images =
+            [
+                current.Target with { Name = "a-fetched-image.bin", Sha256 = new string('a', 64) },
+                current.Target with { Name = "another-fetched-image.bin", Sha256 = new string('b', 64) },
+                current.Target,
+            ],
+        };
 
         using var files = new TemporaryFiles();
         var installer = new XvfFirmwareInstaller(
@@ -172,7 +181,7 @@ public sealed class AgentVendoredFirmwareTests
             Sha256 = Convert.ToHexStringLower(SHA256.HashData(substitute)),
         };
 
-        var pin = current with { Images = [claimed, current.Fallback, current.Recovery] };
+        var pin = current with { Images = [claimed] };
 
         var download = new StubXvfHostDownload();
         download.Payloads[claimed.Name] = substitute;
@@ -200,6 +209,6 @@ public sealed class AgentVendoredFirmwareTests
             UnreachableXvfHostDownload.Instance,
             new RecordingLog());
 
-        Assert.Contains("1 of 3 inside this binary", installer.Describe(), StringComparison.Ordinal);
+        Assert.Contains("all 1 inside this binary", installer.Describe(), StringComparison.Ordinal);
     }
 }

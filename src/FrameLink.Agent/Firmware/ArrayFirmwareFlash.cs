@@ -20,10 +20,22 @@ public enum ArrayFlashRefusal
     NotThePinnedImage,
 
     /// <summary>The target image is absent from this frame, or does not hash to the pin.</summary>
+    /// <remarks>
+    /// <b>A sibling used to stand here and is named rather than left as a gap.</b>
+    /// <c>RecoveryNotVerified</c> refused every write unless Seeed's 4 MiB all-<c>0xFF</c> erase
+    /// image <i>and</i> a v2.0.6 fallback firmware were both on the card and hashed to their pins.
+    /// It went with the recovery kit on 2026-08-24 —
+    /// <see cref="XvfFirmwarePin"/> carries the whole account, and the short version is that a DFU
+    /// download already erases the upgrade section before it writes, Seeed's own documented recovery
+    /// has no erase step, and the failure the erase image exists for is fixed in firmware from
+    /// v2.0.9 and is triggered by a command this repository sends nowhere. It was also the only
+    /// reason a frame with no network could not flash, because the target is vendored and those two
+    /// were fetched. Nothing replaces it, and nothing was left in its place: this project also
+    /// dropped its support for Safe Mode the same day, so a unit that stops presenting itself over
+    /// USB goes back to the maintainer. <c>reference/xvf3800-recovery-model.md</c> keeps the
+    /// measured record of the route that is no longer offered.
+    /// </remarks>
     ImageNotVerified,
-
-    /// <summary>The erase image or the fallback firmware is absent, so there is no way back.</summary>
-    RecoveryNotVerified,
 
     /// <summary><c>dfu-util</c> is not installed, so nothing could write the image anyway.</summary>
     DfuUtilMissing,
@@ -230,20 +242,44 @@ public sealed record ArrayFlashServices
 /// and re-authorised on every pass for ever.
 /// </para>
 /// <para>
-/// <b>One attempt. Never a second.</b> There is no retry anywhere in this class: the authorisation
-/// is already spent by the time <c>dfu-util</c> runs, a failure emits an event for a person and
-/// nothing else, and the next flash needs a human. §2.5's attempt budget is not involved at all,
-/// because the danger here is not a second attempt — it is the first one being interrupted, which an
-/// attempt counter cannot see.
+/// <b>Up to <see cref="MaxAttempts"/> writes, and the difference between the two kinds of failure
+/// is the whole of the design.</b> This paragraph used to say <i>one attempt, never a second</i>,
+/// and that was structural: the authorisation was spent before <c>dfu-util</c> started, so a write
+/// that did not take could not be retried by anything but a human. The operator has replaced that
+/// with three attempts, for consistency with every other repair in this product. What the change
+/// costs is real and is stated here rather than left for somebody to discover: a write that
+/// completed and did not produce the pinned firmware is now followed by another write, with no
+/// person in between, where before it stopped and asked for one.
 /// <br/><br/>
-/// <b>The reason this paragraph used to give was wrong, and is corrected rather than quietly
-/// dropped.</b> It said that "retrying a partial write is the documented route from a recoverable
-/// board to an unrecoverable one". No such documentation exists — it was searched for — and XMOS
-/// documents the opposite: <i>"Another download operation may be reattempted."</i> The narrow
-/// supported claim is about the <c>all_ff</c> <i>erase</i>, not about a write. What the single-use
-/// authorisation actually rests on is unchanged and never needed that sentence: an authorisation
-/// that survived a crash could authorise a second write nobody decided on, and a half-written
-/// partition is a state nothing on this frame can measure, so it is a state a person should look at.
+/// <b>Two failures wear the same clothes and only one of them is retried.</b> A <i>refused</i> flash
+/// wrote nothing — every pre-flight refusal returns before <see cref="FlashAsync"/> is entered, and
+/// none of them spends anything, so the operator's intent stays armed and no attempt is used. A
+/// <i>completed</i> write that did not persist is what the retry is for: <c>dfu-util</c> ran to
+/// completion and returned, the marker was cleared because the write is over, and the array either
+/// did not come back on the pinned firmware or came back on a different build of it. An
+/// <i>interrupted</i> write is neither, and nothing here retries it: the process was killed
+/// mid-write, <see cref="ArrayFlashWindow"/>'s durable marker outlived it, and the next process
+/// refuses everything with <see cref="ArrayFlashRefusal.PreviousFlashUnfinished"/> until a person
+/// has looked and removed the file. That latch is untouched and is not one of the three — how far a
+/// half-written partition got is a state this frame cannot measure, and the right answer to a state
+/// you cannot measure is still a person rather than another attempt.
+/// <br/><br/>
+/// <b>Two conditions end the loop early, and both exist to stop a retry doing harm.</b> The array is
+/// re-read before every attempt after the first: a unit that has by then come back on the target
+/// image and the pinned profile is a success and is not written again, and a unit that is not on the
+/// USB bus at all is left alone, because <c>dfu-util -e</c> has nothing to detach and a board that
+/// did not come back needs the Safe Mode gesture rather than another download.
+/// <br/><br/>
+/// <b>§2.5's attempt budget is not involved</b>, and this is deliberate rather than an oversight:
+/// the flash is beside the loop, not in it, so the count below is its own and nothing about the
+/// reconcile loop's budget, ordering or reboot model moves for it.
+/// <br/><br/>
+/// <b>One correction is kept because it outlives the decision that prompted it.</b> This paragraph
+/// once said that "retrying a partial write is the documented route from a recoverable board to an
+/// unrecoverable one". No such documentation exists — it was searched for — and XMOS documents the
+/// opposite: <i>"Another download operation may be reattempted."</i> The narrow supported claim is
+/// about the <c>all_ff</c> <i>erase</i>, not about a write. That the vendor permits a re-attempt is
+/// what makes the operator's three attempts defensible rather than merely instructed.
 /// </para>
 /// <para>
 /// <b>The verify is evidence, not a timer.</b> The Act does not sleep five seconds and declare
@@ -258,9 +294,14 @@ public sealed record ArrayFlashServices
 /// workstation, not a guarantee. Board revision is not readable in software at all — not in the USB
 /// descriptors and not in the control tool's command set — and upstream issue #32 reports the target
 /// firmware not booting on a V1.1 board, so <i>no interlock in this file addresses the largest
-/// single risk of the operation</i>. That is why the sequencing in decision 91 puts a rehearsed
-/// Safe Mode recovery on our own hardware before any first flash, and why the recovery images ship
-/// on the card whether or not they are ever wanted.
+/// single risk of the operation</i>. It used to be why a recovery pair shipped on the card and why
+/// decision 91 made a rehearsed Safe Mode recovery a binding precondition of any first flash. Both
+/// are gone on the operator's decision: <see cref="XvfFirmwarePin"/> records why the pair went, and
+/// <see cref="ArrayFlashVoice"/> records why this project no longer supports Safe Mode at all and
+/// what that costs — in one sentence, a board that stops presenting itself over USB now goes back to
+/// the maintainer, because the software has no route back from that state and never could have had
+/// one that did not begin with somebody's hands. <c>reference/xvf3800-recovery-model.md</c> keeps
+/// the measured record of the route that was dropped.
 /// </para>
 /// </remarks>
 public sealed class ArrayFirmwareFlash
@@ -345,6 +386,18 @@ public sealed class ArrayFirmwareFlash
     /// <summary>How often the bus is re-read while waiting.</summary>
     public static readonly TimeSpan ReEnumerationPoll = TimeSpan.FromSeconds(2);
 
+    /// <summary>How many times one authorisation may write, if the earlier writes do not persist.</summary>
+    /// <remarks>
+    /// <b>Three, because everything else in this product retries three times</b> — the operator's
+    /// decision, replacing a design in which the authorisation was spent before the write precisely
+    /// so that a failure could never be retried. It is a count of <i>completed</i> writes whose
+    /// result did not stick, never of refusals and never of interruptions; see this class's remarks
+    /// for the distinction, which is what keeps a half-written partition out of the retry path.
+    /// The number is deliberately not read from §2.5's budget: that budget belongs to the reconcile
+    /// loop and this operation is beside it.
+    /// </remarks>
+    public const int MaxAttempts = 3;
+
     private readonly ArrayFlashServices _services;
     private ArrayFlashRefusal? _reported;
     private string? _reportedWhy;
@@ -378,28 +431,31 @@ public sealed class ArrayFirmwareFlash
         // unknown state is a decision nobody made. Only a person deletes this.
         if (_services.Window.Interrupted)
         {
-            // The same durable evidence, put on the screen the person is standing in front of. An
-            // array that is not on the bus at all is a board that did not come back, and the way
-            // back is a gesture somebody performs with their hands — so it is spelled out on the
-            // panel, which is the surface that still works when the microphone does not.
+            // The same durable evidence, put on the screen the person is standing in front of. It
+            // used to branch here on whether any unit was still on the bus, because a board that did
+            // not come back got the Safe Mode gesture spelled out on the panel. That screen and this
+            // project's whole support for Safe Mode went on 2026-08-24 — ArrayFlashVoice carries the
+            // account and what it costs — so there is one screen and it says the true thing about
+            // both cases: a write was interrupted and this frame cannot tell whether the microphone
+            // is well.
             var attached = XvfArrayUsb.Attached(_services.Files);
-            _services.Approval.Interrupted(attached.Count > 0);
+            _services.Approval.Interrupted();
 
-            // Shown, and then bounded by the same call that bounds every other completed screen.
-            // A frame whose marker only a person can remove would otherwise cover a household's
-            // photos for ever — and permanently for a frame with no touchscreen, which cannot even
-            // be told to put it away. It comes back after the rest, so the condition is named
-            // repeatedly rather than once, which is what §1.2 principle 3 asks for.
-            _services.Approval.Withdraw();
-
+            // Not withdrawn, and that is the operator's decision rather than an omission. This
+            // screen used to be bounded by the same fifteen-minute linger every completed screen
+            // had, because a frame whose marker only a person can remove would otherwise cover a
+            // household's photos indefinitely. The linger is gone: an unfinished write is the one
+            // state on this frame that nothing can measure and nothing will retry, so it stays on
+            // the panel until somebody acknowledges it. Once acknowledged it rests and then comes
+            // back, so the condition is still named repeatedly rather than once, which is what
+            // §1.2 principle 3 asks for.
             return await RefuseAsync(
                 ArrayFlashRefusal.PreviousFlashUnfinished,
                 "A previous firmware write on this frame never finished — "
                 + (_services.Window.InterruptedDetail ?? "no detail was recorded")
                 + (attached.Count > 0
                     ? ". A microphone unit is still on the bus, so it may be well — this frame cannot tell."
-                    : ". No microphone unit is on the bus at all, so the frame is showing the Safe Mode recovery "
-                        + "gesture on its own screen.")
+                    : ". No microphone unit is on the bus at all, so the unit did not come back from that write.")
                 + " Nothing further will be written until somebody has looked at the microphone unit and removed "
                 + _services.Store.PathOf(ArrayFlashWindow.MarkerFileName) + ".",
                 cancellationToken).ConfigureAwait(false);
@@ -666,18 +722,21 @@ public sealed class ArrayFirmwareFlash
                 + "and an unverified image must never be written to an array.");
         }
 
-        // The way back has to be on the card before the way forward is taken. Fetching either of
-        // these at the moment they are needed means fetching them onto a frame whose array is
-        // already in trouble, possibly with no network.
-        foreach (var image in new[] { pin.Recovery, pin.Fallback })
-        {
-            if (!await installer.VerifyAsync(image, cancellationToken).ConfigureAwait(false))
-            {
-                return (ArrayFlashRefusal.RecoveryNotVerified,
-                    $"{XvfFirmwareInstaller.PathOf(image)} — {image.Purpose} — is missing or does not match the "
-                    + "pinned digest, so this frame has no proven way back from a bad write.");
-            }
-        }
+        // A recovery-pair check stood here and its removal is recorded rather than silent. It
+        // refused unless `4mb_all_ff.bin` and a v2.0.6 fallback were both on the card and hashed to
+        // their pins — "the way back has to be on the card before the way forward is taken". What
+        // was measured on 2026-08-24 is that neither file is part of any way back this product can
+        // need: a DFU download erases the whole upgrade section before it writes, so the erase image
+        // has nothing to do; Seeed's own documented recovery is enter Safe Mode and flash the
+        // firmware, with no erase step; the corruption the erase image was published for is fixed in
+        // firmware from v2.0.9 and is caused by SAVE_CONFIGURATION, which this repository sends
+        // nowhere; and the fallback version was one commit's unexplained choice rather than anybody's
+        // recommendation. Meanwhile the gate itself was doing harm: the target is vendored and those
+        // two were fetched, so this check was the single reason a frame with no network could not
+        // flash. XvfFirmwarePin holds the full account and reference/xvf3800-recovery-model.md holds
+        // the evidence. What remains true is the part that never depended on the pair: the way back
+        // from a bad write is the Safe Mode gesture plus one download of a good image, and the good
+        // image is the one this pre-flight has just re-hashed two statements above.
 
         var attached = XvfArrayUsb.Attached(_services.Files);
 
@@ -735,13 +794,11 @@ public sealed class ArrayFirmwareFlash
         // flashed by nobody's decision" true. A gate refusal does not spend, so a frame whose unit
         // is not the target's image keeps its operator's intent armed until somebody has looked.
 
-        // The revision nobody's software can read, read from the only place it can be: a value a
-        // person typed. It is a veto and never a permission — ArrayBoardRevision holds the whole of
-        // that decision, and it is the one thing in the ladder the operator has not settled.
-        var ruling = ArrayHardwareGate.Judge(
-            scan,
-            pin,
-            _services.Values.Find(ArrayBoardRevision.SettingKey));
+        // A third argument used to go in here: whatever a person had typed into
+        // `audio.arrayBoardRevision`, which rung 4 could veto on. Both the setting and the rung were
+        // removed on 2026-08-24 — ArrayHardwareGate carries the account. What the ladder judges now
+        // is only what the frame can read for itself.
+        var ruling = ArrayHardwareGate.Judge(scan, pin);
 
         Identity = scan.Identity;
         Ruling = ruling;
@@ -768,90 +825,180 @@ public sealed class ArrayFirmwareFlash
         var unattended = parsed.BypassesLocalApproval(_services.DeviceId);
 
         // Spent first, durably, and only then is anything started. Everything after this line may
-        // die at any instant; nothing after this line may authorise a second write. The whole
-        // authorisation string goes in, which is what makes the operator's unattended bypass
-        // single-use by the same act rather than by a mechanism of its own.
+        // die at any instant; nothing after this line may authorise a write this method did not
+        // perform. The whole authorisation string goes in, which is what makes the operator's
+        // unattended bypass single-use by the same act rather than by a mechanism of its own.
+        //
+        // <b>It is spent once for the whole operation, not once per attempt, and that is what bounds
+        // the retry.</b> The operator's three attempts live inside this call: they share one
+        // authorisation, one local approval and one event, so an operation that exhausts them leaves
+        // exactly the state a single failed write used to leave — an authorisation that is spent,
+        // and a frame that will do nothing further until somebody writes a different one.
         Consume(authorisation);
 
-        ProcessResult write;
-        string? after;
+        var transcript = new StringBuilder();
+        string? after = null;
+        string? control = null;
+        string? profile = null;
+        ArrayFlashProgress? reading = null;
+        var succeeded = false;
+        var attempts = 0;
+        string? gaveUp = null;
 
-        var scope = _services.Window.Open(
-            $"writing {target.Name} (sha256 {Short(target.Sha256)}) to the microphone unit");
-        var returned = false;
-
-        // On the panel for the whole of the write, however it came to be agreed to. An unattended
-        // write means nobody was standing there when it started — not that nobody will walk past
-        // while it runs, and the person who does needs the same sentence the approver read.
-        //
-        // <b>Every word of it is drawn by a task of its own, and this thread draws none of them.</b>
-        // The panel's publish reaches AgentStatusHub, which calls its subscribers synchronously —
-        // one writes a frame to /dev/tty8 and another sends one to the browser — so a screen this
-        // thread painted would sit between dfu-util and the drain of its own pipe. Claiming the
-        // screen is an interlocked increment and returns; everything after it belongs to the pump.
-        var progress = new ArrayFlashProgressBox(target.SizeBytes);
-        using var pump = ArrayFlashProgressPump.Start(_services.Approval, progress, _services.Log);
-
-        try
+        while (attempts < MaxAttempts)
         {
-            _services.Log.Info(
-                $"Writing {target.Name} to the microphone unit: {DfuUtil} {string.Join(' ', Arguments(path))}. "
-                + $"It reported firmware {before} before this.");
-
-            // <b>The sink is the box and nothing else, and that is the load-bearing line.</b> It is
-            // called on the thread draining the child's pipes, where a block would fill the pipe and
-            // stall the write; it does a scan of one short line and one reference write, it cannot
-            // throw, and it waits on nothing. Everything that can hang — the screen, the browser
-            // channel, the socket to the Fleet Manager — is downstream of it on the pump's task,
-            // which this thread never awaits and shares no token, no clock and no lock with.
-            write = await _services.Processes
-                .RunAsync(DfuUtil, Arguments(path), progress.Read, cancellationToken)
-                .ConfigureAwait(false);
-
-            // The write is over, one way or the other, from this line on.
-            returned = true;
-
-            // The stage nothing else could report. dfu-util has exited, so its output has stopped,
-            // and what happens now is this frame watching the USB bus for up to ninety seconds. A
-            // bar that reached 100% and then said nothing for that long is how a person concludes a
-            // frame has hung, and what they reach for when they conclude it is the plug.
-            progress.Enter(ArrayFlashStages.ReEnumerating);
-
-            after = await AwaitReEnumerationAsync(target.Version, cancellationToken).ConfigureAwait(false);
-
-            progress.Enter(ArrayFlashStages.Verifying);
-        }
-        finally
-        {
-            // <b>Closed only if `dfu-util` actually returned, and that asymmetry is the whole point
-            // of the marker.</b> A plain `using` would clear it on the one path it exists for: the
-            // agent's token being cancelled mid-write leaves `HostProcessRunner` abandoning — not
-            // killing — the child, and systemd is about to take the whole cgroup down with it. A
-            // marker cleared there would let the next process start a second write onto an array
-            // whose Upgrade partition is in an unknown state. Left behind, it stops every later
-            // flash until a person has looked. The in-process window stays open too, so this
-            // process also stops updating and stops rebooting for whatever life it has left.
-            if (returned)
+            if (attempts > 0)
             {
-                scope.Dispose();
+                // <b>Between attempts, and only between attempts.</b> A unit that is not on the bus
+                // at all did not come back from the write that just finished, and another
+                // `dfu-util -e` has nothing to detach. This product has no software route back from
+                // there — Safe Mode support was dropped deliberately, and
+                // reference/xvf3800-recovery-model.md keeps the record of what that means — so
+                // stopping here is what keeps the retry from turning one unit nobody can help into
+                // three refusals nobody reads.
+                if (XvfArrayUsb.Attached(_services.Files).Count == 0)
+                {
+                    gaveUp = " No microphone unit was on the bus after that attempt, so no further write was tried: "
+                        + "a unit that does not enumerate cannot be detached into DFU mode, so another write has "
+                        + "nothing to talk to. This product has no software route back from that state — see "
+                        + "reference/xvf3800-recovery-model.md — and the unit needs a person.";
+                    break;
+                }
+            }
+
+            attempts++;
+
+            var scope = _services.Window.Open(
+                $"writing {target.Name} (sha256 {Short(target.Sha256)}) to the microphone unit"
+                + (attempts > 1
+                    ? string.Create(CultureInfo.InvariantCulture, $", attempt {attempts} of {MaxAttempts}")
+                    : string.Empty));
+            var returned = false;
+
+            // On the panel for the whole of the write, however it came to be agreed to. An
+            // unattended write means nobody was standing there when it started — not that nobody
+            // will walk past while it runs, and the person who does needs the same sentence the
+            // approver read.
+            //
+            // <b>Every word of it is drawn by a task of its own, and this thread draws none of
+            // them.</b> The panel's publish reaches AgentStatusHub, which calls its subscribers
+            // synchronously — one writes a frame to /dev/tty8 and another sends one to the browser —
+            // so a screen this thread painted would sit between dfu-util and the drain of its own
+            // pipe. Claiming the screen is an interlocked increment and returns; everything after it
+            // belongs to the pump.
+            //
+            // <b>A box and a pump per attempt, rather than one of each for the operation.</b> The
+            // box is monotonic on purpose — a stage that stepped backwards would say the write had
+            // restarted — so a second attempt needs a second box rather than a way round that rule.
+            // The pump takes a new screen epoch with it, which is what makes the previous attempt's
+            // last in-flight frame a no-op instead of a bar that jumps backwards.
+            var progress = new ArrayFlashProgressBox(target.SizeBytes);
+            using var pump = ArrayFlashProgressPump.Start(
+                _services.Approval, progress, _services.Log, attempt: attempts);
+
+            try
+            {
+                _services.Log.Info(
+                    $"Writing {target.Name} to the microphone unit: {DfuUtil} {string.Join(' ', Arguments(path))}. "
+                    + $"It reported firmware {DescriptorVersion() ?? "nothing"} before this"
+                    + (attempts > 1
+                        ? string.Create(CultureInfo.InvariantCulture, $", and this is attempt {attempts} of {MaxAttempts}.")
+                        : "."));
+
+                // <b>The sink is the box and nothing else, and that is the load-bearing line.</b> It
+                // is called on the thread draining the child's pipes, where a block would fill the
+                // pipe and stall the write; it does a scan of one short line and one reference
+                // write, it cannot throw, and it waits on nothing. Everything that can hang — the
+                // screen, the browser channel, the socket to the Fleet Manager — is downstream of it
+                // on the pump's task, which this thread never awaits and shares no token, no clock
+                // and no lock with.
+                var write = await _services.Processes
+                    .RunAsync(DfuUtil, Arguments(path), progress.Read, cancellationToken)
+                    .ConfigureAwait(false);
+
+                // The write is over, one way or the other, from this line on.
+                returned = true;
+
+                if (transcript.Length > 0)
+                {
+                    transcript.Append(Environment.NewLine);
+                }
+
+                if (attempts > 1)
+                {
+                    transcript.Append(
+                        CultureInfo.InvariantCulture,
+                        $"--- attempt {attempts} of {MaxAttempts} ---{Environment.NewLine}");
+                }
+
+                transcript.Append(write.Combined);
+
+                // The stage nothing else could report. dfu-util has exited, so its output has
+                // stopped, and what happens now is this frame watching the USB bus for up to ninety
+                // seconds. A bar that reached 100% and then said nothing for that long is how a
+                // person concludes a frame has hung, and what they reach for when they conclude it
+                // is the plug.
+                progress.Enter(ArrayFlashStages.ReEnumerating);
+
+                after = await AwaitReEnumerationAsync(target.Version, cancellationToken).ConfigureAwait(false);
+
+                progress.Enter(ArrayFlashStages.Verifying);
+            }
+            finally
+            {
+                // <b>Closed only if `dfu-util` actually returned, and that asymmetry is the whole
+                // point of the marker.</b> A plain `using` would clear it on the one path it exists
+                // for: the agent's token being cancelled mid-write leaves `HostProcessRunner`
+                // abandoning — not killing — the child, and systemd is about to take the whole
+                // cgroup down with it. A marker cleared there would let the next process start a
+                // second write onto an array whose Upgrade partition is in an unknown state. Left
+                // behind, it stops every later flash until a person has looked. The in-process
+                // window stays open too, so this process also stops updating and stops rebooting for
+                // whatever life it has left.
+                //
+                // <b>This is also the line that keeps a partial write out of the retry.</b> The
+                // marker is written per attempt and cleared per attempt, so it is present exactly
+                // while dfu-util is running: an interrupted write leaves it behind and the loop
+                // never gets another iteration, because the process that would have run one is gone.
+                if (returned)
+                {
+                    scope.Dispose();
+                }
+            }
+
+            reading = progress.Current;
+            control = await ControlVersionAsync(cancellationToken).ConfigureAwait(false);
+            profile = await ControlProfileAsync(cancellationToken).ConfigureAwait(false);
+
+            // <b>The version alone cannot say a write landed, so the profile is read as well.</b>
+            // The three v2.1.0 images upstream publishes all answer VERSION 2 1 0, so a unit that
+            // came back on some other build of the same version would report exactly what a success
+            // reports. A profile that reads and disagrees is therefore a failure whatever the
+            // version says; a profile that will not read is not, because a unit that has only just
+            // re-enumerated may simply not be answering its control interface yet, and calling a
+            // good write bad would send somebody to a frame that is well.
+            succeeded =
+                (string.Equals(after, target.Version, StringComparison.Ordinal)
+                    || string.Equals(control, target.Version, StringComparison.Ordinal))
+                && (profile is null || string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal));
+
+            if (succeeded)
+            {
+                break;
+            }
+
+            if (attempts < MaxAttempts)
+            {
+                _services.Log.Warn(
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Attempt {attempts} of {MaxAttempts} did not leave the microphone unit on the pinned "
+                        + $"firmware — it reports {after ?? "nothing"} over USB and {control ?? "nothing"} to the "
+                        + $"control tool, and its build configuration reads {profile ?? "nothing"}. Writing again."));
             }
         }
 
-        var control = await ControlVersionAsync(cancellationToken).ConfigureAwait(false);
-        var profile = await ControlProfileAsync(cancellationToken).ConfigureAwait(false);
         var elapsed = _services.Clock.UtcNow - started;
-
-        // <b>The version alone cannot say a write landed, so the profile is read as well.</b> The
-        // three v2.1.0 images upstream publishes all answer VERSION 2 1 0, so a unit that came back
-        // on some other build of the same version would report exactly what a success reports. A
-        // profile that reads and disagrees is therefore a failure whatever the version says; a
-        // profile that will not read is not, because a unit that has only just re-enumerated may
-        // simply not be answering its control interface yet, and calling a good write bad would
-        // send somebody to a frame that is well.
-        var succeeded =
-            (string.Equals(after, target.Version, StringComparison.Ordinal)
-                || string.Equals(control, target.Version, StringComparison.Ordinal))
-            && (profile is null || string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal));
 
         var agreement = after is null || control is null
             ? string.Empty
@@ -865,9 +1012,12 @@ public sealed class ArrayFirmwareFlash
         var summary = string.Create(
             CultureInfo.InvariantCulture,
             $"{(succeeded ? "Wrote" : "Tried to write")} {target.Name} (sha256 {target.Sha256}) to the microphone unit "
-            + $"in {elapsed.TotalSeconds:F0} s. It reported firmware {before} before and "
+            + $"in {elapsed.TotalSeconds:F0} s, in {attempts} of a possible {MaxAttempts} "
+            + $"{(attempts == 1 ? "attempt" : "attempts")}. It reported firmware {before} before and "
             + $"{after ?? "nothing"} after, the control tool answers {control ?? "nothing"}, and its build "
             + $"configuration reads {profile ?? "nothing"} against the pinned {XvfFirmwarePin.Profile}.{agreement}");
+
+        summary += gaveUp ?? string.Empty;
 
         // Who agreed to it is part of the trail, not a detail of how it was started. Six months
         // later "was anybody standing there?" is the first question anybody asks about a unit that
@@ -887,12 +1037,12 @@ public sealed class ArrayFirmwareFlash
         // bytes, at the download" is the difference between a unit whose Upgrade partition is half
         // written and one that took the whole image and would not come back, and those two need
         // different things doing to them.
-        if (progress.Current is { BytesWritten: > 0 } reading)
+        if (reading is { BytesWritten: > 0 } last)
         {
             summary += string.Create(
                 CultureInfo.InvariantCulture,
-                $" {DfuUtil} last reported {reading.BytesWritten} of {target.SizeBytes} bytes sent, at the "
-                + $"'{reading.Stage}' stage.");
+                $" {DfuUtil} last reported {last.BytesWritten} of {target.SizeBytes} bytes sent, at the "
+                + $"'{last.Stage}' stage.");
         }
 
         if (!succeeded)
@@ -914,23 +1064,25 @@ public sealed class ArrayFirmwareFlash
                 OccurredUtc = _services.Clock.UtcNow,
                 Summary = summary,
 
-                // The tool's own output, verbatim and whole. This is the one record of what the
+                // The tool's own output, verbatim and whole, for every attempt this operation
+                // made, each one headed by which attempt it was. This is the one record of what the
                 // device said while it was being written, and it is the first thing anybody
                 // debugging a bad flash will want.
-                Delta = write.Combined,
-                Attempts = 1,
+                Delta = transcript.ToString(),
+                Attempts = attempts,
             },
             cancellationToken).ConfigureAwait(false);
 
-        // Stopped before the outcome goes up, and stopped by a call that returns whatever the
-        // reporting path is doing. The `using` above is the guarantee it happens at all; this is the
-        // ordering, so that the last thing the panel is asked to draw is the outcome rather than one
-        // more frame of a write that has finished. Disposing twice is a no-op by construction.
-        pump.Dispose();
+        // The last attempt's pump was stopped by its own `using` as the loop's iteration ended, so
+        // nothing is still drawing by the time the outcome goes up. The disposal is what guarantees
+        // it happens at all; the placement inside the loop is what guarantees the last thing the
+        // panel is asked to draw is the outcome rather than one more frame of a write that has
+        // finished.
 
         // The screen the person who stood guard is owed: whether it worked, that they may unplug
-        // the frame again, and something to press. It stays until somebody presses it or until the
-        // linger runs out, because an unattended frame has nobody to press anything.
+        // the frame again, and something to press. It stays until somebody presses it, on both
+        // outcomes — there is no timer behind it any more, which is the operator's decision and is
+        // recorded where the linger used to be declared.
         //
         // <b>Guarded, because this is the one publish left on the writing thread.</b> The write is
         // over and its outcome is already in the journal and on its way to the Fleet Manager by the

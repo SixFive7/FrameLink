@@ -36,7 +36,7 @@ namespace FrameLink.Agent.Firmware;
 /// ladder cannot read a build configuration without it. A frame missing the tool is therefore
 /// <see cref="ResourceStatusKind.Blocked"/> behind something the reconciler will fix by itself
 /// rather than escalated on something nobody needs to come out for — which is the right answer, and
-/// it is why rung 5 of the ladder almost never fires here. It still fires in
+/// it is why rung 4 of the ladder almost never fires here. It still fires in
 /// <see cref="ArrayFirmwareFlash"/>'s pre-flight, where there is no dependency to block on and the
 /// next thing that would happen is a 933 KB write.
 /// </para>
@@ -54,25 +54,28 @@ public sealed class ArrayRecognitionResource : IResource
 
     private readonly ISystemFiles _files;
     private readonly XvfHost _tool;
-    private readonly FleetValues _values;
     private readonly XvfFirmwarePin _pin;
 
     private ArrayGateRuling? _last;
 
     /// <summary>Creates the gate over one frame's microphone unit.</summary>
+    /// <remarks>
+    /// It took a <c>FleetValues</c> until 2026-08-24, for one reason: to read the board revision
+    /// somebody had typed into <c>audio.arrayBoardRevision</c> and hand it to the ladder. That
+    /// setting and the rung that gated on it are gone (<see cref="ArrayHardwareGate"/> carries the
+    /// account), so this resource now reads nothing an operator can set — it is a pure function of
+    /// what the frame can see for itself, which is the property that makes it worth being a gate.
+    /// </remarks>
     public ArrayRecognitionResource(
         ISystemFiles files,
         XvfHost tool,
-        FleetValues values,
         XvfFirmwarePin? pin = null)
     {
         ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(tool);
-        ArgumentNullException.ThrowIfNull(values);
 
         _files = files;
         _tool = tool;
-        _values = values;
         _pin = pin ?? XvfFirmwarePin.Current;
     }
 
@@ -88,7 +91,7 @@ public sealed class ArrayRecognitionResource : IResource
     /// <inheritdoc/>
     /// <remarks>
     /// The ladder's own headline once it has run, because "the microphone unit is not one this
-    /// build recognises" is true of ten different problems with ten different answers and the
+    /// build recognises" is true of nine different problems with nine different answers and the
     /// screen has room for the one that happened.
     /// </remarks>
     public string Detected => _last is { MayWrite: false } ruling
@@ -137,10 +140,7 @@ public sealed class ArrayRecognitionResource : IResource
                 "this machine publishes no USB devices at all, so there is no microphone unit to recognise");
         }
 
-        var ruling = ArrayHardwareGate.Judge(
-            scan,
-            _pin,
-            _values.Find(ArrayBoardRevision.SettingKey));
+        var ruling = ArrayHardwareGate.Judge(scan, _pin);
 
         _last = ruling;
 
