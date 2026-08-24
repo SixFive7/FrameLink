@@ -190,7 +190,7 @@ public sealed class EepromConfigResource : IResource
         var candidate = _store.PathOf(CandidateFileName);
 
         var result = await _processes
-            .RunAsync(Executable, ["--apply", candidate], cancellationToken)
+            .RunAsync(Executable, ["--apply", candidate], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         return new ResourceAction(
@@ -354,7 +354,9 @@ public sealed class EepromConfigResource : IResource
 
     private async Task<string?> ReadAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes.RunAsync(Executable, [], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync(Executable, [], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         return result.Succeeded && result.StandardOutput.Trim().Length > 0 ? result.StandardOutput : null;
     }
 

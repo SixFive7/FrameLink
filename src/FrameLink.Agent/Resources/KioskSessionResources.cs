@@ -60,7 +60,9 @@ public sealed class SwapZramResource : IResource
     /// <inheritdoc/>
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes.RunAsync("swapon", ["--show"], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync("swapon", ["--show"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
 
         foreach (var line in result.StandardOutput.Split('\n'))
         {
@@ -371,7 +373,7 @@ public sealed class ConsoleAutologinResource : IResource
         else
         {
             var sessions = await _processes
-                .RunAsync("loginctl", ["list-sessions", "--no-legend"], cancellationToken)
+                .RunAsync("loginctl", ["list-sessions", "--no-legend"], ProcessDeadline.Service, cancellationToken)
                 .ConfigureAwait(false);
 
             if (!HasSessionOnTty1(sessions.StandardOutput, user))
@@ -673,7 +675,9 @@ public sealed class BashProfileLabwcResource : IResource
             return waiting;
         }
 
-        var running = await _processes.RunAsync("pgrep", ["-x", "labwc"], cancellationToken).ConfigureAwait(false);
+        var running = await _processes
+            .RunAsync("pgrep", ["-x", "labwc"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         if (!running.Succeeded)
         {
             wrong.Add("labwc is not running");

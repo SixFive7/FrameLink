@@ -538,7 +538,7 @@ public sealed class KioskListenAddressResource : IResource
         }
 
         var listening = await _processes
-            .RunAsync("ss", ["-tlnp"], cancellationToken)
+            .RunAsync("ss", ["-tlnp"], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         if (!listening.Succeeded)

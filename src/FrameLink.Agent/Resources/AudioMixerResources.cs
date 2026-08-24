@@ -127,7 +127,7 @@ public sealed class AlsaMixer
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
 
         var result = await _processes
-            .RunAsync(Executable, ["-c", Card, "sget", selector], cancellationToken)
+            .RunAsync(Executable, ["-c", Card, "sget", selector], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -149,7 +149,7 @@ public sealed class AlsaMixer
         ArgumentException.ThrowIfNullOrWhiteSpace(selector);
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
 
-        return _processes.RunAsync(Executable, ["-c", Card, "sset", selector, value], cancellationToken);
+        return _processes.RunAsync(Executable, ["-c", Card, "sset", selector, value], ProcessDeadline.Local, cancellationToken);
     }
 
     /// <summary>The command a person would have typed, for the change text.</summary>
@@ -1374,7 +1374,9 @@ public sealed class AlsaStoredStateResource : IResource
         // Whole-file, every card, exactly as guide 4 step 5 does it. The live values it captures
         // are correct by construction: every mixer resource is a declared dependency of this one,
         // so none of them is drifted at the moment this runs.
-        var result = await _processes.RunAsync(Executable, ["store"], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync(Executable, ["store"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
 
         return new ResourceAction(
             $"{Executable} store"

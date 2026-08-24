@@ -162,7 +162,7 @@ public sealed class HostnameResource : IResource
         changes.Add($"{HostsPath}: {LoopbackAddress}\t{desired}");
 
         var result = await _processes
-            .RunAsync("hostnamectl", ["set-hostname", desired], cancellationToken)
+            .RunAsync("hostnamectl", ["set-hostname", desired], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         changes.Add(result.Succeeded
@@ -236,7 +236,7 @@ public sealed class HostnameResource : IResource
     private async Task<string?> ReadLiveHostnameAsync(CancellationToken cancellationToken)
     {
         var result = await _processes
-            .RunAsync("hostnamectl", ["--static"], cancellationToken)
+            .RunAsync("hostnamectl", ["--static"], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         return result.Succeeded && result.StandardOutput.Length > 0 ? result.StandardOutput.Trim() : null;
@@ -254,7 +254,7 @@ public sealed class HostnameResource : IResource
     private async Task<string?> ResolveAsync(string hostname, CancellationToken cancellationToken)
     {
         var result = await _processes
-            .RunAsync("getent", ["hosts", hostname], cancellationToken)
+            .RunAsync("getent", ["hosts", hostname], ProcessDeadline.Resolver, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Succeeded)

@@ -913,7 +913,7 @@ public sealed class ArrayFirmwareFlash
                 // on the pump's task, which this thread never awaits and shares no token, no clock
                 // and no lock with.
                 var write = await _services.Processes
-                    .RunAsync(DfuUtil, Arguments(path), progress.Read, cancellationToken)
+                    .RunAsync(DfuUtil, Arguments(path), progress.Read, ProcessDeadline.Firmware, cancellationToken)
                     .ConfigureAwait(false);
 
                 // The write is over, one way or the other, from this line on.

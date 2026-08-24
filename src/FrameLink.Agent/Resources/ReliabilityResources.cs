@@ -101,7 +101,7 @@ public sealed class TmpfsMountResource : IResource
         var expected = $"{MountPoint} on tmpfs, at least {MinimumSizeKb / 1024} MB";
 
         var result = await _processes
-            .RunAsync("findmnt", ["-n", "-t", "tmpfs", MountPoint], cancellationToken)
+            .RunAsync("findmnt", ["-n", "-t", "tmpfs", MountPoint], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         // `findmnt -t tmpfs` exits non-zero and prints nothing when /tmp is not a tmpfs, which is
@@ -314,7 +314,7 @@ public sealed class NoFileSwapResource : IResource
         foreach (var offender in await FileBackedSwapAsync(cancellationToken).ConfigureAwait(false))
         {
             var off = await _processes
-                .RunAsync("swapoff", [offender], cancellationToken)
+                .RunAsync("swapoff", [offender], ProcessDeadline.Storage, cancellationToken)
                 .ConfigureAwait(false);
 
             changes.Add(off.Succeeded ? $"swapoff {offender}" : $"swapoff {offender} (refused: {off.Combined})");
@@ -346,7 +346,9 @@ public sealed class NoFileSwapResource : IResource
     /// </remarks>
     private async Task<List<string>> FileBackedSwapAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes.RunAsync("swapon", ["--show"], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync("swapon", ["--show"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         var offenders = new List<string>();
 
         foreach (var raw in result.StandardOutput.Split('\n'))
@@ -683,7 +685,9 @@ public static class AptConfig
     {
         ArgumentNullException.ThrowIfNull(processes);
 
-        var result = await processes.RunAsync("apt-config", ["dump"], cancellationToken).ConfigureAwait(false);
+        var result = await processes
+            .RunAsync("apt-config", ["dump"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         return result.Succeeded ? result.StandardOutput : string.Empty;
     }
 

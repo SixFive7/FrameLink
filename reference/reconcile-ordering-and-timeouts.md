@@ -717,3 +717,61 @@ holds the stopped screen on the first death instead of power-cycling itself thre
 is the right way round — a loop that dies in two seconds every time is not fixed by a reboot — but
 it is a real difference from the three the operator's model describes, and seeding the file at
 install time is the alternative if that matters.
+
+---
+
+## Third correction, 2026-08-24 — §2.12's hazard is closed
+
+**`IProcessRunner.RunAsync` has a deadline now, and it is the last of §2.12's list to get one.**
+Every one of the roughly one hundred call sites names a bound, either at the call itself or at the
+wrapper that knows what kind of command it is running — `SystemdControl`, `LoginUserSession`,
+`XvfHost` and `AptPackages` between them cover about sixty. There is no infinite value and no
+default: `Timeout.InfiniteTimeSpan` is −1 milliseconds and lands on the same guard as zero, so the
+old behaviour has no spelling left.
+
+**The bounds, and where each number came from.** `ProcessDeadline.Local` = 30 s for anything that
+answers from the kernel or a local file (`id`, `pgrep`, `ps`, `swapon --show`, `findmnt`, `amixer`,
+`dpkg-query`, `apt-config`, `ss`, `iw`, `chown`, `usermod`, `gpioinfo`, `alsactl`) — three orders of
+magnitude of headroom, and short because `ps` and `pgrep` are on loops that tick every few seconds.
+`Resolver` = 1 min for `getent hosts`, the one command that can legitimately block off-frame.
+`Array` = 90 s for `xvf_host`, sized for a USB re-enumeration rather than for the sub-second
+transaction. `Service` = 2 min for everything that reaches systemd or D-Bus, **derived** from
+Debian's own `DefaultTimeoutStartSec` of 90 s: a job systemd has not finished by then is one it is
+about to fail and answer for, so a shorter bound would fire on jobs that were about to succeed.
+`Firmware` = 5 min for `dfu-util`, two and a half times the documented 30 s–2 min write.
+`Storage` = 10 min for `swapoff`, which reads every swapped page back into RAM before returning.
+`PackageChange` = 60 min for `apt-get`, deliberately late: killing it mid-transaction leaves `dpkg`
+half-configured and needing `dpkg --configure -a` by hand, which is worse than the hang and not
+something the agent can repair from.
+
+**The kill is the whole tree, and the reachability claim is narrower than "it works".** `apt` is
+`env … apt-get …` and every user-scope command is `runuser … -- env … systemctl --user …`, so the
+process the agent holds a handle to is a wrapper and the thing that hangs is below it. Measured on
+the workstation: replacing `Kill(entireProcessTree: true)` with `Kill()` leaves the grandchild alive
+and the test names its pid. A grandchild whose parent has *already exited* is reachable on Windows,
+where the parent id stays in the child's record, and **not** on Linux, where the kernel reparents an
+orphan to init. That is why the return does not depend on the kill succeeding: the wait is a race
+against a timer rather than a token, so end-of-file never has to arrive, and the result reports
+whether the pipes actually closed instead of assuming they did.
+
+**Two failure paths, one model.** On the resource path a timeout is data — `ProcessResult.TimedOut`,
+a non-zero exit, and a sentence in `StandardError` naming the command and the deadline — so it
+travels every path a failed command already travels and fails the resource, spending one of #1's
+three attempts. In the six loops beside the pass it is converted to a `ProcessTimeoutException` that
+leaves the loop, because those loops have no ledger of their own and would otherwise retry a wedged
+`systemctl` for ever; `AgentHost` then records it as `agent.loop.<name>` against the same budget.
+The array flash is deliberately excluded from that conversion: a `dfu-util` timeout has to run the
+interrupted-flash latch and the outcome report, and throwing past those would lose the state that
+says a frame's microphone unit may be half-written.
+
+**§5's D3 loses its exception too.** `XvfHost.Conversation`'s unbounded wait was justified in-code
+by this defect — *"a hung tool wedges the caller today, with or without this gate"* — and that
+premise is gone, so the wait is now bounded at three times `ProcessDeadline.Array`. Three things in
+the process hold that gate, so at most two can be ahead of any waiter and each may spend its whole
+deadline; the bound can therefore only be reached by a future caller holding it across more than one
+call, which is the case it now defends against.
+
+**What is not verified.** None of this ran on a frame. The workstation has no password for one in
+this session, so the Linux half of the process-tree behaviour — including the orphan case that
+Windows handles and Linux cannot — is reasoned from the kernel's reparenting rule and the .NET
+implementation, not measured.

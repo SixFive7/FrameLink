@@ -240,13 +240,23 @@ public sealed class HostProcessRunner : IProcessRunner
 
     /// <inheritdoc/>
     /// <remarks>
-    /// <b>Transitional, and the deadline it picks is the most generous real one there is.</b> Every
-    /// call site in the agent is being moved to the overload that states its own deadline; until the
-    /// last of them has, this routes through the same enforcement with
-    /// <see cref="ProcessDeadline.PackageChange"/>, which is the bound <c>apt full-upgrade</c> itself
-    /// gets. Nothing healthy on a frame reaches an hour, so this cannot cut a working command off —
-    /// what it does is make sure no path is unbounded even by omission while the migration is
-    /// half-done.
+    /// <para>
+    /// <b>The backstop, and no production call site reaches it.</b> Every command the agent runs now
+    /// names its own deadline, either at the call site or at the wrapper that knows what kind of
+    /// command it is — <see cref="ISystemControl"/>, <see cref="IUserSession"/>,
+    /// <see cref="Resources.XvfHost"/> and <see cref="Resources.AptPackages"/>. This overload stays
+    /// because the interface keeps it for the five test doubles that answer from a dictionary and
+    /// have nothing for a deadline to bound, and because a call site added later that forgets should
+    /// land somewhere finite rather than back where this file started.
+    /// </para>
+    /// <para>
+    /// <b>It is the most generous real bound there is, deliberately, and it is not "the" deadline for
+    /// anything.</b> <see cref="ProcessDeadline.PackageChange"/> is what <c>apt full-upgrade</c>
+    /// itself gets, and nothing healthy on a frame reaches an hour — so an omission cannot cut a
+    /// working command off, and cannot hang one for ever either. A single number that every call site
+    /// shared would be the wrong bound for all of them; a single number that no call site uses is a
+    /// floor.
+    /// </para>
     /// </remarks>
     public Task<ProcessResult> RunAsync(
         string executable,
@@ -263,7 +273,7 @@ public sealed class HostProcessRunner : IProcessRunner
         StreamAsync(executable, arguments, onOutput: null, deadline, cancellationToken);
 
     /// <inheritdoc/>
-    /// <remarks>Transitional, for the reason given on the overload with neither a sink nor a deadline.</remarks>
+    /// <remarks>The backstop again, for the reason given on the overload with no sink and no deadline.</remarks>
     public Task<ProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,

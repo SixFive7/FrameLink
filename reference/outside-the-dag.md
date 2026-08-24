@@ -1021,6 +1021,17 @@ desktop, no teardown, no console fallback, and no escalation. **`IProcessRunner.
 contains the sentence that condemns this** — *"a hung pass is worse than a failed one, because
 nothing on the screen ever changes to say so"* — and guards only the pipe-buffer case.
 
+**Closed, 2026-08-24.** Every command now carries a deadline chosen where the command is chosen, the
+kill reaches the whole tree, and the wait is a race against a timer rather than a token — so the
+return does not depend on end-of-file arriving, which is what an orphaned grandchild holding the
+pipe would otherwise prevent. The six loops in this table that are not A5 convert a timeout into a
+`ProcessTimeoutException` that leaves the loop, so §7.3's own fix records it as `agent.loop.<name>`
+against the same budget of three rather than a second failure model being invented for it. A11 is
+the one exception and it is argued in place: a `dfu-util` timeout must run the interrupted-flash
+latch and the outcome report, and leaving the loop would skip both. D3's semaphore, whose unbounded
+wait this defect justified, is bounded with it. See `reference/reconcile-ordering-and-timeouts.md`
+§"Third correction" for the numbers and for what was not verified on a frame.
+
 ### 7.2 The console stage demotes itself permanently on one failed write
 
 `ConsoleStage.CanWrite` goes false on the first write that fails and **never returns**

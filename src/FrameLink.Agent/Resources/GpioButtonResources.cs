@@ -100,7 +100,9 @@ public sealed class UserGroupsResource : IResource
     public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
     {
         var user = _session.UserName;
-        var result = await _processes.RunAsync("id", [user], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync("id", [user], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         var expected = $"{user} in {string.Join(", ", Groups)}";
 
         if (!result.Succeeded)
@@ -130,7 +132,9 @@ public sealed class UserGroupsResource : IResource
     public async ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
     {
         var user = _session.UserName;
-        var current = await _processes.RunAsync("id", [user], cancellationToken).ConfigureAwait(false);
+        var current = await _processes
+            .RunAsync("id", [user], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         var held = current.Succeeded ? Membership(current.StandardOutput) : [];
         var missing = Groups.Where(group => !held.Contains(group, StringComparer.Ordinal)).ToList();
 
@@ -146,7 +150,7 @@ public sealed class UserGroupsResource : IResource
         // frame nobody can administer.
         var joined = string.Join(',', missing);
         var result = await _processes
-            .RunAsync("usermod", ["-a", "-G", joined, user], cancellationToken)
+            .RunAsync("usermod", ["-a", "-G", joined, user], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         return new ResourceAction(
@@ -380,7 +384,9 @@ public sealed class GpioButtonLineResource : IResource
         var state = _button?.State() ?? ButtonState.None;
         var expected = $"line {pin} claimed by {ButtonWatch.ConsumerName} with {Bias} bias";
 
-        var result = await _processes.RunAsync(Executable, [], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync(Executable, [], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
 
         if (!result.Succeeded)
         {

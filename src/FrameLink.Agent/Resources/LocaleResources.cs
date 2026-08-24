@@ -174,7 +174,7 @@ public sealed class TimeZoneResource : IResource
         }
 
         var result = await _processes
-            .RunAsync("timedatectl", ["set-timezone", desired], cancellationToken)
+            .RunAsync("timedatectl", ["set-timezone", desired], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         return new ResourceAction(
@@ -185,7 +185,7 @@ public sealed class TimeZoneResource : IResource
     private async Task<string?> LiveZoneAsync(CancellationToken cancellationToken)
     {
         var result = await _processes
-            .RunAsync("timedatectl", ["show", "-p", "Timezone", "--value"], cancellationToken)
+            .RunAsync("timedatectl", ["show", "-p", "Timezone", "--value"], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         return result.Succeeded && result.StandardOutput.Trim() is { Length: > 0 } zone ? zone : null;
@@ -319,7 +319,7 @@ public sealed class LocaleResource : IResource
         if (_values.Find(LanguageKey) is { Length: > 0 } language && LocaleValue.IsSaneLanguage(language))
         {
             var result = await _processes
-                .RunAsync("localectl", ["set-locale", "LANG=" + language], cancellationToken)
+                .RunAsync("localectl", ["set-locale", "LANG=" + language], ProcessDeadline.Service, cancellationToken)
                 .ConfigureAwait(false);
 
             changes.Add($"localectl set-locale LANG={language}"
@@ -332,7 +332,7 @@ public sealed class LocaleResource : IResource
             // /etc/default/keyboard, which is the file the two enabled *-setup units re-apply from
             // at every boot. Setting the console keymap alone would be undone by them.
             var result = await _processes
-                .RunAsync("localectl", ["set-x11-keymap", keyboard], cancellationToken)
+                .RunAsync("localectl", ["set-x11-keymap", keyboard], ProcessDeadline.Service, cancellationToken)
                 .ConfigureAwait(false);
 
             changes.Add($"localectl set-x11-keymap {keyboard}"
@@ -382,7 +382,7 @@ public sealed class LocaleResource : IResource
     private async Task<string?> LiveLanguageAsync(CancellationToken cancellationToken)
     {
         var result = await _processes
-            .RunAsync("localectl", ["status"], cancellationToken)
+            .RunAsync("localectl", ["status"], ProcessDeadline.Service, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -595,7 +595,9 @@ public sealed class WifiRegulatoryDomainResource : IResource
 
     private async Task<string?> LiveDomainAsync(CancellationToken cancellationToken)
     {
-        var result = await _processes.RunAsync("iw", ["reg", "get"], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync("iw", ["reg", "get"], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         if (!result.Succeeded)
         {
             return null;
