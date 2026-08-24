@@ -66,6 +66,26 @@ The build guides embed images stored under `docs/<guide-stem>/`. They are a mix 
 
 Neither category is covered by the [FrameLink License](LICENSE). If you fork the project and republish the guides, satisfy yourself that your use of these images is permissible in your jurisdiction, or replace them with your own.
 
+## Vendored firmware
+
+One binary in this repository was written by somebody else and is redistributed here unmodified. It is the only such file that is also compiled into a shipped executable, so it has its own section rather than a row in a table.
+
+| | |
+|---|---|
+| **What it is** | `respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin`, a DFU firmware image for the XMOS XVF3800 voice processor on the [reSpeaker XVF3800 USB 4-Mic Array](https://wiki.seeedstudio.com/respeaker_xvf3800_introduction/) |
+| **Licence** | **None stated by Seeed.** The upstream repository carries no licence file at all, so default copyright applies. |
+| **Upstream** | [respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY), path `xmos_firmwares/usb/respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin` |
+| **Commit** | `183ef1ca6befd592da6c4c504259335f8bb3d097` |
+| **sha256** | `60fee566253489709946a77b3fece58fbeb64ea1455279031ec84a87ca7b78d6` |
+| **Length** | 933,888 bytes |
+| **Retrieved** | 2026-08-24, and the digest re-derived from upstream rather than copied forward |
+| **Where it lives** | `vendor/respeaker-xvf3800/`, and compiled into the agent as an embedded resource so a frame can update its microphone with no network at all |
+| **Modified?** | No. The bytes here are the bytes that URL served. |
+
+`vendor/respeaker-xvf3800/NOTICE.md` carries the full provenance record and the two commands that let anyone re-derive both facts this rests on.
+
+**Why this one is redistributed when the control tool above is not.** They are different situations and the difference is worth stating plainly. The `xvf_host` tool appears to be built from XMOS source under terms that expressly forbid making it available on a standalone basis, so fetching it is the only lawful option and no byte of it is stored here. The firmware carries no such terms because it carries no terms at all. What drove the decision to store it was operational: upstream has already published one filename with two different binaries, there is no other source for this hardware, and a frame that cannot reach GitHub must still be able to complete the one operation on it that cannot be undone remotely.
+
 ## Software FrameLink uses but does not redistribute
 
 The following are fetched from their own publishers at install or run time. No copy of them lives in this repository, so no notice obligation attaches to this project — they are listed only so it is clear what a running FrameLink unit is made of, and under what terms.
