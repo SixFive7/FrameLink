@@ -81,7 +81,6 @@
 	 */
 	const cadence = $derived(view?.phase === 'writing' ? 1000 : armed ? 5000 : 30000);
 
-
 	async function load() {
 		try {
 			view = await api.arrayFlash(deviceId);
@@ -463,8 +462,14 @@
 		color: var(--note-ink);
 	}
 
+	/* The frame's own sentence, and a refusal from the hardware gate is a *shaped* sentence: a
+	   plain-language half a household can act on, then a `key: value` block for whoever they
+	   forward it to. Collapsing that into a paragraph would run the two audiences together and
+	   bury the one line that says what to do. `pre-line` keeps the shape and still wraps, and a
+	   single-line detail — which is every other one — renders exactly as it did. */
 	.standing p {
 		margin: var(--space-2) 0 0;
+		white-space: pre-line;
 	}
 
 	.standing :global(.icon) {
@@ -693,6 +698,7 @@
 		font-size: var(--text-sm);
 		color: var(--text-2);
 		line-height: var(--leading-snug);
+		white-space: pre-line;
 	}
 
 	/* `dfu-util`'s output verbatim, newlines and all — it is the only record of what the device

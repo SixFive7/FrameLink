@@ -226,6 +226,12 @@ public static class CatalogEvidenceMap
             "The capture never read /etc/timezone or /etc/localtime. Same reasoning as the locale: a "
             + "per-room fleet setting with no catalog default."),
 
+        new("firmware.xvf3800.recognised", false, null,
+            "There is nothing to capture: it is a gate rather than a setting, so it has no state on "
+            + "any frame, v1 or v2. What it reads — USB ids, serial, BLD_MSG, the two AEC_MIC_ARRAY "
+            + "commands — describes the hardware plugged in rather than anything a build put there, "
+            + "and the v1 capture recorded none of it. Verified by the resource's own Observe."),
+
         new("firmware.xvf3800.image", false, null,
             "The capture never looked for DFU images anywhere: v1 flashed the array by hand from a "
             + "git clone under ~/xvf3800 and kept nothing pinned, so there is no v1 state for three "

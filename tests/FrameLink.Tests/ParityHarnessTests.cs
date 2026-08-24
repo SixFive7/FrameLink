@@ -190,7 +190,7 @@ public sealed class ParityHarnessTests
         var ids = CatalogDocument.Ids(Root);
         var evidence = CatalogEvidenceMap.For(ids);
 
-        Assert.Equal(80, ids.Count);
+        Assert.Equal(81, ids.Count);
         Assert.Equal(ids.Count, evidence.Count);
         Assert.All(evidence, item => Assert.False(string.IsNullOrWhiteSpace(item.Note)));
         Assert.Contains(evidence, item => item.Facet is null);
@@ -551,7 +551,7 @@ public sealed class ParityHarnessTests
         Assert.All(report.Coverage.UncoveredSections, facet => Assert.False(string.IsNullOrWhiteSpace(facet.Limitation)));
         Assert.All(report.Coverage.PartialSections, facet => Assert.False(string.IsNullOrWhiteSpace(facet.Limitation)));
 
-        Assert.Equal(80, report.Coverage.CatalogResources);
+        Assert.Equal(81, report.Coverage.CatalogResources);
         Assert.Equal(
             report.Coverage.CatalogResources,
             report.Coverage.ResourcesWithReference.Count + report.Coverage.ResourcesWithoutReference.Count);

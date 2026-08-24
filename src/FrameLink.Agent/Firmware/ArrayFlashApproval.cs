@@ -409,6 +409,7 @@ public static class ArrayFlashVoice
         Answerable = answerable,
         Alarming = true,
     };
+
 }
 
 /// <summary>
@@ -426,13 +427,25 @@ public static class ArrayFlashVoice
 /// <b>The erase terminates at about 96% with an error, and that is the expected outcome.</b>
 /// <c>dfu-util</c> reports <c>dfuERROR status(8) … out of range</c> near the end of writing
 /// <c>4mb_all_ff.bin</c>; the erase has done its job and the message is not a failure to react to.
-/// Anyone who reads it as one retries, and retrying a partial write is the documented route from a
-/// recoverable board to an unrecoverable one.
+/// What must not follow is <i>re-running the erase</i>, which is a different thing from re-running a
+/// write.
+/// </para>
+/// <para>
+/// <b>A correction, because this file used to say something stronger and it was not true.</b> It
+/// asserted that "retrying a partial write is the documented route from a recoverable board to an
+/// unrecoverable one". That documentation was searched for and does not exist, and XMOS documents
+/// the opposite: <i>"Another download operation may be reattempted."</i> The narrow, supported claim
+/// is the one above — the <c>all_ff</c> erase is the step not to repeat. Everything the single-use
+/// authorisation does is unchanged and was never resting on that sentence: a write is spent before
+/// it starts because an authorisation that survived a crash could authorise a second one, and a
+/// half-written partition is a state a person should look at because nothing on the frame can tell
+/// how far it got. Both of those stand on their own.
 /// </para>
 /// <para>
 /// <b>A power cycle is required between the erase and the next write</b>, or the download fails at
-/// 0%. That is not in the upstream instructions, and it is the second of the two details decision 91
-/// records for exactly that reason.
+/// 0%. It is absent from <i>Seeed's</i> instructions and present in XMOS's — <i>"the device must be
+/// rebooted before resuming the DFU procedure"</i> — and has been reported independently by a third
+/// party.
 /// </para>
 /// </remarks>
 public static class ArrayFlashRecovery
@@ -451,7 +464,7 @@ public static class ArrayFlashRecovery
     [
         "Confirm Safe Mode was entered: the DFU tool lists a third alt setting on the unit.",
         "Erase the Upgrade partition with the pinned 4mb_all_ff.bin.",
-        "Expect the erase to stop at about 96% with dfuERROR status(8) ... out of range. That is the expected outcome, not a failure, and retrying it is what turns a recoverable board into an unrecoverable one.",
+        "Expect the erase to stop at about 96% with dfuERROR status(8) ... out of range. That is the expected outcome, not a failure. Do not run the erase again; go on to the next step.",
         "Power-cycle the microphone unit. Without this the next download fails at 0%.",
         "Write the pinned fallback firmware back onto the unit.",
         "Read the version twice — the USB descriptor and the control tool — and check the two agree.",

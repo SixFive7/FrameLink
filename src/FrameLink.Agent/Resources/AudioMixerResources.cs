@@ -1,4 +1,5 @@
 using System.Globalization;
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 
@@ -1629,6 +1630,15 @@ public static class AudioCatalog
             // them. What it is *for* is the flash beside the loop, which refuses to start without
             // a digest-verified target image and a digest-verified way back from it.
             new XvfFirmwareImageResource(context.Files, images),
+
+            // The gate, and the operator put it here rather than beside the flash: an unrecognised
+            // microphone unit is drift on a rung of the graph, so it escalates, and by decision 68
+            // it stops the whole pass and the frame stops being a photo frame until a person comes.
+            // It has no Act — `IResource.IsGate` is what stops the loop spending three attempts and
+            // three reboots discovering that — and it depends on the control tool, so a frame that
+            // is merely missing `xvf_host` is blocked behind something the reconciler fixes by
+            // itself rather than escalated on something nobody needs to come out for.
+            new ArrayRecognitionResource(context.Files, tool, context.Values),
 
             // Positions 55–62. `firmware.xvf3800.version` used to sit at the head of this block,
             // and decision 90 took it out of the graph entirely: a DFU flash is the only Act that

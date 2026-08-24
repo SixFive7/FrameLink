@@ -1,3 +1,4 @@
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
@@ -210,7 +211,15 @@ public sealed class AgentResourceGraphTests
         // again, but from `ArrayFirmwareFlash` beside the loop, and what came back into the graph is
         // `firmware.xvf3800.image`, which converges the pinned images on the card and never the
         // array.
-        Assert.Equal(81, graph.Count);
+        // 82 since the recognition gate landed: the operator moved "is this microphone unit one we
+        // have been told about" into the graph, so an unrecognised board is drift that escalates and
+        // stops the pass rather than a refusal only the flash path would ever have seen. It is a
+        // gate — IResource.IsGate — so it costs no attempts and no reboots on its way there, which
+        // is the objection decision 90 raised against firmware in the graph and the reason it can
+        // be answered now.
+        Assert.Equal(82, graph.Count);
+        Assert.Contains(ArrayRecognitionResource.ResourceName, graph.Ordered.Select(resource => resource.Name));
+        Assert.True(graph.Find(ArrayRecognitionResource.ResourceName)!.IsGate);
 
         var names = graph.Ordered.Select(resource => resource.Name).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(PackageResource.Prefix + "git", names);
@@ -322,7 +331,7 @@ public sealed class AgentResourceGraphTests
         var extra = new[] { "agent.device-name", "kiosk.config.albums" };
 
         var document = ResourceCatalogDocument.Ids();
-        Assert.Equal(80, document.Count);
+        Assert.Equal(81, document.Count);
 
         using var files = new TemporaryFiles();
         var shipped = DeviceCatalog.BuildGraph(Context(files))

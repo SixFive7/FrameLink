@@ -893,6 +893,37 @@ public sealed class ReconcileLoop
                 continue;
             }
 
+            // A **gate** — a precondition with no Act that could converge it (see
+            // <see cref="IResource.IsGate"/>). Straight to §2.5 rung 2 with the budget declared
+            // spent, for the same reason the conflict path above takes that route: every remaining
+            // attempt is known in advance to buy nothing, and each of them would cost a reboot on a
+            // frame whose problem is that somebody has to look at its hardware. It is placed here,
+            // below the conflict clause and above `acted`, deliberately: a gate is not a change and
+            // must not be held back by this pass having already spent its one change, because the
+            // whole point of a gate is that it stops the pass rather than joining it.
+            if (resource.IsGate)
+            {
+                var gate = await RecordFailureAsync(
+                        resource,
+                        _services.Options.AttemptBudget,
+                        observation.Delta,
+                        observation.Expected,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+
+                _services.Log.Fail(
+                    $"{resource.Name}: this is a precondition rather than something the frame can repair, so nothing "
+                    + "will be attempted and a person has to look.");
+
+                Record(gate);
+                (gaveUp ??= []).Add(resource.Name);
+
+                stopped = true;
+                acted = true;
+                result = Worst(result, PassResult.Escalated);
+                continue;
+            }
+
             if (acted)
             {
                 // Drifted, but this pass has already spent its one change (§1.2.5). Observed and

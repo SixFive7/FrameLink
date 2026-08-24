@@ -284,4 +284,38 @@ public interface IResource
 
     /// <summary>Applies the desired value, returning the exact change made and its gloss.</summary>
     ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether this resource is a <b>gate</b> — a precondition with no Act that could ever converge
+    /// it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The shape §2.3's contract does not obviously have, made explicit rather than faked.</b>
+    /// Observe → Compare → Act (only on drift) → Verify assumes that drift is something the frame
+    /// can do something about. A few things are not: <i>is the hardware in this frame hardware this
+    /// build has been told about?</i> has no command behind it, and the answer changes only when a
+    /// person establishes what the hardware is and a maintainer ships a release. A resource like
+    /// that has exactly one honest Act, which is none.
+    /// </para>
+    /// <para>
+    /// <b>What the flag buys is the cost, not the conclusion.</b> Left as an ordinary resource, a
+    /// gate drifts, is acted on, fails to converge, and spends the whole attempt budget with a
+    /// reboot per attempt on its way to an escalation it had already earned on the first Observe —
+    /// which is precisely the objection decision 90 raised against putting firmware in the graph,
+    /// and it was an objection about waste rather than about the verdict. So the loop takes a
+    /// drifted gate straight to §2.5 rung 2 with the budget declared spent: no Act, no reboot, one
+    /// escalation, and decision 68 stops the pass around it exactly as it would for any other
+    /// resource that has given up. That is the same route §2.6's conflict drift already takes, for
+    /// the same reason — every remaining attempt is known in advance to buy nothing.
+    /// </para>
+    /// <para>
+    /// <b>A gate's <see cref="ActAsync"/> is never called, and a gate should make sure of it.</b>
+    /// Returning a no-op action would tell the loop a repair was applied; the verify would then read
+    /// the same unchanged world and record a failed attempt, which is the cost this flag exists to
+    /// avoid, arrived at by a different road. Throwing is the shape that fails loudly if the loop
+    /// ever changes underneath it.
+    /// </para>
+    /// </remarks>
+    bool IsGate => false;
 }

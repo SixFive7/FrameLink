@@ -44,9 +44,16 @@ namespace FrameLink.Agent.Firmware;
 /// is the state nothing can diagnose after the fact — a cgroup kill, a power cut and a crash all
 /// leave the same array behind — so <see cref="Interrupted"/> latches at construction, is reported
 /// loudly, and is cleared only by a person deleting the file. An agent that cleared it itself would
-/// be free to start a second flash onto an array whose Upgrade partition is in an unknown state,
-/// which is precisely the "retrying a partial write" that turns a recoverable board into an
-/// unrecoverable one.
+/// be free to start a second flash onto an array whose Upgrade partition is in an unknown state —
+/// which is a write nobody decided on, onto a board nobody has looked at.
+/// </para>
+/// <para>
+/// <b>What this latch is not.</b> It used to be justified by "retrying a partial write turns a
+/// recoverable board into an unrecoverable one". That is unsupported: the documentation was searched
+/// for and does not exist, and XMOS states the opposite — <i>"Another download operation may be
+/// reattempted."</i> The latch stands on the other reason, which is the honest one: an interrupted
+/// write is a state this frame cannot measure, and the right response to a state you cannot measure
+/// is a person, not another attempt.
 /// </para>
 /// </remarks>
 public sealed class ArrayFlashWindow

@@ -764,11 +764,26 @@ public sealed class AgentAudioTests
         var block = Audio(files, processes);
 
         Assert.DoesNotContain(block, resource => resource.Name == "firmware.xvf3800.version");
-        Assert.DoesNotContain(
-            block,
-            resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal)
-                && resource.Name != XvfFirmwareImageResource.ResourceName);
         Assert.True((await Observe(block, XvfAmplifierResource.ResourceName)).InSync);
+
+        // <b>The property, asserted directly rather than by excluding a name.</b> This used to say
+        // "no `firmware.*` resource other than the images", which stood in for the real rule while
+        // the images were the only firmware resource there was. The rule is that a frame on the
+        // shipping firmware converges — and now that the recognition gate is in the graph, saying
+        // so directly is both stronger and the only honest form: 2.0.6 is a version this build has
+        // been told about, so a 2.0.6 frame is recognised, in sync, and stops nothing. A gate that
+        // refused the version both of this project's arrays shipped with would be caught here.
+        Assert.Contains(block, resource => resource.Name == ArrayRecognitionResource.ResourceName);
+        Assert.True((await Observe(block, ArrayRecognitionResource.ResourceName)).InSync);
+
+        // And no resource in the block converges a firmware *version*, which is the thing decision
+        // 90 removed and decision 91 did not put back: the gate is a precondition with no Act, and
+        // the images resource is about files on the card.
+        Assert.All(
+            block.Where(resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal)),
+            resource => Assert.True(
+                resource.IsGate || resource.Name == XvfFirmwareImageResource.ResourceName,
+                resource.Name + " converges something firmware-shaped that is neither a gate nor the pinned images."));
     }
 
     [Fact]

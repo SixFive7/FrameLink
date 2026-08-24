@@ -68,18 +68,25 @@ writing `—`. Under this definition that is the same thing, and it is kept rath
 because their whole point is running ahead of adoption; see the carve-out at the head of that
 section.
 
-**Counts.** 72 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
-are listed in their own section. Total **80**. It was 80 until decision 90 took
+**Counts.** 73 resources come from guides 3–12; 8 more are cross-guide or mandated by v2 itself and
+are listed in their own section. Total **81**. It was 80 until decision 90 took
 `firmware.xvf3800.version` out of the graph, then 79; what that resource observed is now reported
 beside the loop and is recorded under "Does not become a device resource" below. Decision 91 brought
 the count back to 80 with a different resource: `firmware.xvf3800.image` converges the pinned DFU
 images *on the card*, which is a download with a real Act that always succeeds, and it is
-deliberately not a firmware version — nothing in the graph writes to the array.
+deliberately not a firmware version — nothing in the graph writes to the array. The 81st is
+`firmware.xvf3800.recognised`, which the operator put in the graph after decision 91: *is the
+microphone unit on this frame one this build has been told about?* is a **gate** — a precondition
+with no Act — so it escalates on the first Observe, costs no attempts and no reboots, and by
+decision 68 stops the pass around it. That answers decision 90's objection rather than reopening it:
+the objection was that a resource which cannot act spends three attempts and three reboots reaching
+a conclusion it already had, and `IResource.IsGate` is what removes that cost. It is counted under
+guide 4 because it is where the array block begins, though no guide step produces it.
 
 | Guide | Resources |
 | --- | ---: |
 | 3 — Hardware configuration | 2 |
-| 4 — Audio configuration | 14 |
+| 4 — Audio configuration | 15 |
 | 5 — Kiosk base | 14 |
 | 6 — Camera | 16 |
 | 7 — LiveKit server | 0 |
@@ -88,9 +95,9 @@ deliberately not a firmware version — nothing in the graph writes to the array
 | 10 — SPA | 6 |
 | 11 — GPIO button | 2 |
 | 12 — systemd & reliability | 9 |
-| **Subtotal (guides 3–12)** | **72** |
+| **Subtotal (guides 3–12)** | **73** |
 | Cross-guide and v2-mandated | 8 |
-| **Total** | **80** |
+| **Total** | **81** |
 
 ---
 
@@ -241,6 +248,17 @@ attached to them:
 - **Value source** — fixed; each image is pinned at the full commit SHA that last touched *that file* by `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` and reviewed in `upstream-review.json` under `xvf-firmware-target`, `xvf-firmware-fallback` and `xvf-firmware-recovery`.
 - **Risk** — — (it is a verified download; nothing here touches the array)
 - **Notes** — **This is the resource decision 91 added, and it is deliberately about files rather than about firmware.** A DFU write of an unverified 933 KB image is strictly worse than no flash at all — a truncated download would be pushed onto the array with nothing complaining — so a digest-verified image is the hard prerequisite for every safe flash, and it is the half of the operation that can converge unattended on every frame in the fleet with no risk at all. The write itself is **not** a resource and never will be: see "Does not become a device resource" below. **All three images, as one setting.** They are not independently useful — an array that took a bad write needs the blank `4mb_all_ff.bin` *and then* the known-good fallback, in that order — so a frame carrying one without the other has a recovery route with a hole in it, and splitting them would produce three resources that are only ever right or wrong together. **No edge on `pkg.dfu-util`**, deliberately: the images are worth having on a frame whose apt run failed, and an edge there would leave the recovery route `Blocked` at exactly the moment somebody wanted it. **The pin is per file, not per directory**, because `respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin` has been published *twice under one name with different bytes* (43% of 933,888 bytes differing, both answering `VERSION 2 0 10`, both `bcdDevice 020a`) — so a version string identifies nothing and a directory-level watch reports every unrelated firmware upstream adds. **Which 2.1.0** — upstream publishes three — is settled in that file's remarks: Seeed's wiki states that the unsuffixed name is the 2-channel 16 kHz build, upstream's 2.0.8 changelog *adds* the six-channel `ua-io16-6ch-sqr` profile against the `ua-io16-sqr` this project's array reports, the 2.1.0 filenames spell both departures out (`16k6ch`, `48k2ch`), and the v1 capture records this array's ALSA `Capture Channel Map` with `count 2`.
+
+**`firmware.xvf3800.recognised`**
+
+- **From** — no guide. It is a gate rather than a step: nothing a reader types produces it, and its whole purpose is to stop before something is typed.
+- **Sets** — nothing. It is a **precondition**: the microphone unit attached to this frame is one this build has been told about, checked field by field against `ArrayHardwareGate.Allowlist`.
+- **Observe** — the ten-rung ladder in `src/FrameLink.Agent/Firmware/ArrayHardwareGate.cs`, in this order: something is on the bus; exactly one thing is; its USB serial decodes and its nine-digit product code is one we know; the board revision an operator recorded does not veto it; it answers the control tool; `BLD_MSG` is exactly `ua-io16-sqr`; `bcdDevice` and `VERSION` agree; the version is one we know and is not newer than the pin; `AEC_MIC_ARRAY_TYPE` and `AEC_MIC_ARRAY_GEO` do not contradict a 66 mm squarecular array; and the whole observed tuple matches one allowlist entry.
+- **Verify** — identical, and there is nothing for it to verify: it never acts.
+- **dependsOn** — `tool.xvf-host.installed`
+- **Value source** — fixed, in source. Support for a unit arrives as an entry on `ArrayHardwareGate.Allowlist` with the evidence that established it, which is a source edit and a release.
+- **Risk** — — (every reading it takes is non-mutating: `VERSION`, `BLD_MSG`, `BLD_REPO_HASH`, `AEC_MIC_ARRAY_TYPE`, `AEC_MIC_ARRAY_GEO` and sysfs)
+- **Notes** — **The first resource in this catalog with no Act, and the contract says so out loud.** §2.3 is Observe → Compare → Act (only on drift) → Verify, which assumes drift is something a frame can do something about; *is this hardware hardware we know?* has no command behind it. `IResource.IsGate` is the marker, and what it changes is the **cost** rather than the verdict: the loop takes a drifted gate straight to §2.5 rung 2 with the budget declared spent — no Act, no reboot, one escalation — exactly as §2.6's conflict drift already does, because every remaining attempt is known in advance to buy nothing. That was decision 90's whole objection to firmware in the graph, and it was an objection about waste rather than about the verdict. `ActAsync` throws rather than returning a no-op, because a no-op would tell the loop a repair was applied and the verify would then charge a failed attempt for it. **An escalation here stops the frame, and that is the point.** By decision 68 the pass stops around it and the frame stops showing photographs until a person comes — accepted deliberately, because a fleet that quietly declines to flash an unknown board and carries on looking well is a fleet where nobody ever finds out. The screen carries both halves of the refusal: a plain-language half somebody with no computer experience can act on, and a technical block they can photograph and send on. **It depends on the tool rather than escalating without it**, so a frame merely missing `xvf_host` is `Blocked` behind something the reconciler repairs by itself. **A container with no USB bus at all reports in sync**, on the same reasoning `cpu.governor.performance` uses for hardware a virtual agent does not have. **It does not replace the flash's own pre-flight**: this says what was true at the last pass, and `ArrayFirmwareFlash` re-runs the same ladder in the second before `dfu-util` starts, because a unit can be swapped between the two.
 
 **`audio.xvf3800.gpo-x0d31-amp-enable`**
 

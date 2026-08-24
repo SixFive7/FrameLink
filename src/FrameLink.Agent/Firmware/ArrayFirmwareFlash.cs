@@ -230,12 +230,20 @@ public sealed record ArrayFlashServices
 /// and re-authorised on every pass for ever.
 /// </para>
 /// <para>
-/// <b>One attempt. Never a second.</b> Retrying a partial write is the documented route from a
-/// recoverable board to an unrecoverable one, so there is no retry anywhere in this class: the
-/// authorisation is already spent by the time <c>dfu-util</c> runs, a failure emits an event for a
-/// person and nothing else, and the next flash needs a human. §2.5's attempt budget is not involved
-/// at all, because the danger here is not a second attempt — it is the first one being interrupted,
-/// which an attempt counter cannot see.
+/// <b>One attempt. Never a second.</b> There is no retry anywhere in this class: the authorisation
+/// is already spent by the time <c>dfu-util</c> runs, a failure emits an event for a person and
+/// nothing else, and the next flash needs a human. §2.5's attempt budget is not involved at all,
+/// because the danger here is not a second attempt — it is the first one being interrupted, which an
+/// attempt counter cannot see.
+/// <br/><br/>
+/// <b>The reason this paragraph used to give was wrong, and is corrected rather than quietly
+/// dropped.</b> It said that "retrying a partial write is the documented route from a recoverable
+/// board to an unrecoverable one". No such documentation exists — it was searched for — and XMOS
+/// documents the opposite: <i>"Another download operation may be reattempted."</i> The narrow
+/// supported claim is about the <c>all_ff</c> <i>erase</i>, not about a write. What the single-use
+/// authorisation actually rests on is unchanged and never needed that sentence: an authorisation
+/// that survived a crash could authorise a second write nobody decided on, and a half-written
+/// partition is a state nothing on this frame can measure, so it is a state a person should look at.
 /// </para>
 /// <para>
 /// <b>The verify is evidence, not a timer.</b> The Act does not sleep five seconds and declare
@@ -366,8 +374,8 @@ public sealed class ArrayFirmwareFlash
         var target = pin.Target;
 
         // First, and unconditionally. A marker left by a previous process means a write began and
-        // nothing knows how far it got; starting a second one onto that array is how a recoverable
-        // board becomes an unrecoverable one. Only a person deletes this.
+        // nothing on this frame knows how far it got — and an unattended second write onto an
+        // unknown state is a decision nobody made. Only a person deletes this.
         if (_services.Window.Interrupted)
         {
             // The same durable evidence, put on the screen the person is standing in front of. An
@@ -451,7 +459,14 @@ public sealed class ArrayFirmwareFlash
                 Consume(authorisation);
             }
 
+            // Every pre-flight refusal takes this class's screen off the panel and none of them
+            // puts one up. An unrecognised unit is narrated by `firmware.xvf3800.recognised`, which
+            // is a rung of the graph and escalates — so the full-screen message is the reconciler's
+            // stopped-frame narration, composed from the same ruling this refusal carries. A second
+            // screen of this class's own would be decision 83's two surfaces disagreeing, and it
+            // would be built on an ask window that is being removed.
             _services.Approval.Withdraw();
+
             return await RefuseAsync(refusal.Kind, refusal.Why, cancellationToken).ConfigureAwait(false);
         }
 
@@ -616,6 +631,9 @@ public sealed class ArrayFirmwareFlash
     /// <summary>What the hardware gate concluded on the last pre-flight that reached it.</summary>
     public ArrayGateVerdict? Verdict { get; private set; }
 
+    /// <summary>The whole of that conclusion — both halves of the message it composed.</summary>
+    public ArrayGateRuling? Ruling { get; private set; }
+
     /// <summary>The firmware version the array reports over USB, or null.</summary>
     /// <remarks>
     /// The descriptor reading, which needs no tool, no root and no process. It is the pre-flight's
@@ -671,33 +689,67 @@ public sealed class ArrayFirmwareFlash
 
         if (attached.Count > 1)
         {
+            // Named, not counted. "More than one is attached" is a fact nobody can act on; the bus
+            // path and the serial of each say which cable to pull.
             return (ArrayFlashRefusal.MoreThanOneArray,
-                $"{attached.Count} microphone units are attached, and nothing here can say which one would be written.");
+                $"{attached.Count} microphone units are attached, and nothing here can say which one would be "
+                + $"written: {ArrayHardwareGate.DescribeAttached(attached)}. Unplug every one except the unit this "
+                + "frame is meant to use.");
         }
 
-        var running = XvfArrayUsb.Version(attached[0].BcdDevice);
-        if (string.Equals(running, pin.Target.Version, StringComparison.Ordinal))
-        {
-            return (ArrayFlashRefusal.AlreadyAtTarget,
-                $"The microphone unit already reports firmware {running}, which is the pinned target, so nothing was written.");
-        }
-
-        // Last in the pre-flight, and after AlreadyAtTarget rather than before it, which is a
-        // deliberate ordering rather than an accident of where it was added. An unrecognised unit
-        // that is already on the target has had nothing written to it either way, and letting that
-        // case reach the spend is what keeps decision 91's "a later array swap cannot be flashed by
-        // nobody's decision" true — a refusal here does not spend, so a gate that ran first would
-        // leave an authorisation armed on a frame whose array somebody then changed.
-        Identity = await ArrayHardwareGate
+        // Read before the idempotency check rather than after it, which is a change from the
+        // ordering this method used to have and is a correctness fix rather than a tidy-up.
+        //
+        // <b>"Already at target" cannot be concluded from the version, because the version does not
+        // identify the image.</b> Upstream publishes v2.1.0, v2.1.0_16k6ch and v2.1.0_48k2ch, and
+        // all three answer VERSION 2 1 0 — the collision is measured, not theorised: issues #22 and
+        // #24 read VERSION 2 0 8 off the six-channel build. A frame carrying the 48 kHz variant
+        // therefore used to be told "already on the pinned target, nothing was written", spend its
+        // authorisation, and report convergence, while its echo canceller silently never converged
+        // (issue #31, measured: AEC_AECCONVERGED reads 0 at every system delay on the 48 kHz
+        // builds). Nothing in ALSA, PipeWire or the mixer would have said so.
+        //
+        // So the claim now needs the build configuration as well, and a unit whose profile cannot
+        // be read reaches the gate instead — where the refusal names the missing tool and does not
+        // spend, which is the right answer to "I cannot tell whether this is converged".
+        var scan = await ArrayHardwareGate
             .ReadAsync(_services.Files, _services.Tool, cancellationToken)
             .ConfigureAwait(false);
 
-        var verdict = ArrayHardwareGate.Judge(Identity, pin);
-        Verdict = verdict;
+        var running = XvfArrayUsb.Version(attached[0].BcdDevice);
 
-        if (verdict != ArrayGateVerdict.Recognised)
+        if (string.Equals(running, pin.Target.Version, StringComparison.Ordinal)
+            && scan.Identity is { BuildConfiguration: { } profile }
+            && string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal))
         {
-            return (ArrayFlashRefusal.ArrayNotRecognised, ArrayHardwareGate.Explain(verdict, Identity));
+            Identity = scan.Identity;
+
+            return (ArrayFlashRefusal.AlreadyAtTarget,
+                $"The microphone unit already reports firmware {running} on build configuration {profile}, which is "
+                + "the pinned target, so nothing was written.");
+        }
+
+        // Everything below is the hardware gate, and it is still last: an unrecognised unit that is
+        // genuinely already on the target has had nothing written to it either way, and letting
+        // that case reach the spend above is what keeps decision 91's "a later array swap cannot be
+        // flashed by nobody's decision" true. A gate refusal does not spend, so a frame whose unit
+        // is not the target's image keeps its operator's intent armed until somebody has looked.
+
+        // The revision nobody's software can read, read from the only place it can be: a value a
+        // person typed. It is a veto and never a permission — ArrayBoardRevision holds the whole of
+        // that decision, and it is the one thing in the ladder the operator has not settled.
+        var ruling = ArrayHardwareGate.Judge(
+            scan,
+            pin,
+            _services.Values.Find(ArrayBoardRevision.SettingKey));
+
+        Identity = scan.Identity;
+        Ruling = ruling;
+        Verdict = ruling.Verdict;
+
+        if (!ruling.MayWrite)
+        {
+            return (ArrayFlashRefusal.ArrayNotRecognised, ArrayHardwareGate.Explain(ruling));
         }
 
         return null;
@@ -786,21 +838,36 @@ public sealed class ArrayFirmwareFlash
         }
 
         var control = await ControlVersionAsync(cancellationToken).ConfigureAwait(false);
+        var profile = await ControlProfileAsync(cancellationToken).ConfigureAwait(false);
         var elapsed = _services.Clock.UtcNow - started;
-        var succeeded = string.Equals(after, target.Version, StringComparison.Ordinal)
-            || string.Equals(control, target.Version, StringComparison.Ordinal);
+
+        // <b>The version alone cannot say a write landed, so the profile is read as well.</b> The
+        // three v2.1.0 images upstream publishes all answer VERSION 2 1 0, so a unit that came back
+        // on some other build of the same version would report exactly what a success reports. A
+        // profile that reads and disagrees is therefore a failure whatever the version says; a
+        // profile that will not read is not, because a unit that has only just re-enumerated may
+        // simply not be answering its control interface yet, and calling a good write bad would
+        // send somebody to a frame that is well.
+        var succeeded =
+            (string.Equals(after, target.Version, StringComparison.Ordinal)
+                || string.Equals(control, target.Version, StringComparison.Ordinal))
+            && (profile is null || string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal));
 
         var agreement = after is null || control is null
             ? string.Empty
             : string.Equals(after, control, StringComparison.Ordinal)
                 ? " Both readings agree."
-                : $" The two readings disagree: the USB descriptor says {after} and the control tool says {control}.";
+                : $" The two readings disagree: the USB descriptor says {after} and the control tool says {control}."
+                    + " That has happened at this publisher before and is not by itself evidence that this unit is "
+                    + "damaged: upstream issue #29 reports a file named v1.0.7 whose device answers 1.0.5, and it is "
+                    + "still unanswered. Report it rather than assuming the board is broken.";
 
         var summary = string.Create(
             CultureInfo.InvariantCulture,
             $"{(succeeded ? "Wrote" : "Tried to write")} {target.Name} (sha256 {target.Sha256}) to the microphone unit "
             + $"in {elapsed.TotalSeconds:F0} s. It reported firmware {before} before and "
-            + $"{after ?? "nothing"} after, and the control tool answers {control ?? "nothing"}.{agreement}");
+            + $"{after ?? "nothing"} after, the control tool answers {control ?? "nothing"}, and its build "
+            + $"configuration reads {profile ?? "nothing"} against the pinned {XvfFirmwarePin.Profile}.{agreement}");
 
         // Who agreed to it is part of the trail, not a detail of how it was started. Six months
         // later "was anybody standing there?" is the first question anybody asks about a unit that
@@ -905,6 +972,24 @@ public sealed class ArrayFirmwareFlash
 
             await _services.Clock.DelayAsync(ReEnumerationPoll, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// The build configuration the unit reports now, which is what says <i>which</i> image landed.
+    /// </summary>
+    private async Task<string?> ControlProfileAsync(CancellationToken cancellationToken)
+    {
+        if (_services.Tool.Root() is not { } root)
+        {
+            return null;
+        }
+
+        var reply = await _services.Tool
+            .RunAsync(root, [ArrayHardwareGate.BuildConfigurationCommand], cancellationToken)
+            .ConfigureAwait(false);
+
+        return ArrayHardwareGate.Field(reply.StandardOutput, ArrayHardwareGate.BuildConfigurationCommand)
+            ?? ArrayHardwareGate.Field(reply.Combined, ArrayHardwareGate.BuildConfigurationCommand);
     }
 
     /// <summary>The control interface's own answer, when there is a tool to ask it with.</summary>

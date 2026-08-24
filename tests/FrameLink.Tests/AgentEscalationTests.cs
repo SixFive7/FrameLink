@@ -30,6 +30,71 @@ public sealed class AgentEscalationTests
     };
 
     [Fact]
+    public async Task A_gate_escalates_on_the_first_pass_without_acting_and_without_a_reboot()
+    {
+        // <b>The shape §2.3's contract does not obviously have.</b> A gate is a precondition with no
+        // Act that could ever converge it — "is the hardware in this frame hardware we have been
+        // told about?" has no command behind it. Left as an ordinary resource it would drift, be
+        // acted on, fail to converge, and spend the whole budget with a reboot per attempt on its
+        // way to a conclusion it already had on the first Observe. That waste is precisely decision
+        // 90's objection to putting firmware in the graph, and `IResource.IsGate` is the answer to
+        // it: straight to §2.5 rung 2, budget declared spent, no Act, no reboot — the same route
+        // §2.6's conflict drift already takes, for the same reason.
+        var gate = new GateResource("hardware.recognised");
+        using var harness = new ReconcileHarness(Options, gate);
+
+        var outcome = await harness.PassAsync();
+        var status = ReconcileHarness.StatusOf(outcome, gate.Name);
+
+        Assert.True(status.Kind.HasGivenUp());
+        Assert.Equal(Options.AttemptBudget, status.Attempts);
+        Assert.Equal(Options.AttemptBudget, status.AttemptBudget);
+        Assert.Equal(0, gate.Acts);
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+
+        // No reboot was requested and none is scheduled: a gate has nothing a reboot could change,
+        // and a household's frame must not be restarted three times to be told the same thing.
+        Assert.Null(status.NextAttemptUtc);
+        Assert.Equal(1, gate.Observations);
+
+        // And a second pass does not act either, however many times it is run.
+        await harness.PassAsync();
+        Assert.Equal(0, gate.Acts);
+    }
+
+    [Fact]
+    public async Task A_gate_that_is_satisfied_is_ordinary_and_stops_nothing()
+    {
+        // The other half, and the one that matters for a fleet: a gate is only ever visible when it
+        // fails. A satisfied one converges like anything else and takes no special path at all.
+        var gate = new GateResource("hardware.recognised") { Satisfied = true };
+        using var harness = new ReconcileHarness(Options, gate);
+
+        var outcome = await harness.PassAsync();
+
+        Assert.Equal(ResourceStatusKind.InSync, ReconcileHarness.StatusOf(outcome, gate.Name).Kind);
+        Assert.Equal(0, gate.Acts);
+        Assert.Equal(PassResult.Converged, outcome.Result);
+    }
+
+    [Fact]
+    public async Task A_gate_stops_the_pass_around_it_exactly_as_any_other_escalation_does()
+    {
+        // Decision 68: an escalation stops the pass. A gate is not a special case of that and must
+        // not become one — the frame stops being a photo frame and waits for a person, which is the
+        // whole reason the operator wanted the check in the graph rather than beside the flash.
+        var gate = new GateResource("hardware.recognised");
+        var ordinary = new ScriptedResource("something.else", "right", "wrong");
+        using var harness = new ReconcileHarness(Options, gate, ordinary);
+
+        var outcome = await harness.PassAsync();
+
+        Assert.Equal(PassResult.Escalated, outcome.Result);
+        Assert.Equal(0, gate.Acts);
+        Assert.Equal(0, ordinary.Acts);
+    }
+
+    [Fact]
     public async Task A_failed_verify_retries_with_a_growing_delay()
     {
         // §2.4: backoff exists to stop a reboot loop wearing the hardware, so the interval has to
@@ -672,4 +737,46 @@ public sealed class AgentEscalationTests
 
     private static ScriptedResource Broken(string name = "broken") =>
         new(name, "want", "have-not") { ActHasNoEffect = true };
+}
+
+/// <summary>
+/// A resource that is a precondition rather than a convergence target — <c>IsGate</c>'s shape.
+/// </summary>
+/// <remarks>
+/// <b>Its Act throws, and that is the point rather than laziness.</b> A gate that returned a no-op
+/// action would tell the loop a repair had been applied and the verify would charge a failed attempt
+/// for it, which is the cost the flag exists to avoid arrived at by another road. Throwing means a
+/// change to the loop that starts acting on gates fails loudly in this suite instead of quietly
+/// costing a household three reboots.
+/// </remarks>
+internal sealed class GateResource : IResource
+{
+    public GateResource(string name) => Name = name;
+
+    public string Name { get; }
+
+    public bool IsGate => true;
+
+    /// <summary>Whether the precondition holds. False is the interesting case.</summary>
+    public bool Satisfied { get; set; }
+
+    public int Observations { get; private set; }
+
+    public int Acts { get; private set; }
+
+    public string Detected => "The hardware in this frame is not hardware this build knows.";
+
+    public string WhyItMatters => "Because nothing can be repaired until somebody looks at it.";
+
+    public ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
+    {
+        Observations++;
+        return ValueTask.FromResult(new ResourceObservation(Satisfied, "something known", "something else"));
+    }
+
+    public ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
+    {
+        Acts++;
+        throw new InvalidOperationException("A gate has no Act and the loop must never call this.");
+    }
 }

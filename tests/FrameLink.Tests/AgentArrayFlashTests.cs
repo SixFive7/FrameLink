@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
@@ -8,6 +9,7 @@ using FrameLink.Agent.Stage;
 using FrameLink.Agent.Telemetry;
 using FrameLink.Agent.State;
 using FrameLink.Agent.Update;
+using FrameLink.Control.Firmware;
 using FrameLink.Protocol;
 
 namespace FrameLink.Tests;
@@ -33,6 +35,20 @@ namespace FrameLink.Tests;
 public sealed class AgentArrayFlashTests
 {
     private const string BusPath = "1-1";
+
+    /// <summary>Frame #1's array, as read from its USB descriptor 2026-08-20.</summary>
+    /// <remarks>
+    /// <b>The real serials, not stand-ins, and that matters now that a rung reads them.</b> The
+    /// gate takes the serial apart as SKU(9) + batch(4) + unit(5) and refuses a product code it has
+    /// not been told about, so a fixture carrying <c>…069</c> would exercise the refusal path on
+    /// every test rather than the path it names. Both values are already published in
+    /// <c>reference/xvf3800-board-revisions.md</c> and <c>SESSION-STATE.md</c>; a USB serial is not
+    /// a secret and is not a credential.
+    /// </remarks>
+    private const string FrameOneSerial = "101991441260500069";
+
+    /// <summary>The 2.0.6 spare, from the same batch.</summary>
+    private const string SpareSerial = "101991441260500030";
 
     // ---------------------------------------------------------------------------------------
     // The pin: which image, and how it is addressed
@@ -350,8 +366,8 @@ public sealed class AgentArrayFlashTests
         var none = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
         Assert.Equal(ArrayFlashRefusal.NoArrayAttached, none.Refusal);
 
-        fixture.Attach(BusPath, "0206", "…030");
-        fixture.Attach("1-2", "020a", "…069");
+        fixture.Attach(BusPath, "0206", SpareSerial);
+        fixture.Attach("1-2", "020a", FrameOneSerial);
         var two = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ArrayFlashRefusal.MoreThanOneArray, two.Refusal);
@@ -371,8 +387,18 @@ public sealed class AgentArrayFlashTests
         var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ArrayFlashRefusal.AlreadyAtTarget, outcome.Refusal);
-        Assert.Empty(fixture.Processes.Commands);
         Assert.Equal(fixture.Authorisation, fixture.Files.Store.ReadText(ArrayFirmwareFlash.ConsumedFileName)?.Trim());
+
+        // The control tool *is* spoken to, and that is the change this assertion records: the claim
+        // "already on the pinned target" cannot be made from the version, because upstream's three
+        // v2.1.0 images all answer VERSION 2 1 0. What must not have run is dfu-util.
+        Assert.Contains(
+            fixture.Processes.Commands,
+            line => line.Contains(ArrayHardwareGate.BuildConfigurationCommand, StringComparison.Ordinal));
+
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
     }
 
     // ---------------------------------------------------------------------------------------
@@ -1575,13 +1601,17 @@ public sealed class AgentArrayFlashTests
         // answer to that is a refusal that says so, not a 933 KB write placed on a hope.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
-        fixture.Attach("1-1", "0300", "…030");
+        // 2.0.3 is a version upstream really published and later deleted, and one this build has
+        // never been told about. It is deliberately *older* than the pin: rung 8 asks "newer?"
+        // first, so a newer unknown version is a different refusal with a different message.
+        fixture.Attach("1-1", "0203", SpareSerial);
         fixture.Authorise();
 
         var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
         Assert.Contains("never been told about", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("UnknownFirmware", outcome.Summary, StringComparison.Ordinal);
         Assert.Null(fixture.Consumed);
         Assert.DoesNotContain(
             fixture.Processes.Commands,
@@ -1673,6 +1703,777 @@ public sealed class AgentArrayFlashTests
         Assert.Contains(identity.Describe(), written.Summary, StringComparison.Ordinal);
     }
 
+    // ---------------------------------------------------------------------------------------
+    // The ladder: ten rungs, in the order that makes the first failure the useful one
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_ladder_reports_the_first_rung_that_fails_and_never_a_later_one()
+    {
+        // <b>The whole reason the order is fixed.</b> This frame is wrong in several ways at once:
+        // two units are attached, one of them names another product, and one of them runs firmware
+        // nobody here has seen. Most of those sentences would be true and useless — every reading
+        // below rung 2 describes whichever of the two happened to enumerate first. Only the first
+        // one names something a person can go and do.
+        var ruling = ArrayHardwareGate.Judge(
+            new ArrayScan(
+                [
+                    new XvfArrayDevice("1-1", "0206", FrameOneSerial),
+                    new XvfArrayDevice("1-3", "0203", "209911441260500030"),
+                ],
+                Identity: null,
+                BusEnumerable: true),
+            XvfFirmwarePin.Current);
+
+        Assert.Equal(ArrayGateVerdict.MoreThanOneArray, ruling.Verdict);
+        Assert.Equal(2, ruling.Rung);
+
+        // And it names both, because "more than one" is not something anybody can act on.
+        Assert.Contains("1-1", ruling.Message, StringComparison.Ordinal);
+        Assert.Contains("1-3", ruling.Message, StringComparison.Ordinal);
+        Assert.Contains(FrameOneSerial, ruling.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_unit_whose_serial_names_another_product_is_refused()
+    {
+        // <b>Rung 3, and the one genuinely new discriminator in the whole ladder.</b> The serial is
+        // SKU(9) + batch(4) + unit(5) and the nine-digit head is Seeed's own product code — the only
+        // machine-readable thing that separates this board from the other XVF3800 products Seeed
+        // sells, some of which have interchangeable microphone arrays. Nothing in this project read
+        // it until now.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Attach("1-1", "0206", "209911441260500030");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("UnknownProductSku", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("209911441", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("a different product", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_unit_with_no_readable_serial_is_refused()
+    {
+        // A serial that will not decode is not the same finding as one that decodes to a product
+        // nobody knows, and the two get different sentences because they have different answers:
+        // one is "plug it in again", the other is "this is the wrong bar".
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Attach("1-1", "0206", string.Empty);
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("SerialUnreadable", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Rung 4: the board revision, which is a veto and never a permission
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_recorded_board_revision_this_build_has_not_been_established_on_vetoes_the_write()
+    {
+        // V1.0 is attested only by silkscreen legible in two of Seeed's own product photographs.
+        // No customer photograph, review, teardown or issue report of one has ever been found, so
+        // whether it ever shipped is unknown and no allowlist entry claims it. A frame whose card
+        // says V1.0 is therefore a frame nothing here has been established against.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Settings[ArrayBoardRevision.SettingKey] = "V1.0";
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("BoardRevisionRefused", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("V1.0", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_recorded_board_revision_is_never_the_reason_a_write_proceeds()
+    {
+        // <b>The property that makes it a veto rather than a checkbox.</b> The card says V1.1, which
+        // is the one revision the allowlist has been established on — and the unit is a six-channel
+        // build, so it is refused anyway, on the rung that read the hardware. A recorded revision
+        // can stop a write and can never be the reason one happens.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Settings[ArrayBoardRevision.SettingKey] = "V1.1";
+        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("UnknownBuildConfiguration", outcome.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_blank_recorded_board_revision_refuses_nothing()
+    {
+        // Absence is not a claim. Almost every frame in the fleet will never have a revision
+        // recorded — somebody would have to take the bar out and read the printing on it — so a
+        // default that refused would refuse the whole fleet.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Settings[ArrayBoardRevision.SettingKey] = "   ";
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(outcome.Refusal);
+        Assert.True(outcome.Flashed);
+    }
+
+    [Fact]
+    public void A_recorded_revision_that_contradicts_the_matched_profile_refuses_at_the_allowlist()
+    {
+        // Rung 10's half of the veto, and the half that makes it more than a checkbox. Suppose a
+        // second allowlist entry one day covers a revision this one does not: a frame whose card
+        // names that revision, whose hardware matches *this* entry, is a frame where the card and
+        // the bar disagree — and neither of them wins.
+        var narrow = Contradictory;
+
+        Assert.Equal(
+            ArrayGateVerdict.Recognised,
+            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current, "V1.4", null, narrow).Verdict);
+
+        // The same hardware, with a card naming a revision the entry it matches was never
+        // established on. V1.1 is a revision *some* entry knows, so rung 4 lets it through — the
+        // recorded value is not itself the problem — and rung 10 catches the contradiction between
+        // what was written down and the entry the frame's own readings actually matched.
+        var contradicted = ArrayHardwareGate.Judge(
+            Scan(Unit()),
+            XvfFirmwarePin.Current,
+            "V1.1",
+            null,
+            narrow);
+
+        Assert.Equal(ArrayGateVerdict.BoardRevisionRefused, contradicted.Verdict);
+        Assert.Equal(ArrayHardwareGate.Rungs, contradicted.Rung);
+        Assert.Contains("does not match", contradicted.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_board_revision_gate_is_one_object_so_the_pending_decision_is_one_change()
+    {
+        // The seam the operator's open question moves on. It is an interface with one default
+        // implementation, so changing the semantics means implementing it once and changing
+        // ArrayBoardRevision.Default — and no rung of the ladder moves, because no other rung reads
+        // the recorded value.
+        Assert.IsAssignableFrom<IBoardRevisionGate>(ArrayBoardRevision.Default);
+        Assert.Contains("veto", ArrayBoardRevision.Default.Semantics, StringComparison.Ordinal);
+
+        // A unit the ladder otherwise recognises, so a substituted gate cannot pass by the ladder
+        // failing somewhere earlier.
+        Assert.Equal(
+            ArrayGateVerdict.Recognised,
+            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current).Verdict);
+
+        Assert.Equal(
+            ArrayGateVerdict.BoardRevisionRefused,
+            ArrayHardwareGate
+                .Judge(Scan(Unit()), XvfFirmwarePin.Current, "V1.1", new RefuseEverythingRevisionGate())
+                .Verdict);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Rung 8: newer than the pin, and how versions are compared
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_unit_newer_than_the_pin_is_refused_and_sent_to_the_maintainer()
+    {
+        // <b>The operator's own example, and the case where every other check passing is most
+        // misleading.</b> Nothing is wrong with this frame: its microphone is simply ahead of the
+        // software. Writing the pin would put an older version back, and the useful thing to say is
+        // not "unrecognised" but "you are ahead of us, and somebody needs to hear that".
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Attach("1-1", "0220", FrameOneSerial);
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("FirmwareNewerThanTarget", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("already newer", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("maintains FrameLink", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("nothing wrong with your frame", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public void Firmware_versions_are_compared_as_numbers_and_never_as_text()
+    {
+        // <b>Broken today, not hypothetically.</b> Ordinal ordering puts "2 0 10" before "2 0 6",
+        // and those are the two versions on this project's two boards — so a text comparison would
+        // judge the older board the newer one, on the exact pair of units that exist. Both are on
+        // the allowlist, so neither may be refused as newer than the 2.1.0 pin.
+        Assert.Equal(
+            ArrayGateVerdict.Recognised,
+            ArrayHardwareGate
+                .Judge(Scan(Unit(bcd: "020a", descriptor: "2 0 10", control: "2 0 10")), XvfFirmwarePin.Current)
+                .Verdict);
+
+        Assert.Equal(
+            ArrayGateVerdict.Recognised,
+            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current).Verdict);
+
+        // And a genuinely newer one is refused as newer rather than as unknown, which is the whole
+        // value of asking "newer?" before "known?".
+        Assert.Equal(
+            ArrayGateVerdict.FirmwareNewerThanTarget,
+            ArrayHardwareGate
+                .Judge(Scan(Unit(bcd: "0211", descriptor: "2 1 1", control: "2 1 1")), XvfFirmwarePin.Current)
+                .Verdict);
+
+        // <b>The pair where ordinal and numeric actually disagree, against a pin that makes the
+        // disagreement visible.</b> Against the 2.1.0 pin an ordinal comparison gives the right
+        // answer for every version this project owns, by luck — "2 0 6" and "2 0 10" both sort
+        // before "2 1 0" — so the three assertions above pass either way. The mutation run found
+        // that, and this is the case that fixes it: 2.0.10 is numerically newer than a 2.0.6 pin
+        // and ordinally older, so only a numeric comparison refuses it.
+        var older = XvfFirmwarePin.Current with
+        {
+            Images = [.. XvfFirmwarePin.Current.Images.Select(image =>
+                image.Role == XvfFirmwareRole.Target ? image with { Version = "2 0 6" } : image)],
+        };
+
+        Assert.Equal(
+            ArrayGateVerdict.FirmwareNewerThanTarget,
+            ArrayHardwareGate.Judge(Scan(Unit(bcd: "020a", descriptor: "2 0 10", control: "2 0 10")), older).Verdict);
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Rung 9: two commands nobody in this project has ever run
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_unit_that_says_its_microphones_are_in_a_line_is_refused()
+    {
+        // AEC_MIC_ARRAY_TYPE answers 1 for linear and 2 for squarecular. A linear build resolves
+        // 180 degrees rather than 360 and was compiled for a different microphone placement, so a
+        // unit answering 1 is a unit this image was not made for — whatever its filename said.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(arrayType: 1);
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("MicArrayTypeUnexpected", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("linear", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task A_geometry_that_is_not_this_boards_square_is_refused()
+    {
+        // XMOS's shipped linear set: 33 mm spacing along one axis, nothing on the other. It is the
+        // only alternative geometry XMOS ships, and it is what the window this check uses exists to
+        // exclude.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(geometry: "0.04995 0.0 0.0 0.01665 0.0 0.0 -0.01665 0.0 0.0 -0.04995 0.0 0.0");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("MicArrayGeometryUnexpected", outcome.Summary, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task A_unit_that_will_not_answer_the_geometry_commands_is_still_written_to()
+    {
+        // <b>The honesty rule, and the most important test in this section.</b> Neither
+        // AEC_MIC_ARRAY_TYPE nor AEC_MIC_ARRAY_GEO has ever been read on this project's hardware,
+        // so the exact text the compiled tool prints them in is unknown. A rung that refused on an
+        // answer it could not parse would refuse every genuine board the first time it ran — which
+        // is the worst possible failure for a gate whose entire value is being trusted. So a
+        // contradicting reading refuses and an absent one does not, and the difference is recorded
+        // in the technical block rather than hidden.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(arrayType: null, geometry: null);
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(outcome.Refusal);
+        Assert.True(outcome.Flashed);
+        Assert.True(outcome.Succeeded);
+
+        // And the trail says so rather than implying the values were checked and passed.
+        var written = Assert.Single(fixture.Telemetry.Events, e =>
+            e.Kind == DeviceEventKinds.ArrayFlash && e.Summary.StartsWith("Wrote", StringComparison.Ordinal));
+
+        Assert.Contains("geometry unreadable", written.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_write_that_lands_another_profile_of_the_same_version_is_not_a_success()
+    {
+        // <b>The post-write half of the collision.</b> The verify used to declare success from the
+        // version alone, and all three v2.1.0 images answer VERSION 2 1 0 — so a unit that came back
+        // on the 48 kHz build would have reported exactly what a good write reports, and the frame
+        // would have said "Wrote". Reading BLD_MSG afterwards is what turns that claim from an
+        // inference into a measurement. The mutation run found this untested.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.AfterWrite = () => fixture.Profile = "ua-io48-sqr";
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(outcome.Flashed);
+        Assert.False(outcome.Succeeded);
+        Assert.Contains("Tried to write", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("ua-io48-sqr", outcome.Summary, StringComparison.Ordinal);
+        Assert.Equal(ArrayFlashPhase.Failed, fixture.Screen?.Phase);
+    }
+
+    [Fact]
+    public void The_geometry_parser_reads_both_shapes_the_tool_might_print()
+    {
+        // Seeed's wiki prints this from the *Python* tool as a bracketed, comma-separated block
+        // across four lines; this project calls the compiled binary, whose formatting nobody here
+        // has observed. Both shapes parse, which is the tolerance that keeps an unmeasured command
+        // from becoming a false refusal.
+        var bracketed = ArrayHardwareGate.MicArrayGeometry(
+            "Found device\nAEC_MIC_ARRAY_GEO:\n" + FlashFixture.SquareGeometry + "\n");
+
+        var plain = ArrayHardwareGate.MicArrayGeometry(
+            "Found device\nAEC_MIC_ARRAY_GEO 0.033 -0.033 0.000 0.033 0.033 0.000 -0.033 0.033 0.000 -0.033 -0.033 0.000\n");
+
+        Assert.NotNull(bracketed);
+        Assert.NotNull(plain);
+        Assert.Equal(bracketed, plain);
+        Assert.True(ArrayHardwareGate.IsSquareGeometry(bracketed));
+
+        // Eleven numbers is a reply this build does not understand, and guessing which one is
+        // missing would be worse than saying so.
+        Assert.Null(ArrayHardwareGate.MicArrayGeometry("AEC_MIC_ARRAY_GEO 0.033 0.033 0.0 0.033\n"));
+
+        // Four microphones the right distance out, all in one quadrant. The sign check is what
+        // makes this a square rather than four points at the right radius.
+        Assert.False(ArrayHardwareGate.IsSquareGeometry(
+            [0.033, 0.033, 0, 0.033, 0.033, 0, 0.033, 0.033, 0, 0.033, 0.033, 0]));
+
+        // A square with all four corners and the wrong size — 100 mm on a side, and 33 mm, which is
+        // the linear build's own spacing arranged squarely. The sign check passes both; only the
+        // coordinate window rejects them, which is what makes it a separate check rather than a
+        // second opinion. The mutation run found this untested, and that is why it is here.
+        Assert.False(ArrayHardwareGate.IsSquareGeometry(
+            [0.05, -0.05, 0, 0.05, 0.05, 0, -0.05, 0.05, 0, -0.05, -0.05, 0]));
+
+        Assert.False(ArrayHardwareGate.IsSquareGeometry(
+            [0.0165, -0.0165, 0, 0.0165, 0.0165, 0, -0.0165, 0.0165, 0, -0.0165, -0.0165, 0]));
+
+        // And four microphones on the square but out of its plane, which is the third thing the
+        // window checks and the one a stacked or warped array would trip.
+        Assert.False(ArrayHardwareGate.IsSquareGeometry(
+            [0.033, -0.033, 0.02, 0.033, 0.033, 0, -0.033, 0.033, 0, -0.033, -0.033, 0]));
+
+        // XMOS's own squarecular default prints 0.0333 where Seeed's device prints 0.033, and the
+        // window has to accept both — that disagreement in the third decimal is why it is a window.
+        Assert.True(ArrayHardwareGate.IsSquareGeometry(
+            [0.0333, -0.0333, 0, 0.0333, 0.0333, 0, -0.0333, 0.0333, 0, -0.0333, -0.0333, 0]));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Rung 10: the allowlist, which is what makes "only what we recognise" literally true
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_allowlist_refuses_a_tuple_assembled_from_two_entries()
+    {
+        // <b>Why nine independent checks are not the same claim as "we recognise this".</b> Each
+        // field below belongs to *an* entry — the serial to one, the profile and firmware to the
+        // other — so every per-field rung passes on the union and the unit is still a thing that
+        // has never existed. Rung 10 is the only rung that asks the question that way, and with one
+        // entry on the real allowlist it cannot fire, which is why it is watched here with two.
+        var split = new[]
+        {
+            Profile("the bare board"),
+            Profile(
+                "a hypothetical six-channel sibling",
+                skus: ["101991442"],
+                configuration: "ua-io16-6ch-sqr",
+                firmware: ["2 0 8"]),
+        };
+
+        var crossed = ArrayHardwareGate.Judge(
+            Scan(Unit(bcd: "0208", descriptor: "2 0 8", control: "2 0 8", profile: "ua-io16-6ch-sqr")),
+            XvfFirmwarePin.Current,
+            null,
+            null,
+            split);
+
+        Assert.Equal(ArrayGateVerdict.NotOnTheAllowlist, crossed.Verdict);
+        Assert.Equal(ArrayHardwareGate.Rungs, crossed.Rung);
+
+        // Either entry, whole, is recognised — so this is the conjunction failing and not a field.
+        Assert.Equal(
+            ArrayGateVerdict.Recognised,
+            ArrayHardwareGate.Judge(Scan(Unit()), XvfFirmwarePin.Current, null, null, split).Verdict);
+    }
+
+    [Fact]
+    public void The_allowlist_is_the_single_source_of_every_per_field_set()
+    {
+        // Two lists that must agree are a list that will one day not. Every union the ladder
+        // measures against is derived from the allowlist rather than held beside it, so adding an
+        // entry cannot leave a rung behind.
+        Assert.Equal(
+            ArrayHardwareGate.Allowlist.SelectMany(profile => profile.Firmware).Distinct(),
+            ArrayHardwareGate.KnownFirmware);
+
+        Assert.Equal(
+            ArrayHardwareGate.Allowlist.SelectMany(profile => profile.ProductSkus).Distinct(),
+            ArrayHardwareGate.KnownProductSkus);
+
+        Assert.Equal(
+            ArrayHardwareGate.Allowlist.Select(profile => profile.BuildConfiguration).Distinct(),
+            ArrayHardwareGate.KnownBuildConfigurations);
+
+        // V1.0 is deliberately absent from what any entry claims: it is attested only in Seeed's own
+        // product photographs and nobody has ever held one, so no entry can honestly say it was
+        // established on it. It stays in the attested list so a refusal can tell "a revision we have
+        // not been established against" from "a revision nobody has ever recorded".
+        Assert.Equal(["V1.1"], ArrayHardwareGate.KnownBoardRevisions);
+        Assert.Contains("V1.0", ArrayBoardRevision.Attested);
+
+        // And every entry says what established it, because an entry whose evidence reads "assumed"
+        // is an entry that should not be there.
+        Assert.All(ArrayHardwareGate.Allowlist, profile => Assert.NotEmpty(profile.Evidence));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // The message: two audiences, one refusal
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Every_refusal_is_written_for_two_audiences_and_the_halves_stay_apart()
+    {
+        // <b>The plain half is checked for digits, which is a crude test of a real rule.</b> The
+        // person reading it on the frame has no computer experience and is being asked to act; a
+        // version string, a USB id or a digest in that half is a thing they cannot use and one more
+        // obstacle between them and the sentence they can. Every value goes in the technical half,
+        // which is for whoever they forward it to.
+        foreach (var ruling in EveryRefusal())
+        {
+            var plain = ruling.Headline + "\n" + string.Join("\n", ruling.Plain) + "\n" + ruling.Next;
+
+            Assert.DoesNotContain(plain, char.IsAsciiDigit);
+            Assert.NotEqual(ArrayGateVerdict.Recognised, ruling.Verdict);
+            Assert.False(ruling.MayWrite);
+
+            // Both halves present, and both in the one message that reaches the trail.
+            Assert.NotEmpty(ruling.Plain);
+            Assert.NotEmpty(ruling.Technical);
+            Assert.Contains(ruling.Headline, ruling.Message, StringComparison.Ordinal);
+            Assert.Contains("Technical detail", ruling.Message, StringComparison.Ordinal);
+            Assert.Contains("gate:", ruling.Message, StringComparison.Ordinal);
+            Assert.Contains(ruling.Verdict.ToString(), ruling.Message, StringComparison.Ordinal);
+
+            // What was checked, what was found, what was expected — all three, every time.
+            Assert.NotEmpty(ruling.Checked);
+            Assert.NotEmpty(ruling.Found);
+            Assert.NotEmpty(ruling.Expected);
+
+            // And the sentence that stops anybody reading any refusal as "the board revision is
+            // wrong", which is the first conclusion a reader of upstream issue #32 would jump to.
+            Assert.Contains("board revision is not readable from the unit", ruling.Message, StringComparison.Ordinal);
+
+            // And the note that says which two expectations have never been measured here, so
+            // nobody reads a pass on rung 9 as a measurement it is not.
+            Assert.Contains("never been read on this project's hardware", ruling.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Every_refusal_says_what_the_person_at_the_frame_should_do_next()
+    {
+        // A refusal that does not say what to do next is a dead end with a reason attached. Where
+        // the honest answer is "nothing you can do", it says that rather than leaving somebody to
+        // work it out — which is why this asserts on shape rather than on a keyword.
+        foreach (var ruling in EveryRefusal())
+        {
+            Assert.False(string.IsNullOrWhiteSpace(ruling.Next), ruling.Verdict.ToString());
+            Assert.True(ruling.Next.Length > 20, ruling.Verdict + ": " + ruling.Next);
+            Assert.EndsWith(".", ruling.Next.Trim(), StringComparison.Ordinal);
+            Assert.Contains("What to do next: " + ruling.Next, ruling.Message, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void Every_rung_of_the_ladder_can_actually_refuse()
+    {
+        // A ladder with an unreachable rung is a ladder nobody should trust. Every verdict except
+        // Recognised is produced by a real call to Judge in this suite, and the rungs come back in
+        // ladder order — which is the property the whole design rests on.
+        var reached = EveryRefusal();
+
+        foreach (var verdict in Enum.GetValues<ArrayGateVerdict>().Where(value => value != ArrayGateVerdict.Recognised))
+        {
+            Assert.Contains(verdict, reached.Select(ruling => ruling.Verdict));
+        }
+
+        var rungs = reached.Select(ruling => ruling.Rung).ToList();
+        Assert.Equal(rungs.OrderBy(rung => rung), rungs);
+        Assert.All(rungs, rung => Assert.InRange(rung, 1, ArrayHardwareGate.Rungs));
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Where the ladder lives: a rung of the graph, not a gate beside the flash
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_recognised_unit_leaves_the_gate_resource_in_sync()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+
+        var observation = await fixture.Recognition()
+            .ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Equal(ObservationOutcome.InSync, observation.Outcome);
+    }
+
+    [Fact]
+    public async Task An_unrecognised_unit_is_drift_on_a_rung_of_the_graph()
+    {
+        // <b>The operator's decision: this is a check in the DAG.</b> An unrecognised unit is not a
+        // refusal the flash path returns and nothing else sees — it is drift, it escalates, and by
+        // decision 68 it stops the whole pass. The frame stops being a photo frame and shows what it
+        // found until a person comes, which is the consequence that was asked about and accepted.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
+
+        var resource = fixture.Recognition();
+        var observation = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.Equal(ObservationOutcome.Drifted, observation.Outcome);
+
+        // Everything the ladder read, whole, in the delta §2.5 renders on the frame's own screen
+        // and in the Fleet Manager's device row. Both halves: the plain one somebody can act on and
+        // the technical one they can photograph and send on.
+        Assert.Contains("UnknownBuildConfiguration", observation.Delta, StringComparison.Ordinal);
+        Assert.Contains("ua-io16-6ch-sqr", observation.Delta, StringComparison.Ordinal);
+        Assert.Contains("What to do next:", observation.Delta, StringComparison.Ordinal);
+        Assert.Contains("Technical detail", observation.Delta, StringComparison.Ordinal);
+
+        // And the plain-language fields §2.7's repair screen leads with name the rung that failed
+        // rather than the generic condition, because ten problems share that condition and have ten
+        // different answers.
+        Assert.Equal(resource.Ruling!.Headline, resource.Detected);
+        Assert.NotEmpty(resource.WhyItMatters);
+    }
+
+    [Fact]
+    public async Task The_gate_has_no_act_and_refuses_to_pretend_it_does()
+    {
+        // <b>Not a no-op, and not a silent success.</b> A gate that returned "nothing to do" would
+        // tell the loop a repair had been applied; the verify would read the same unrecognised unit
+        // and record a failed attempt, three times, with a reboot each — which is the exact cost
+        // IResource.IsGate exists to avoid, reached by another road. The throw is what makes a
+        // future change to the loop that does call this fail loudly instead.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+
+        var resource = fixture.Recognition();
+
+        Assert.True(resource.IsGate);
+
+        var thrown = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await resource.ActAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("has no Act", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(ArrayHardwareGate.Allowlist), thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_gate_blocks_on_the_control_tool_rather_than_escalating_without_it()
+    {
+        // A frame missing xvf_host is a frame the reconciler repairs by itself. Escalating on it
+        // would stop the frame and call somebody out for a download — so the dependency is what
+        // this rung says about that case, and rung 5 of the ladder is left to the flash's own
+        // pre-flight, where there is no dependency to block on and a write is the next thing.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+
+        Assert.Equal(
+            [XvfHostToolResource.ResourceName],
+            fixture.Recognition().DependsOn);
+    }
+
+    [Fact]
+    public async Task A_hardware_refusal_reaches_the_fleet_manager_as_a_refusal_it_can_classify()
+    {
+        // The delta the agent writes is machine-readable on purpose, and the console reads it
+        // rather than re-deriving a state of its own. This runs the real agent, takes the event it
+        // genuinely produced, and feeds it through the real reader — so the two halves cannot drift
+        // apart without the suite saying so.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Attach("1-1", "0206", "209911441260500030");
+        fixture.Authorise();
+
+        await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        var reported = Assert.Single(fixture.Telemetry.Events, e => e.Kind == DeviceEventKinds.ArrayFlash);
+        var reading = ArrayFlashReading.From([reported], fixture.Authorisation);
+
+        Assert.Equal(ArrayFlashPhases.Refused, reading.Phase);
+        Assert.Equal(nameof(ArrayFlashRefusal.ArrayNotRecognised), reading.Refusal);
+
+        // The frame's own words, unaltered, both halves — this is what the operator reads.
+        Assert.Equal(reported.Summary, reading.Detail);
+        Assert.Contains("UnknownProductSku", reading.Detail, StringComparison.Ordinal);
+        Assert.Contains("209911441", reading.Detail, StringComparison.Ordinal);
+        Assert.Contains("What to do next:", reading.Detail, StringComparison.Ordinal);
+    }
+
+    /// <summary>One ruling per refusal the ladder can reach, in ladder order.</summary>
+    /// <remarks>
+    /// Built by calling the real <c>Judge</c> rather than by constructing rulings, so a rung that
+    /// stopped firing would change its entry here rather than keep passing against a hand-made
+    /// object.
+    /// </remarks>
+    private static IReadOnlyList<ArrayGateRuling> EveryRefusal()
+    {
+        var pin = XvfFirmwarePin.Current;
+        var split = new[]
+        {
+            Profile("the bare board"),
+            Profile(
+                "a hypothetical six-channel sibling",
+                skus: ["101991442"],
+                configuration: "ua-io16-6ch-sqr",
+                firmware: ["2 0 8"]),
+        };
+
+        return
+        [
+            ArrayHardwareGate.Judge(new ArrayScan([], null, BusEnumerable: true), pin),
+            ArrayHardwareGate.Judge(
+                new ArrayScan(
+                    [new XvfArrayDevice("1-1", "0206", FrameOneSerial), new XvfArrayDevice("1-3", "0206", SpareSerial)],
+                    null,
+                    BusEnumerable: true),
+                pin),
+            ArrayHardwareGate.Judge(Scan(Unit(serial: string.Empty)), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(serial: "209911441260500030")), pin),
+            ArrayHardwareGate.Judge(Scan(Unit()), pin, "V1.0"),
+            ArrayHardwareGate.Judge(Scan(Unit(control: null, profile: null, hash: null, type: null)), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(control: null, profile: null)), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(profile: "ua-io48-sqr")), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(control: "2 0 10")), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(bcd: "0203", descriptor: "2 0 3", control: "2 0 3")), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(bcd: "0211", descriptor: "2 1 1", control: "2 1 1")), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(type: 1)), pin),
+            ArrayHardwareGate.Judge(Scan(Unit(geometry: Linear)), pin),
+            ArrayHardwareGate.Judge(
+                Scan(Unit(bcd: "0208", descriptor: "2 0 8", control: "2 0 8", profile: "ua-io16-6ch-sqr")),
+                pin,
+                null,
+                null,
+                split),
+            ArrayHardwareGate.Judge(Scan(Unit()), pin, "V1.1", null, Contradictory),
+        ];
+    }
+
+    /// <summary>
+    /// Two entries whose revisions differ, so a recorded value can pass rung 4 and fail rung 10.
+    /// </summary>
+    /// <remarks>
+    /// The shape rung 10's half of the veto needs, and it takes two entries to build: the recorded
+    /// revision has to be one <i>some</i> entry knows — otherwise rung 4 refuses first and the
+    /// contradiction is never reached — and absent from the entry the hardware actually matches.
+    /// </remarks>
+    private static KnownArrayProfile[] Contradictory { get; } =
+    [
+        Profile("an entry established only on V1.4", revisions: ["V1.4"]),
+        Profile("a sibling established on V1.1", skus: ["101991442"], revisions: ["V1.1"]),
+    ];
+
+    /// <summary>The 66 mm square, as Seeed's published output gives it.</summary>
+    private static double[] Square { get; } =
+        [0.033, -0.033, 0.000, 0.033, 0.033, 0.000, -0.033, 0.033, 0.000, -0.033, -0.033, 0.000];
+
+    /// <summary>XMOS's shipped linear set: 33 mm spacing on one axis, nothing on the other.</summary>
+    private static double[] Linear { get; } =
+        [0.04995, 0.0, 0.0, 0.01665, 0.0, 0.0, -0.01665, 0.0, 0.0, -0.04995, 0.0, 0.0];
+
+    /// <summary>An allowlist entry for the suite, shaped like the real one.</summary>
+    private static KnownArrayProfile Profile(
+        string name,
+        IReadOnlyList<string>? skus = null,
+        string configuration = XvfFirmwarePin.Profile,
+        IReadOnlyList<string>? firmware = null,
+        IReadOnlyList<string>? revisions = null) => new()
+        {
+            Name = name,
+            VendorId = XvfArrayUsb.VendorId,
+            ProductId = XvfArrayUsb.ProductId,
+            ProductSkus = skus ?? ["101991441"],
+            BuildConfiguration = configuration,
+            Firmware = firmware ?? ["2 0 6"],
+            BoardRevisions = revisions ?? ["V1.1"],
+            MicArrayType = ArrayHardwareGate.SquarecularArrayType,
+            MicArrayProvenance = ArrayExpectation.Published,
+            Evidence = "a fixture, standing in for an entry a person would have to establish",
+        };
+
+    /// <summary>One unit as this project's own arrays read, with any field overridden.</summary>
+    private static ArrayIdentity Unit(
+        string serial = FrameOneSerial,
+        string bcd = "0206",
+        string? descriptor = "2 0 6",
+        string? control = "2 0 6",
+        string? profile = XvfFirmwarePin.Profile,
+        string? hash = "3f08f630b41b8bce11cb2f45857ba49f22f9d507",
+        int? type = ArrayHardwareGate.SquarecularArrayType,
+        IReadOnlyList<double>? geometry = null) => new(
+            XvfArrayUsb.VendorId,
+            XvfArrayUsb.ProductId,
+            bcd,
+            serial,
+            descriptor,
+            control,
+            profile,
+            hash,
+            type,
+            geometry ?? Square);
+
+    /// <summary>A bus carrying exactly that one unit.</summary>
+    private static ArrayScan Scan(ArrayIdentity unit) => new(
+        [new XvfArrayDevice("1-1", unit.BcdDevice, unit.Serial)],
+        unit,
+        BusEnumerable: true);
+
     [Fact]
     public void The_gate_never_claims_to_read_a_board_revision()
     {
@@ -1689,9 +2490,18 @@ public sealed class AgentArrayFlashTests
         Assert.DoesNotContain(fields, name => name.Contains("Revision", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(fields, name => name.Contains("Board", StringComparison.OrdinalIgnoreCase));
 
-        // And the refusal says so out loud, so nobody reads a refusal as "the board is wrong".
-        var explanation = ArrayHardwareGate.Explain(ArrayGateVerdict.UnknownFirmware, null);
-        Assert.Contains("board revision is not readable in software at all", explanation, StringComparison.Ordinal);
+        // And every refusal says so out loud, so nobody reads one as "the board is wrong". It is
+        // said on the *technical* half, where the person who would jump to that conclusion is
+        // reading, and it now has a second job: there is a revision gate, it runs on a value a
+        // human typed, and the sentence has to keep those two facts apart.
+        var ruling = ArrayHardwareGate.Judge(new ArrayScan([], null, BusEnumerable: true), XvfFirmwarePin.Current);
+
+        Assert.Contains(
+            "board revision is not readable from the unit at all",
+            ruling.Message,
+            StringComparison.Ordinal);
+
+        Assert.Contains("veto rather than a permission", ruling.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1879,14 +2689,19 @@ public sealed class AgentArrayFlashTests
     [Fact]
     public async Task A_unit_already_on_the_target_spends_the_authorisation_even_if_it_is_unrecognised()
     {
-        // Ordering, and it is deliberate. The gate runs *after* the already-at-target check, so an
-        // unrecognised unit that needs no write still spends the authorisation — which is what keeps
-        // "a later array swap cannot be flashed by nobody's decision" true. A gate that ran first
-        // would leave the authorisation armed on a frame whose array somebody then changed.
+        // Ordering, and it is deliberate. The already-at-target check runs *before* the rest of the
+        // gate, so an unrecognised unit that needs no write still spends the authorisation — which
+        // is what keeps "a later array swap cannot be flashed by nobody's decision" true. A gate
+        // that ran first would leave the authorisation armed on a frame whose array somebody then
+        // changed.
+        //
+        // Unrecognised here means a serial whose product code this build has never seen, which is a
+        // rung the already-at-target claim does not depend on. It cannot be the *profile*: see the
+        // test below for why that case is no longer "already at target" at all.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Roll("2 1 0");
-        fixture.SeedTool(profile: "ua-io16-6ch-sqr");
+        fixture.Attach("1-1", "0210", "209911441260500030");
         fixture.Authorise();
 
         var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
@@ -1894,6 +2709,56 @@ public sealed class AgentArrayFlashTests
         Assert.Equal(ArrayFlashRefusal.AlreadyAtTarget, outcome.Refusal);
         Assert.Equal(fixture.Authorisation, fixture.Consumed);
     }
+
+    [Fact]
+    public async Task A_unit_reporting_the_target_version_on_another_profile_is_not_already_at_target()
+    {
+        // <b>The measured collision, and the sharpest bug this ladder fixes.</b> Upstream publishes
+        // v2.1.0, v2.1.0_16k6ch and v2.1.0_48k2ch, and all three answer VERSION 2 1 0 — issues #22
+        // and #24 read VERSION 2 0 8 off the six-channel build, so this is observed rather than
+        // argued. A frame carrying the 48 kHz variant was therefore told "already on the pinned
+        // target, nothing was written", spent its authorisation and reported convergence, while its
+        // echo canceller silently never converged (issue #31, AEC_AECCONVERGED reads 0 at every
+        // system delay on the 48 kHz builds). Nothing in ALSA, PipeWire or the mixer would say so.
+        //
+        // So the version alone can never establish that a unit is on the target image, and this is
+        // the test that says the ladder cannot reach that conclusion from it.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Roll("2 1 0");
+        fixture.SeedTool(profile: "ua-io48-sqr");
+        fixture.Authorise();
+
+        var outcome = await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.ArrayNotRecognised, outcome.Refusal);
+        Assert.Contains("UnknownBuildConfiguration", outcome.Summary, StringComparison.Ordinal);
+        Assert.Contains("measured collision", outcome.Summary, StringComparison.Ordinal);
+
+        // Not spent, so the operator's intent survives somebody swapping the unit for a right one.
+        Assert.Null(fixture.Consumed);
+
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+}
+
+/// <summary>A board-revision gate that refuses everything, to prove the seam is consulted.</summary>
+/// <remarks>
+/// It exists because the pending decision is a decision about <i>this object</i>: if substituting an
+/// implementation did not change the verdict, the seam would be decoration and changing the
+/// semantics later would mean editing the ladder instead of one line.
+/// </remarks>
+internal sealed class RefuseEverythingRevisionGate : IBoardRevisionGate
+{
+    public string Semantics => "a fixture that refuses every recorded revision";
+
+    public BoardRevisionRuling BeforeReading(string? recorded, IReadOnlyList<string> known) =>
+        new(Refuses: true, "a fixture refused it", "a fixture refused it");
+
+    public BoardRevisionRuling AgainstProfile(string? recorded, KnownArrayProfile matched) =>
+        new(Refuses: true, "a fixture refused it", "a fixture refused it");
 }
 
 /// <summary>A frame with a synthetic pin, a synthetic bus and a recording <c>dfu-util</c>.</summary>
@@ -1906,6 +2771,23 @@ public sealed class AgentArrayFlashTests
 internal sealed class FlashFixture : IDisposable
 {
     public const string CardsWithArray = " 0 [Array          ]: USB-Audio - reSpeaker XVF3800 4-Mic Array\n";
+
+    /// <summary>The 2.0.6 spare's serial, real, because rung 3 takes it apart.</summary>
+    public const string SpareSerial = "101991441260500030";
+
+    /// <summary>
+    /// What <c>AEC_MIC_ARRAY_GEO</c> is expected to answer on this board, in Seeed's own layout.
+    /// </summary>
+    /// <remarks>
+    /// <b>This is Seeed's published wiki output, not a reading from this project's hardware.</b>
+    /// Nobody here has ever run either <c>AEC_MIC_ARRAY_*</c> command, so the bracketed
+    /// comma-separated shape below is what the <i>Python</i> tool prints and the compiled binary's
+    /// formatting is unknown. Scripting it in this shape is therefore a test of the parser's
+    /// tolerance rather than a claim about the device — which is exactly why the parser accepts
+    /// whitespace-separated numbers too, and why an unreadable answer is not a refusal.
+    /// </remarks>
+    public const string SquareGeometry =
+        "[0.033, -0.033, 0.000,\n 0.033, 0.033, 0.000,\n -0.033, 0.033, 0.000,\n -0.033, -0.033, 0.000]";
 
     private const string BusPath = "1-1";
 
@@ -1990,6 +2872,12 @@ internal sealed class FlashFixture : IDisposable
     /// <summary>Whether the array comes back on the bus reporting the target after a write.</summary>
     public bool ReEnumerate { get; set; } = true;
 
+    /// <summary>What <c>BLD_MSG</c> currently answers. Mutable, so a write can change it.</summary>
+    public string? Profile { get; set; } = XvfFirmwarePin.Profile;
+
+    /// <summary>Anything the array should do as <c>dfu-util</c> returns, beyond re-enumerating.</summary>
+    public Action? AfterWrite { get; set; }
+
     /// <summary>The authorisation string this fixture last wrote.</summary>
     public string Authorisation { get; private set; } = string.Empty;
 
@@ -2009,7 +2897,7 @@ internal sealed class FlashFixture : IDisposable
         var installed = await Images.InstallAsync(TestContext.Current.CancellationToken);
         Assert.Equal(XvfFirmwareInstallResult.Installed, installed);
 
-        Attach(BusPath, "0206", "…030");
+        Attach(BusPath, "0206", SpareSerial);
         SeedTool();
         AttachPanel();
     }
@@ -2021,8 +2909,20 @@ internal sealed class FlashFixture : IDisposable
     /// which is what a real unit does, and what keeps the gate's two-readings-agree check honest
     /// across a test that rolls the array.
     /// </param>
-    public void SeedTool(string? profile = XvfFirmwarePin.Profile, string? version = null)
+    /// <param name="arrayType">
+    /// What <c>AEC_MIC_ARRAY_TYPE</c> reports, or null for a unit that does not answer it at all —
+    /// which is the state every real unit this project owns is in, since neither command has ever
+    /// been run on one.
+    /// </param>
+    /// <param name="geometry">What <c>AEC_MIC_ARRAY_GEO</c> reports, or null for no answer.</param>
+    public void SeedTool(
+        string? profile = XvfFirmwarePin.Profile,
+        string? version = null,
+        int? arrayType = ArrayHardwareGate.SquarecularArrayType,
+        string? geometry = SquareGeometry)
     {
+        Profile = profile;
+
         var directory = XvfHost.ToolDirectory(XvfHost.AgentDirectory);
         Files.Seed(directory + "/" + XvfHost.Binary, "#!/bin/false\n");
 
@@ -2048,11 +2948,11 @@ internal sealed class FlashFixture : IDisposable
             {
                 // NUL-padded to a fixed width, exactly as the real tool prints it. The parser has to
                 // strip that; a fixture that sent a clean string would never exercise it.
-                return profile is null
+                return Profile is not { } reported
                     ? new ProcessResult(0, Banner, string.Empty)
                     : new ProcessResult(
                         0,
-                        Banner + ArrayHardwareGate.BuildConfigurationCommand + " " + profile + new string('\0', 39) + "\n",
+                        Banner + ArrayHardwareGate.BuildConfigurationCommand + " " + reported + new string('\0', 39) + "\n",
                         string.Empty);
             }
 
@@ -2062,6 +2962,27 @@ internal sealed class FlashFixture : IDisposable
                     0,
                     Banner + ArrayHardwareGate.BuildHashCommand + " 3f08f630b41b8bce11cb2f45857ba49f22f9d507\n",
                     string.Empty);
+            }
+
+            if (string.Equals(command, ArrayHardwareGate.MicArrayTypeCommand, StringComparison.Ordinal))
+            {
+                return arrayType is { } value
+                    ? new ProcessResult(
+                        0,
+                        Banner + ArrayHardwareGate.MicArrayTypeCommand + " "
+                            + value.ToString(CultureInfo.InvariantCulture) + "\n",
+                        string.Empty)
+                    : new ProcessResult(0, Banner, string.Empty);
+            }
+
+            if (string.Equals(command, ArrayHardwareGate.MicArrayGeometryCommand, StringComparison.Ordinal))
+            {
+                return geometry is null
+                    ? new ProcessResult(0, Banner, string.Empty)
+                    : new ProcessResult(
+                        0,
+                        Banner + ArrayHardwareGate.MicArrayGeometryCommand + ":\n" + geometry + "\n",
+                        string.Empty);
             }
 
             return null;
@@ -2228,6 +3149,8 @@ internal sealed class FlashFixture : IDisposable
             {
                 Roll(Pin.Target.Version);
             }
+
+            AfterWrite?.Invoke();
         };
 
         return new ArrayFirmwareFlash(new ArrayFlashServices
@@ -2248,6 +3171,13 @@ internal sealed class FlashFixture : IDisposable
             RestartPending = () => RestartPending,
         });
     }
+
+    /// <summary>The graph's recognition gate, over the same frame.</summary>
+    public ArrayRecognitionResource Recognition() => new(
+        Files.Files,
+        new XvfHost(Files.Files, Processes, _session),
+        new FleetValues(key => Settings.GetValueOrDefault(key)),
+        Pin);
 
     /// <summary>The observe-only reporter, over the same frame.</summary>
     public ArrayFirmwareReporter Reporter() => new(
