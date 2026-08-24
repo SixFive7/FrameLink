@@ -738,6 +738,16 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.action == "flash" and args.list_dfu:
                 # Read-only: dfu-util -l enumerates and writes nothing.
+                #
+                # This still names Safe Mode, and that is deliberate rather than a leftover.
+                # The product dropped Safe Mode support on 2026-08-24: no runbook, no on-screen
+                # gesture, no wedged-board detection, and a board that has stopped enumerating
+                # goes back to the maintainer. This file is the maintainer's bench tool, and the
+                # maintainer is exactly who receives that board. Removing the one read-only
+                # command that can tell them which mode it came up in would take the diagnostic
+                # away from the only person left who is supposed to use it. What was dropped is
+                # the product pretending it has a way back; the hardware still has one, and
+                # reference/xvf3800-recovery-model.md is the record of how it works.
                 with flash_mod.ssh.connect() as mule:
                     listing = flash_mod.list_dfu(mule)
                 ui.block("dfu-util -l", listing)
