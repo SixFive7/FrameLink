@@ -709,3 +709,459 @@ certainty.
 | Why board revision is absent from the firmware telemetry | `src/FrameLink.Agent/Telemetry/ArrayFirmwareReporter.cs` |
 | Why the fleet converges on a pinned image, and the sequencing | [decision 91](../version2.md) |
 | The 30.03% byte-difference claim that this file withdraws | [upstream-respeaker-xvf3800.md §6](upstream-respeaker-xvf3800.md), [resource-catalog.md](resource-catalog.md) |
+
+---
+
+## 11. Does board revision change the **v2.1.0** decision? — added 2026-08-24, second session
+
+This section answers a narrower question than the rest of the file: not *what are the revisions*, but
+whether revision interacts with **v2.1.0 specifically** — the unsuffixed build, upstream commit
+`183ef1ca6befd592da6c4c504259335f8bb3d097`, sha256
+`60fee566253489709946a77b3fece58fbeb64ea1455279031ec84a87ca7b78d6`. It is appended after the closing
+table rather than woven in, so nothing above is disturbed; §11.8 lists the two places above that it
+corrects.
+
+**Everything below was measured on 2026-08-24** unless it says otherwise. Nothing was flashed, no
+array was put into DFU mode, no frame was contacted, no command was sent to any board. Methods: `gh`
+and the GitHub REST API for issues, comments, issue timelines, per-path commit histories, code search
+and issue search; `raw.githubusercontent.com` at explicit commit SHAs plus `sha256sum`; Git LFS
+pointer files read directly for the hashes and sizes of binaries stored out of tree; direct reads of
+the Seeed wiki's markdown **source** in `Seeed-Studio/wiki-documents` at `docusaurus-version`, plus
+that page's 30-commit history; the Internet Archive for XMOS documentation pages that return HTTP 406
+to a fetch and 403 to a browser agent; a Python printable-string extraction over the pinned
+`libcommand_map.so` with a positive control; and web search against the Seeed forum, the Home
+Assistant community, Reddit and `xcore.com`.
+
+### 11.0 The answer
+
+**Flashing v2.1.0 onto a V1.1 board carries no revision-specific risk distinct from the ordinary risk
+of any flash.** Six findings carry that, in descending order of strength:
+
+1. **v2.1.0 changes nothing that is board-matched.** Its four changelog entries are an audio-manager
+   routing mux, two runtime commands for the AIC3104's analogue output level, flash persistence of
+   those two values, and a default gain moved from 6 dB to 8 dB. The PDM microphone port map, the
+   GPIO/GPO pin assignment, the LED count and ordering, the power sequence, the microphone geometry
+   and the USB descriptors — the surfaces XMOS names as needing to match the hardware — are untouched
+   (§11.3).
+2. **The one hardware-adjacent change is a value in a register the firmware has written since v2.0.6,
+   and Seeed walks that value up *and down* across versions on both firmware lines** — which is what
+   a tuning knob looks like, not a board-match parameter (§11.3).
+3. **v2.0.10 → v2.1.0 is a smaller delta than v2.0.9 → v2.0.10.** v2.0.10 reworked USB endpoint
+   descriptors, packet sizes, FIFOs, buffers, alternate settings and software-PLL state; v2.1.0 does
+   not touch USB at all. Frame #1 is a V1.1 board running v2.0.10 successfully (§11.3).
+4. **No report anywhere, by anyone, ties a v2.1.0 failure to a board revision** except upstream issue
+   #32, whose own reporter attributes his failure to something version-independent (§11.1, §11.2).
+5. **v2.1.0 has exactly one published build**, so the two-builds-one-name hazard that genuinely
+   applies to v2.0.10 does not apply here (§11.4).
+6. **A download erases the whole upgrade partition and the boot loader selects on validity, not
+   version**, so there is no version-dependent state carried across a flash for a board difference to
+   interact with — established in [the upgrade-path reference §3](xvf3800-upgrade-path.md) and
+   load-bearing here.
+
+**What is *not* being claimed.** Not that V1.0 and V1.1 are electrically identical — that is unknown
+and stays unknown (§11.5). Not that firmware and board revision never interact on XVF3800 products —
+one documented case exists, on a different product, and it is worth reading (§11.6). Not that issue
+#32 is explained — it is not, and §11.7 gives the three candidate explanations and the single
+question that discriminates between them.
+
+The residual risk of flashing v2.1.0 is the ordinary risk of any flash: an interrupted or invalid
+write leaves a board that boots the Factory image, and recovery needs a finger on the Mute button
+through a power cycle. That cost is physical access, it is unchanged by revision, and §6 already
+prices it.
+
+### 11.1 Issue 32, re-read in full today — verified, with one scoping correction
+
+Both claims this file makes about
+[issue #32](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/issues/32) are **verified
+verbatim**. The body contains, exactly: *"The failure is independent of firmware version."* The
+reporter's follow-up comment of 2026-08-17T12:42:41Z contains, exactly: *"the onboard RST button on
+this board is physically broken and detached."*
+
+Two refinements, both of which make the citation more honest rather than less:
+
+- **The reset button is offered as a question, not a conclusion.** The comment continues: *"Could a
+  damaged or detached reset button be related to this failure?"* Citing it as the reporter's
+  explanation overstates it. It is a disclosed hardware defect on the unit, which is enough.
+- **"Independent of firmware version" is scoped to the enumeration failure, not to the boot failure**,
+  and the very next sentence says so. In full: *"The failure is independent of firmware version.
+  Separately, v2.0.10 and v2.1.0 do not boot at all on this V1.1 board, while v2.0.6, v2.0.7 and
+  v2.0.9 do."* So the reporter did **not** conclude that the dark-LED behaviour of 2.0.10 and 2.1.0
+  is version-independent — he explicitly separated it, and then asked about it directly. His question
+  3 is, verbatim: *"Should v2.0.10 and v2.1.0 be expected to boot on a V1.1 board, or is there a
+  hardware revision constraint on those builds?"* That is this section's question, asked upstream and
+  unanswered.
+
+  This does not rescue the issue as evidence — the board fails to enumerate on every version, is
+  disclosed as physically damaged, and Frame #1 is a V1.1 board running 2.0.10 — but the short form
+  *"the reporter says the failure is version-independent"*, which
+  [SESSION-STATE.md](../SESSION-STATE.md) records under things corrected, is true of the enumeration
+  failure and **not** of the boot failure. §11.7 takes the boot failure seriously on its own terms.
+
+**What has changed since 2026-08-17: exactly one comment, and it is ours.** The issue's complete
+timeline is five events — a mention and a subscribe for `Swissola`, a cross-reference from issue #8,
+the reporter's own comment, and one comment from `SixFive7` at 2026-08-23T21:03:10Z. That last is
+this project's account, so it is **not independent corroboration of anything**; it is us asking the
+reporter which of the two v2.0.10 builds he flashed and telling him what Frame #1 reports.
+
+- **No maintainer has responded.** Neither `jerryyip` nor `Wkstr` has posted. The issue is open,
+  unlabelled, and 7 days old.
+- **Nobody else has reproduced it.** No second reporter, on any board revision.
+
+**The linked issue, read in full.**
+[Issue #8](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/issues/8) was closed
+2026-08-14 and carries six comments: three independent reproductions of the `save_configuration`
+corruption (`iPre-Innovate`, `johens`, `Swissola`), `jerryyip`'s `4mb_all_ff.bin` recovery, `Wkstr`
+pointing at v2.0.9, and `fallais` cross-posting to #32. `jerryyip` states, verbatim, that the
+corruption *"has been fixed in version 2.0.9 and later versions"* — which, if true, makes 2.1.0
+strictly safer than the 2.0.6 the spare array shipped with. **Not one of the three reproductions
+mentions a board revision, and not one reports a version-specific boot failure.**
+
+### 11.2 Nobody else, anywhere, reports a version-specific failure that names a board revision
+
+Absence of evidence is the answer, and here is the size of the search.
+
+**Every issue in the upstream tracker, body and comments, scanned for the string `2.1.0`** — all 34
+issues, fetched individually. Four hit:
+
+| Issue | What the mention is | Names a board revision? |
+| --- | --- | --- |
+| #8 | `jerryyip` recommending `v2.1.0_16k6ch` for six-channel recovery | no |
+| #31 | `swarajban`'s AEC-convergence defect on **`v2.1.0_48k2ch`** | no |
+| #32 | the V1.1 report | yes — the only one in existence |
+| #34 | `ramkumarkoppu` citing #31 and #24 while asking for a 16 kHz I2S master build | no |
+
+Issue #31 is worth naming precisely because it is a **real, measured, root-caused v2.1.0 failure** —
+and it is a *profile* failure, not a board failure. `swarajban`'s follow-up of 2026-08-20 identifies
+the cause as the 48 kHz builds shipping the 16 kHz `AUDIO_MGR_SYS_DELAY` default of +12, sweeps
+negative to find `AEC_AECCONVERGED = 1` from −8 to −64, and reports the same defect on `v2.0.9_48k`.
+It is therefore evidence *against* a revision reading: the one v2.1.0 bug anyone has characterised
+reproduces on a different version and is explained entirely by a DSP default.
+
+**GitHub-wide, four issue searches**: `XVF3800 2.1.0` (1 result, an unrelated Reachy Mini
+host-controller thread), `XVF3800 "V1.1"` (1 result — issue #32, alone in all of GitHub),
+`XVF3800 board revision` (6 results, five unrelated), `XVF3800 "does not boot"` (2 results, both
+upstream and neither about revisions).
+
+**GitHub-wide code search for `"XVF3800" "V1.1"`: 23 files, and every one is a *firmware* version,
+not a board revision.** The pattern is consistent — `linuxphile/home-assistant-voice` writes
+*"ReSpeaker Lite needs the I2S/DFU firmware `respeaker_lite_i2s_dfu_firmware_48k` v1.1.0"*, and
+`Goifal/mindhome` writes *"der Chip muss die I2S-Firmware (≥ v1.1.0, 48kHz-Version) haben"*. This is
+a useful negative: the string that would find a V1.1 board discussion is saturated by an unrelated
+firmware version number, which is one reason the revision question stays invisible.
+
+**Elsewhere:** the Seeed forum's only XVF3800 firmware thread,
+[ReSpeaker XVF3800 hangs after computer reboot](https://forum.seeedstudio.com/t/respeaker-xvf3800-hangs-after-computer-reboot/294782),
+names one firmware version (*"I am on firmware 2.0.7"*), no board revision, and describes the
+warm-reboot USB re-init defect already tracked as upstream #20 and #26. Web searches against Reddit,
+the Home Assistant community's ESPHome thread, `xcore.com` and Seeed's Bazaar listings return nothing
+about a version-specific failure on any revision. The
+[Seeed wiki page's own history](https://github.com/Seeed-Studio/wiki-documents) — 30 commits on the
+XVF3800 page — contains no revision note, and **the wiki has never mentioned v2.1.0 at all**; it
+still documents only `v2.0.x` and `6chl_v2.0.x`, which extends this file's existing "the wiki is
+behind the repository" finding from one build to the whole 2.1.0 release.
+
+### 11.3 What v2.1.0 changes, and the mechanism by which each change could or could not matter
+
+The complete `xmos_firmwares/usb/changelog.md` entry, quoted in full:
+
+```text
+## v2.1.0 (Current)
+
+### Added
+
+- Added configurable USB direct-output routing for channels 3 through 6. The new `AUDIO_MGR_OP_CH3`,
+  `AUDIO_MGR_OP_CH4`, `AUDIO_MGR_OP_CH5`, and `AUDIO_MGR_OP_CH6` commands allow each channel's source
+  to be selected independently, with support for product defaults and saved configurations.
+- Added runtime control of the AIC3104 headphone and line-output levels through the
+  `AIC3104_HP_LEVEL` and `AIC3104_LINEOUT_LEVEL` commands. Both outputs support gains from 0 dB to
+  9 dB.
+- Added flash persistence for the AIC3104 output levels. The values are included in
+  `SAVE_CONFIGURATION` and restored during startup.
+
+### Changed
+
+- Changed the default AIC3104 headphone and line-output gain to 8 dB.
+```
+
+That is the whole of it, and the commit that carried it —
+`183ef1ca6befd592da6c4c504259335f8bb3d097`, 2026-08-14T05:51:10Z — adds the changelog and three
+`.bin` files and nothing else. There is no source in this repository to read; `xmos/sw_xvf3800` is
+still 404.
+
+**Change 1 — `AUDIO_MGR_OP_CH3`…`CH6`.** The audio manager's output multiplexer, selecting which
+internal source feeds each USB capture channel. Its siblings are already in the pinned command map
+(`AUDIO_MGR_OP_L`, `AUDIO_MGR_OP_R`, `AUDIO_MGR_OP_PACKED`, `AUDIO_MGR_OP_ALL`, the `_PK0..2`
+variants). This is a software routing choice inside the DSP graph, with no pin, bus or clock
+implication. **No hardware-difference mechanism exists.** It is also only meaningful on the
+six-channel build; on the two-channel target there are no channels 3–6 to route.
+
+**Change 2 — `AIC3104_HP_LEVEL` and `AIC3104_LINEOUT_LEVEL`. This is the only change in v2.1.0 that
+reaches hardware outside the XVF3800 die, and it is worth naming precisely rather than gesturing at.**
+The commands are `resid 48`, `cmd 11` and `cmd 12`, read/write, one `uint8` each, range `[0 .. 9]` —
+read from `python_control/xvf_host.py` at commit `5bb73fec64b8`, which added exactly those two lines
+and touched nothing else. `resid 48` is the device/product servicer that also carries `VERSION`,
+`BLD_MSG`, `USB_BIT_DEPTH`, `SAVE_CONFIGURATION` and `CLEAR_CONFIGURATION`. The target is the
+TLV320AIC3104 codec, which the wiki's Main Components table already names as this board's codec and
+which Seeed's own
+[XIAO volume-control sample](https://wiki.seeedstudio.com/respeaker_xvf3800_xiao_volume/) addresses
+at I2C `0x18` with output-level registers `HPLOUT 0x33`, `HPROUT 0x41`, `LEFT_LOP 0x56`,
+`RIGHT_LOP 0x5D` — that sample's own comment gives the level scale as *"range 0–17 (0–8 = DAC, 9–17 =
+analog boost)"*, against which the firmware's `[0 .. 9]` reads as the analogue output stage. So the
+mechanism, stated concretely: **the firmware writes an analogue output-level value over I2C to a
+codec part, at an address and into registers that are properties of the part, not of the board.**
+
+**Change 3 — flash persistence of those levels.** *"included in `SAVE_CONFIGURATION` and restored
+during startup"*. This is the only change in v2.1.0 that adds anything to the **startup path**: a read
+of two more fields from the data partition, followed by the codec write above. It is worth flagging
+because it is the one mechanism by which v2.1.0 could plausibly behave differently from v2.0.10 on a
+board whose saved configuration is corrupt — which is issue #32's actual subject. **That is a
+data-partition interaction, not a board-revision interaction**, and this project sends
+`SAVE_CONFIGURATION` nowhere, so its data partition is whatever the factory left.
+
+**Change 4 — the default gain, 6 dB → 8 dB.** A value change in a register the firmware has already
+been writing at startup since v2.0.6, whose changelog reads *"Increased the default AIC3104 headphone
+and line-output gain from 0 dB to 6 dB."*
+
+**The strongest de-risking evidence in this section: Seeed moves this exact gain up *and down*, on
+both firmware lines, on the same board.** From the two changelogs, measured today:
+
+| Line | Version | AIC3104 headphone / line-out default |
+| --- | --- | --- |
+| USB | v2.0.6 | 0 dB → **6 dB** |
+| I2S | v1.0.5 | 0 dB → **6 dB** |
+| I2S | v1.0.7 | 6 dB → **3 dB** (reduced) |
+| USB | v2.1.0 | → **8 dB** |
+
+A parameter that is walked 0 → 6 → 3 on one line and 0 → 6 → 8 on the other, on hardware that did not
+change between those releases, is an audio-tuning knob. A build-time value matched to a board's
+output network does not behave like that. The worst case if 8 dB is wrong for a given board is 2 dB
+too much level on the headphone jack and the line-out feeding the speaker amplifier — audible,
+adjustable at runtime by the very commands the same release adds, and reversible by reflashing.
+
+**What v2.1.0 does not touch, which is the list that decides the question.** XMOS states the
+board-matching requirement itself, verbatim, in
+[Building the Application Firmware](https://www.xmos.com/documentation/XM-014888-PC/html/modules/fwk_xvf/doc/user_guide/05_building_the_firmware.html)
+(retrieved via the Internet Archive; the live URL returns HTTP 406 to a fetch and 403 to a browser
+agent): *"A set of firmware images is provided in the binary release package which are configured to
+run correctly on the XK-VOICE-SQ66 development kit. However, when using the XVF3800 in a product
+design it is normally necessary to modify the firmware to match the hardware and to configure a
+number of settings. This is achieved by modification of the configuration files supplied as source
+code and rebuilding the modified code to create a new firmware image."* That sentence is the general
+form of [issue #24](https://github.com/respeaker/reSpeaker_XVF3800_USB_4MIC_ARRAY/issues/24)'s
+measured result — the XMOS reference build boots on this board with silent microphones — and it names
+the surfaces that matter: the PDM port map and clock wiring, the GPIO/GPO assignment, the LED
+configuration, the microphone geometry, the power and clocking setup. **v2.1.0's changelog touches
+none of them, and its commit adds no configuration file at all.**
+
+**And the comparison that should settle the intuition.** The release *before* the one under
+consideration is the one that reworked hardware-adjacent state: v2.0.10's changelog restores
+*"High-speed and full-speed endpoint descriptors, packet sizes, FIFOs, buffers, alternate settings,
+and software-PLL state […] for the active bus speed"* and decouples DOA tracking from the LED effect.
+If any recent build were going to interact with a board-level timing or USB difference, it is
+v2.0.10 — and **Frame #1 is a V1.1 board that has run v2.0.10 through real calls.** v2.1.0 changes
+nothing about USB.
+
+### 11.4 v2.1.0 has been published exactly once
+
+**Measured by walking the per-path commit history of all three v2.1.0 binaries.** Each has exactly one
+commit in its life: `183ef1ca6befd592da6c4c504259335f8bb3d097`, 2026-08-14. `v2.1.0.bin` downloaded
+from that commit and from `master` both hash
+`60fee566253489709946a77b3fece58fbeb64ea1455279031ec84a87ca7b78d6` at 933,888 bytes — identical
+files, matching the pin in `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs`.
+
+**So the two-builds-one-name hazard is specific to v2.0.10 and does not apply to v2.1.0.** That
+matters for issue #32 in the opposite direction from how it was raised: our own comment there asks
+which v2.0.10 build the reporter flashed, and that question is well-founded, but there is no
+equivalent ambiguity about which v2.1.0 he flashed. There is only one.
+
+One artifact worth recording so nobody rediscovers it as a finding: GitHub's API reports
+`v2.1.0_48k2ch.bin` in that commit as **renamed from `v2.0.5.bin`**. That is rename-detection
+similarity heuristics pairing a deletion with an addition in the same commit — v2.0.5 was one of the
+six superseded images deleted there. It is not evidence of any relationship between the two builds.
+
+### 11.5 V1.0 versus V1.1, electrically: still nothing, and this is how hard the second look was
+
+**Nothing published. Unchanged from §4, re-searched today with the question narrowed to "a difference
+that would matter to firmware".** What was specifically looked for, and where:
+
+- **A different codec part or I2C address.** Seeed's wiki, its XIAO volume sample and the community
+  ESPHome integration all name one part (TLV320AIC3104) at one address (`0x18`), with the XVF3800's
+  own control interface at `0x2C`. No second part, no alternative address, anywhere.
+- **A different microphone or a changed PDM port map.** The port map has been publicly requested in
+  issue #24 since 2026-07-17 and Seeed has never answered for *any* revision, so there is no baseline
+  against which a change could be described. No microphone part number appears in any document beside
+  the sensitivity / AOP / SNR figures, which are quoted once and never revised.
+- **A different LED driver or count.** 12× WS2812 in every source, including v2.0.6's changelog fix
+  for WS2812-2020 channel ordering. No second configuration is described.
+- **A changed power rail.** 5 V via USB or header, in every source. No revision-scoped statement.
+- **Any schematic, changelog, errata or engineering-change notice.** Searched the Seeed wiki source
+  and its 30-commit page history, the Bazaar and reseller listings, the upstream repository, and the
+  web for `hardware revision` / `ECN` / `engineering change` / `errata` against this product. The
+  wiki's Resources section still lists a 2D mechanical drawing and three STP files and nothing else.
+- **Any third party naming a V1.1 board.** GitHub-wide code search returns 23 files matching
+  `"XVF3800" "V1.1"` and **all 23 are firmware version numbers** (§11.2). No teardown, no review, no
+  photograph of a V1.1 board from anyone including Seeed.
+
+**Say it plainly: there is no evidence that V1.0 and V1.1 differ electrically, and no evidence that
+they do not.** The USB PID `2886:001a` is identical across everything anyone has reported, which
+removes the one channel a revision could have announced itself through. This is absence, not
+reassurance — but it is absence that has now been looked for twice, along different axes, with the
+same result.
+
+### 11.6 The one documented XVF3800 firmware-versus-board-revision interaction anywhere — and it is not this board
+
+**Found today, and it is new to this file.** Pollen Robotics ships the Reachy Mini with an
+XVF3800-based audio board and publishes its own firmware in
+[the reachy_mini repository](https://github.com/pollen-robotics/reachy_mini) under
+`src/reachy_mini/assets/firmware/`. Its changelog for **v2.1.3** says, verbatim:
+
+```text
+## 2.1.3
+
+*For Beta units only*
+
+Fixes the initialization issue on Reachy Mini beta hardware. An additional 2-second delay is added
+during initialization to prevent the XMOS chip from starting before the other components.
+
+There is no need to apply this firmware to the Lite and Wireless versions, as the issue is fixed at
+the hardware level.
+```
+
+This is the first concrete instance anybody has of an XVF3800 firmware release scoped to a board
+revision, and it deserves to be read carefully in both directions.
+
+- **It proves the category is real**, and it names the mechanism: **startup sequencing** — the XMOS
+  chip coming up before the components around it. That is exactly the class of fault that would
+  present as "boots on some versions, dark on others", which is issue #32's shape.
+- **But the direction is the reassuring one.** The *newer* firmware accommodates the *older* board, by
+  waiting longer. The newer boards needed no firmware change at all, because the fix was made in
+  hardware. Nothing here describes a newer firmware failing on an older board.
+- **And it is a different product, board, vendor and firmware line.** Reachy Mini's images are
+  `reachymini_ua_io16_lin_v2.1.x` — note `-lin`, a **linear** array. All four are 933,888 bytes,
+  exactly the size of Seeed's USB images, and none of their hashes matches any Seeed image:
+
+  | File | sha256 (from the Git LFS pointer, 2026-08-24) |
+  | --- | --- |
+  | `reachymini_ua_io16_lin_v2.1.2.bin` | `661429a93b155cdbfed1e6c214820fd42e3372a08c3930f14fcd4e6db5be6796` |
+  | `reachymini_ua_io16_lin_v2.1.3.bin` | `0e35fa9a43a4e75890fd6299e62e85310d8081087e6a9702aaef0c81bd3af283` |
+  | `reachymini_ua_io16_lin_v2.1.4.bin` | `803c9174f0ddb8bca9bc7fd5418c2051b720391ea6a0c4f77b36267b368446c7` |
+  | `reachymini_ua_io16_6ch_lin_v2.1.4.bin` | `213f55c4591624c71965ea7a859eaeceeb547a9680beea83e7101a9d751b6969` |
+
+**Two side findings fall out of this, both corroborating §1 and §2 of this file.** First, a second
+vendor uses the same `ua-io16-<geometry>` scheme independently, and Seeed's `6ch` insertion appears
+there too (`ua_io16_6ch_lin`) — so that field position is a shared convention, not a Seeed
+idiosyncrasy. Second, **this is the first `-lin` XVF3800 UA build found in a shipping product**, which
+makes the geometry axis concrete rather than theoretical: linear builds exist, they are published, and
+they are for a board with a linear array. None of them is published for the ReSpeaker USB 4-Mic Array,
+whose four microphones are soldered in a fixed 66 mm square, and no Reachy Mini image could be reached
+by anything this project does.
+
+### 11.7 What could explain issue 32 without a board difference — and the one question that discriminates
+
+Issue #32's boot claim deserves better than dismissal, because §11.1 shows the reporter never claimed
+it was version-independent. Three explanations exist that require no V1.0/V1.1 difference at all.
+
+**(a) A boot-loader API mismatch between the Factory and Upgrade images.** The strongest, and it comes
+from [the upgrade-path reference §5.2](xvf3800-upgrade-path.md): XMOS's `xflash` documentation states
+*"The `--factory-version` must match the tools version used to build the factory image."* The factory
+image is written at manufacture, never touched by DFU, and its boot-loader API version is invisible to
+every host — no `dfu-util` option, no `xvf_host` command, nothing in the USB descriptors. A mismatch
+produces an image the loader deems invalid. **This is a mechanism by which one specific unit refuses
+one specific firmware while every other unit accepts it, which is exactly issue #32's shape.** It is
+**speculation, labelled as such** — no instance has ever been reported for this product. And note what
+it is *not*: a property of the manufacturing batch and the toolchain Seeed built with, **not of the
+silkscreen revision**. If it is the answer, then "V1.1" is a coincidence in that report.
+
+**(b) A corrupt download.** Seeed's own wiki carries this warning, verbatim: *"Do **NOT** use "save
+as" to download the firmware files from GitHub as they will get corrupt. Clone the repository or use
+"Download as ZIP" to download the whole repository (and all included files) as ZIP file."* Added to
+the wiki 2026-04-20 under *"Clarify firmware download instructions for GitHub"* — so it is a known,
+vendor-acknowledged failure mode. It is weakened here by the reporter's own logs showing a
+933,888-byte write, but not excluded: a right-sized file can still be wrong.
+
+**(c) The corrupt data partition reaching further into the newer firmware's startup path.** v2.0.10
+reworked USB descriptor, buffer and software-PLL restoration, and v2.1.0 adds two more fields read
+from flash at startup (§11.3). A firmware that touches more saved state before lighting the LED ring
+would fail earlier and darker on a board whose saved state is garbage — and issue #32's board is, by
+its own reporter, a board whose data partition cannot even be read. **Inferred, mechanism only.**
+
+**All three of (a), (b) and (c) predict something the report does not describe, and that is the
+discriminator.** Under (a) and (b) the boot loader deems the upgrade image invalid and **boots the
+Factory image** — and the Factory image on that very board *"enumerates as DFU first try, every
+time"*. So the test is one command, costs nothing, and nobody has run it:
+
+> **With v2.1.0 written and the board powered normally — Mute not held — does `dfu-util -l` find
+> `2886:001a`?**
+
+If **yes**, the image was rejected as invalid, the board fell back to Factory, and v2.1.0 is
+exonerated for every other board including both of this project's. If **no**, it is not a validity
+failure and (c) or something unknown is in play.
+
+**Stated honestly, this is not airtight.** The reporter's table column reads "USB enumerates", which
+he may be using for the audio device rather than for any USB device; and "LEDs stay dark" may describe
+the 12-LED ring while the Factory image's blinking red mute LED went unmentioned. That ambiguity is
+precisely why the question is worth asking rather than assumed away.
+
+### 11.8 Corrections this section makes to the text above it
+
+1. **§7.3's `DFU_GETVERSION` hypothesis is unevidenced in both directions, and should be labelled that
+   way rather than repeated as a reading.** §7.3 offers it as reporting the Factory image's version,
+   written at manufacture and untouched by an application upgrade, and therefore as the best candidate
+   for a field that could differ by board revision. That reading has now been searched for and has no
+   documentary support: the command's *entire* documentation is one help string,
+   *"DFU Servicer-specific version command. Returns device version."*; the string "DFU" appears **zero
+   times** in the XVF3800 User Guide's Control Commands appendix; and the command is absent from
+   `xmos/lib_dfu`'s `dfu_cmd_request` enum, making index 88 an `sw_xvf3800` extension whose source is
+   still 404. It is neither supported nor refuted. **Keep the recommendation to read it** — it is one
+   free command and two readings settle it — but drop the Factory-image gloss. Full evidence is in
+   [the upgrade-path reference §5.1](xvf3800-upgrade-path.md).
+2. **§6(a)'s citation of issue #32 should carry the scoping from §11.1.** *"The reporter's own
+   conclusion is that the failure is independent of firmware version"* is true of the **enumeration**
+   failure and not of the **boot** failure, which the reporter separated in the next sentence and then
+   asked about. The conclusion §6(a) draws — that the issue will not carry the weight of "2.1.0 fails
+   on V1.1" — survives intact for the reasons it already gives, and §11.7 now supplies three
+   mechanisms that do not need a board difference.
+
+Nothing else above is contradicted. §1, §2, §3, §4, §5, §8, §9 and §10 stand as written, and §11.6
+independently corroborates §1 and §2.
+
+### 11.9 One measurement that bears on the flash but not on the revision
+
+**The pinned `libcommand_map.so` does not know v2.1.0's new commands — and has not known the last four
+releases' commands either.** Measured by extracting uppercase identifier-shaped strings from the
+pinned binary (`c1b424313e48cfe97c5cfce0530ac05fe47f818cc0fba15a9954198ef105282c`, 151,680 bytes,
+still unchanged at upstream head), 259 tokens, with a positive control:
+
+| Token | In the pinned command map? | Added in |
+| --- | --- | --- |
+| `SAVE_CONFIGURATION`, `CLEAR_CONFIGURATION`, `USB_BIT_DEPTH`, `AEC_MIC_ARRAY_TYPE`, `DFU_GETVERSION` | **present** | pre-2.0.6 |
+| `DOA_VALUE` | absent | USB v2.0.6 |
+| `LED_RING_COLOR` | absent | USB v2.0.7 |
+| `AIC3104_HP_LEVEL`, `AIC3104_LINEOUT_LEVEL` | absent | USB v2.1.0 |
+| `AUDIO_MGR_OP_CH3`…`CH6` | absent | USB v2.1.0 |
+
+So the compiled control map has been stale since before v2.0.6, and **v2.1.0 does not make it newly
+stale** — it extends a gap [SESSION-STATE.md](../SESSION-STATE.md) already records. The Python table
+`python_control/xvf_host.py` *is* current for the two AIC3104 commands (added at commit
+`5bb73fec64b8`) but has **no** `AUDIO_MGR_OP_CH3`…`CH6` entries, so four of the commands v2.1.0's
+changelog advertises are unreachable from any published host tool, in either implementation.
+
+**And a precedent worth carrying: Seeed does move control-surface resource IDs between firmware
+versions.** The I2S changelog for v1.0.8, published in the same week as USB v2.1.0, states: *"Swapped
+the resource IDs of `DOA_VALUE` and `LED_RING_COLOR` to match the USB firmware interface:
+`DOA_VALUE`: 19 → 18; `LED_RING_COLOR`: 18 → 19."* A third party caught the consequence immediately —
+[formatBCE issue #48](https://github.com/formatBCE/Respeaker-XVF3800-ESPHome-integration/issues/48)
+notes that a driver hard-coding the old mapping would silently write LED commands into a now-read-only
+register. **The USB v2.1.0 changelog declares no such change**, and the changelog is the only source
+that exists — which is an argument for reading `BLD_MSG` and a control command or two after any flash,
+not an argument against flashing.
+
+### Where this section lands
+
+| Concern | Where it lives |
+| --- | --- |
+| Whether an intermediate version is needed, and what the Factory partition constrains | [xvf3800-upgrade-path.md](xvf3800-upgrade-path.md) |
+| The pinned v2.1.0 image, its digest and the flash interlocks | `src/FrameLink.Agent/Firmware/XvfFirmwareRelease.cs` |
+| The `DFU_GETVERSION` gloss this section retires | §7.3 above, and [xvf3800-upgrade-path.md §5.1](xvf3800-upgrade-path.md) |
+| The issue-32 scoping this section corrects | §6(a) above, and [SESSION-STATE.md](../SESSION-STATE.md) §7 |
+| The stale control map and the unreachable v2.1.0 commands | [SESSION-STATE.md](../SESSION-STATE.md), and `XvfHostRelease.cs` |
