@@ -1418,8 +1418,11 @@ be confirmed rather than assumed, because `machine-id` is the path component of 
 ## Open questions
 
 Genuine ambiguities in the specification. Each carries the reading this catalog adopted; none is
-settled by the guides. Items 1 and 4 have since been settled by operator decisions and are kept here
-with their resolutions rather than removed, so the reasoning is not re-derived later.
+settled by the guides. Some have since been settled — by an operator decision or by a measurement — and
+a settled one is kept here with its resolution rather than removed, so the reasoning is not re-derived
+later. **Which ones they are is read off the items themselves, and there is deliberately no list of
+them here.** This paragraph used to name items 1 and 4, and went on naming only those two after 2, 3
+and 13 had been answered as well. A settled item says so on its own second line, in bold, with the date.
 
 1. **The display overlay is brick-capable but is also the precondition for any visible output.**
    **— DECIDED 2026-08-15, in favour of [§2.7](../version2.md).**
