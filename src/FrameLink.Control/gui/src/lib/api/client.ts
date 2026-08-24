@@ -14,6 +14,8 @@
  */
 
 import type {
+	ArrayFlashRequest,
+	ArrayFlashStatusResponse,
 	DeviceEventsResponse,
 	DeviceListResponse,
 	DevicePackagesResponse,
@@ -275,5 +277,43 @@ export const api = {
 		request<void>(
 			`/api/devices/${encodeURIComponent(deviceId)}/settings/${encodeURIComponent(key)}`,
 			{ method: 'DELETE' }
-		)
+		),
+
+	/**
+	 * `GET /api/devices/{id}/array-flash` — the frame's microphone-firmware standing.
+	 *
+	 * Everything the screen needs in one answer: the pinned image, the warnings in the frame's
+	 * own words, whatever authorisation is armed, and the `array-flash` / `array-firmware` events
+	 * behind the phase.
+	 */
+	arrayFlash: (deviceId: string, options: { signal?: AbortSignal } = {}) =>
+		request<ArrayFlashStatusResponse>(
+			`/api/devices/${encodeURIComponent(deviceId)}/array-flash`,
+			options
+		),
+
+	/**
+	 * `POST /api/devices/{id}/array-flash` — authorise one write on this frame.
+	 *
+	 * The body carries no device id and no digest: the frame is the one in the path and the image
+	 * is the one this build pins, so a typo cannot produce an authorisation naming a frame the
+	 * operator is not looking at. 400 `not-acknowledged` when `unattended` arrives without
+	 * `acknowledged`, 409 `not-adopted` for a frame that cannot hold settings.
+	 */
+	authoriseArrayFlash: (deviceId: string, body: ArrayFlashRequest) =>
+		request<ArrayFlashStatusResponse>(`/api/devices/${encodeURIComponent(deviceId)}/array-flash`, {
+			method: 'POST',
+			body
+		}),
+
+	/**
+	 * `DELETE /api/devices/{id}/array-flash` — take an authorisation back.
+	 *
+	 * Only reaches a write that has not started. Once the frame has spent the authorisation the
+	 * write is under way or over, and deleting a settings row touches none of it.
+	 */
+	withdrawArrayFlash: (deviceId: string) =>
+		request<ArrayFlashStatusResponse>(`/api/devices/${encodeURIComponent(deviceId)}/array-flash`, {
+			method: 'DELETE'
+		})
 };

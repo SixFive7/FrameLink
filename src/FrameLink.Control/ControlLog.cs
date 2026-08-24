@@ -404,4 +404,24 @@ internal static partial class ControlLog
         Message = "An alert evaluation pass failed. The next pass tries again; nothing else in the "
             + "Fleet Manager is affected.")]
     public static partial void AlertSweepFailed(this ILogger logger, Exception exception);
+
+    [LoggerMessage(
+        EventId = 2000,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} is authorised to write firmware {Version} to its microphone "
+            + "array (unattended: {Unattended}). One write, this frame only. The authorisation is "
+            + "'{Authorisation}'.")]
+    public static partial void ArrayFlashAuthorised(
+        this ILogger logger,
+        string deviceId,
+        bool unattended,
+        string version,
+        string authorisation);
+
+    [LoggerMessage(
+        EventId = 2001,
+        Level = LogLevel.Information,
+        Message = "Device {DeviceId}'s firmware authorisation was withdrawn before the frame acted "
+            + "on it. A write already begun is not reached by this.")]
+    public static partial void ArrayFlashWithdrawn(this ILogger logger, string deviceId);
 }

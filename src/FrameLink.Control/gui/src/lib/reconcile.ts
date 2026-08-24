@@ -158,6 +158,24 @@ const EVENT: Record<DeviceEventKind, Presentation> = {
 		meaning:
 			'The frame’s own screen cannot show anything, so this console is the only surface left. ' +
 			'Without this event a dark frame is indistinguishable from a working one.'
+	},
+	'array-firmware': {
+		label: 'Microphone firmware',
+		tone: 'info',
+		icon: 'info',
+		meaning:
+			'Which firmware the microphone unit is running, reported rather than converged. It is an ' +
+			'observation like a boot, not a claim that anything is wrong — a frame on the older ' +
+			'firmware runs the product perfectly well.'
+	},
+	'array-flash': {
+		label: 'Microphone write',
+		tone: 'warn',
+		icon: 'alert',
+		meaning:
+			'A firmware write to the microphone unit happened, or was refused. Both are the same kind ' +
+			'of record: which interlock stopped a frame is as much a part of the trail as a write that ' +
+			'went ahead.'
 	}
 };
 

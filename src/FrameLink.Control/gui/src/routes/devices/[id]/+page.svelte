@@ -26,6 +26,7 @@
 	import { groupKeys } from '$lib/settings-catalog';
 	import { rise, settle } from '$lib/design/motion';
 	import AddSetting from '$lib/components/AddSetting.svelte';
+	import ArrayFlashPanel from '$lib/components/ArrayFlashPanel.svelte';
 	import Button from '$lib/components/Button.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Chip from '$lib/components/Chip.svelte';
@@ -365,6 +366,13 @@
 				     actually has, and the two are read at different moments. -->
 				<div class="packages">
 					<PackagePanel {deviceId} />
+				</div>
+
+				<!-- Last, and below the packages, because it is the only thing on this page that
+				     writes to hardware. An authorisation composed here is one write on one frame;
+				     it is not a setting an operator scrolls past on the way to something else. -->
+				<div class="packages">
+					<ArrayFlashPanel {deviceId} />
 				</div>
 			</section>
 		</div>

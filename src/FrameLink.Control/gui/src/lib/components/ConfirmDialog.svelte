@@ -21,6 +21,15 @@
 		cancelLabel?: string;
 		tone?: 'danger' | 'primary';
 		busy?: boolean;
+		/**
+		 * Holds the confirm button shut while the body still has something the operator has to
+		 * do — currently one dialog, the unattended firmware write, where the acceptance of the
+		 * warnings *is* the decision and a dialog that could be dismissed with one click would
+		 * make the most dangerous action in the product the cheapest one.
+		 */
+		confirmDisabled?: boolean;
+		/** Widens the panel for a dialog whose body is more than two sentences. */
+		wide?: boolean;
 		onconfirm: () => void;
 		oncancel: () => void;
 		children?: Snippet;
@@ -33,6 +42,8 @@
 		cancelLabel = 'Cancel',
 		tone = 'danger',
 		busy = false,
+		confirmDisabled = false,
+		wide = false,
 		onconfirm,
 		oncancel,
 		children
@@ -47,7 +58,7 @@
 	});
 </script>
 
-<dialog bind:this={dialog} oncancel={(event) => {
+<dialog class:wide bind:this={dialog} oncancel={(event) => {
 	event.preventDefault();
 	oncancel();
 }}>
@@ -56,7 +67,12 @@
 		{#if children}<div class="body">{@render children()}</div>{/if}
 		<div class="actions">
 			<Button variant="ghost" onclick={oncancel}>{cancelLabel}</Button>
-			<Button variant={tone === 'danger' ? 'danger' : 'primary'} {busy} onclick={onconfirm}>
+			<Button
+				variant={tone === 'danger' ? 'danger' : 'primary'}
+				{busy}
+				disabled={confirmDisabled}
+				onclick={onconfirm}
+			>
 				{confirmLabel}
 			</Button>
 		</div>
@@ -70,6 +86,10 @@
 		background: none;
 		color: inherit;
 		max-width: min(28rem, calc(100vw - var(--space-8)));
+	}
+
+	dialog.wide {
+		max-width: min(42rem, calc(100vw - var(--space-8)));
 	}
 
 	dialog::backdrop {

@@ -795,19 +795,34 @@ public sealed class AgentArrayFlashTests
     }
 
     [Fact]
-    public void The_authorisation_key_is_not_offered_by_the_settings_screen_yet()
+    public void The_authorisation_key_is_described_by_the_settings_screen_and_never_suggested_by_it()
     {
-        // Deliberate, and it is the sequencing in decision 91 expressed where somebody would
-        // otherwise reach. The key works — settings are a generic store — but suggesting it in the
-        // interface would invite a first flash before the Safe Mode recovery route has ever been
-        // rehearsed on this project's own hardware, which is the one thing that must happen first.
-        // Whoever adds the entry has to delete this test, which is the point: it makes that a
-        // decision rather than a convenience.
+        // The successor to "not offered at all", and the reason for the change is worth keeping.
+        // The original rule was the sequencing in decision 91 expressed where somebody would
+        // otherwise reach: suggesting this key in a dropdown of conveniences would invite a first
+        // flash before the Safe Mode recovery route has ever been rehearsed on this project's own
+        // hardware. That rule stands. What changed is that the Fleet Manager now has a panel of its
+        // own for this, which composes the value from the pinned digest and the frame it is looking
+        // at and puts the frame's own warnings in front of an operator before the bypass is
+        // reachable — so a value that is *already set* needs a description, or the most dangerous
+        // setting in the product renders as an unrecognised key with a shrug beside it.
+        //
+        // Described, therefore, and never suggested. `suggest: false` is what keeps it out of "add
+        // a setting", and deleting that flag has to be a decision rather than a convenience.
         var catalog = File.ReadAllText(Path.Combine(
             GuiFreshnessTests.RepositoryRoot(),
             "src", "FrameLink.Control", "gui", "src", "lib", "settings-catalog.ts"));
 
-        Assert.DoesNotContain(ArrayFirmwareFlash.AuthorisationKey, catalog, StringComparison.Ordinal);
+        var entry = catalog.IndexOf(
+            "'" + ArrayFirmwareFlash.AuthorisationKey + "': {",
+            StringComparison.Ordinal);
+
+        Assert.True(entry >= 0, "The settings catalog no longer describes the firmware authorisation key.");
+
+        var close = catalog.IndexOf("},", entry, StringComparison.Ordinal);
+        Assert.True(close > entry, "The firmware authorisation entry is not a whole catalog entry.");
+
+        Assert.Contains("suggest: false", catalog[entry..close], StringComparison.Ordinal);
     }
 
     /// <summary>A served release the stub feed can hand out.</summary>

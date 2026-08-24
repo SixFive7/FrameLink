@@ -45,5 +45,7 @@ namespace FrameLink.Control;
 [JsonSerializable(typeof(AlertsResponse))]
 [JsonSerializable(typeof(Alerting.AlertWebhookBody))]
 [JsonSerializable(typeof(RetryResponse))]
+[JsonSerializable(typeof(ArrayFlashRequest))]
+[JsonSerializable(typeof(ArrayFlashStatusResponse))]
 [JsonSerializable(typeof(ApiError))]
 public sealed partial class ControlJson : JsonSerializerContext;

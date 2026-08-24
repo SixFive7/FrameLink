@@ -40,6 +40,19 @@ export interface SettingDescriptor {
 	group: string;
 	/** Shown as the input placeholder. Never a default — the server holds no defaults. */
 	example?: string;
+	/**
+	 * Whether "add a setting" offers this key as a suggestion. Defaults to true.
+	 *
+	 * **One key sets it false, and the reason is a decision rather than taste.** A described key
+	 * and a *suggested* key are different invitations: a description helps somebody read a value
+	 * that is already there, while a suggestion puts the key in front of somebody who was
+	 * looking for something else. `audio.arrayFirmwareFlash` authorises a one-way write to
+	 * hardware that cannot be repaired by rewriting the card, and decision 91's sequencing is
+	 * binding — nothing is flashed until the Safe Mode recovery route has been rehearsed on this
+	 * project's own arrays. It has its own panel on the frame's page, which composes the value
+	 * and shows the warnings; it has no business in a dropdown of conveniences.
+	 */
+	suggest?: boolean;
 }
 
 export const SETTING_GROUPS = [
@@ -134,6 +147,18 @@ export const SETTING_CATALOG: Readonly<Record<string, SettingDescriptor>> = {
 		hint: 'Capture level for the mic array, 0 to 100.',
 		kind: 'number',
 		group: 'Audio'
+	},
+	'audio.arrayFirmwareFlash': {
+		label: 'Microphone firmware authorisation',
+		hint:
+			'One write of the pinned firmware to one microphone unit, spent the instant it starts. ' +
+			'Use the Microphone firmware panel on the frame’s own page — it composes this ' +
+			'value from the pinned image and the frame it is looking at, so it cannot name the wrong ' +
+			'frame. Setting it here by hand, and especially as a fleet default, arms a write on every ' +
+			'frame that has not already spent that exact string.',
+		kind: 'text',
+		group: 'Audio',
+		suggest: false
 	},
 	'repair.countdownSeconds': {
 		label: 'Repair countdown',
@@ -264,8 +289,9 @@ export function describeSetting(key: string): SettingDescriptor & { known: boole
 /** Catalogued keys not yet present on the server — offered as suggestions, never imposed. */
 export function suggestedKeys(existing: Iterable<string>): string[] {
 	const held = new Set(existing);
-	return Object.keys(SETTING_CATALOG)
-		.filter((key) => !held.has(key))
+	return Object.entries(SETTING_CATALOG)
+		.filter(([key, descriptor]) => !held.has(key) && descriptor.suggest !== false)
+		.map(([key]) => key)
 		.sort();
 }
 

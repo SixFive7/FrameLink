@@ -42,6 +42,12 @@ public static class OperatorEndpoints
         // files of its own, and so the session gate above covers it exactly as it covers these.
         app.MapRetryEndpoints();
 
+        // Decision 91's firmware write, likewise whole in a file of its own. It maps here for the
+        // same reason retry does: the session gate above is what makes it an operator action, and a
+        // route that authorises a one-way write to hardware is the last one that should be reachable
+        // from outside it.
+        app.MapArrayFlashEndpoints();
+
         app.MapGet("/api/packages", GetFleetPackagesAsync);
         app.MapGet("/api/devices/{deviceId}/packages", GetDevicePackagesAsync);
 

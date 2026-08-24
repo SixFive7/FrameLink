@@ -120,7 +120,14 @@ export type LoopState =
 	| 'escalated';
 
 /** `DeviceEventKinds` — what kind of thing happened, on the `events` channel of §4.1. */
-export type DeviceEventKind = 'drift' | 'escalation' | 'boot' | 'converged' | 'display';
+export type DeviceEventKind =
+	| 'drift'
+	| 'escalation'
+	| 'boot'
+	| 'converged'
+	| 'display'
+	| 'array-firmware'
+	| 'array-flash';
 
 /** `ResourceReport` — one resource's standing. Frozen protocol type. */
 export interface ResourceReport {
@@ -332,4 +339,78 @@ export interface RetryResponse {
 	resource?: string;
 	outcome: 'sent' | 'offline';
 	detail: string;
+}
+
+/**
+ * `ArrayFlashPhases` — what the console says a frame's firmware write is doing.
+ *
+ * **There is no `writing`, and that is not an omission.** The agent emits nothing at all between
+ * the household agreeing and `dfu-util` returning; the only live surface for a write in progress
+ * is the frame's own panel, where the person who agreed to it is standing. The record arrives
+ * complete — elapsed time, both firmware readings, the tool's own output — the moment it is over.
+ */
+export type ArrayFlashPhase =
+	| 'not-authorised'
+	| 'authorised'
+	| 'awaiting-household'
+	| 'refused'
+	| 'flashed'
+	| 'failed';
+
+/** `ArrayFlashTargetView` — the image the fleet converges on. */
+export interface ArrayFlashTargetView {
+	name: string;
+	/** The firmware version it carries, in the array's own spelling, e.g. `2 1 0`. */
+	version: string;
+	/** Its SHA-256. The whole of what an authorisation names — a version string names nothing. */
+	sha256: string;
+	sizeBytes: number;
+}
+
+/** `ArrayFlashAuthorisationView` — the authorisation held for one frame right now. */
+export interface ArrayFlashAuthorisationView {
+	/** The value in `audio.arrayFirmwareFlash`, verbatim. Not a credential; it is the audit record. */
+	value: string;
+	ticket: string;
+	/** Whether it bypasses the approval on this frame's own screen. */
+	unattended: boolean;
+	/** False for a hand-written value naming some other digest — which the frame will refuse. */
+	namesTheTarget: boolean;
+	issuedUtc?: string;
+	note?: string;
+	/** The frame a bypass inside it names. Present even when that is not this frame. */
+	unattendedDeviceId?: string;
+}
+
+/** `ArrayFlashStatusResponse` — `GET /api/devices/{id}/array-flash`. */
+export interface ArrayFlashStatusResponse {
+	deviceId: string;
+	adopted: boolean;
+	online: boolean;
+	target: ArrayFlashTargetView;
+	/** The bypass token's prefix, so the screen can show the exact word it would write. */
+	unattendedPrefix: string;
+	/** The warnings an operator accepts by taking the bypass, in the frame's own words. */
+	unattendedWarning: string[];
+	authorisation?: ArrayFlashAuthorisationView;
+	phase: ArrayFlashPhase;
+	/** The sentence to show — the frame's own whenever the frame has said one. */
+	detail: string;
+	/** Which interlock refused, verbatim from the frame. */
+	refusal?: string;
+	reportedUtc?: string;
+	/** The newest reading of which firmware this frame's array is running. */
+	runningFirmware?: string;
+	runningFirmwareUtc?: string;
+	/** This frame's `array-flash` and `array-firmware` events, newest first. */
+	events: DeviceEvent[];
+}
+
+/** `ArrayFlashRequest` — the operator asking for one write on one frame. */
+export interface ArrayFlashRequest {
+	/** Whether to skip the approval on the frame's own screen. */
+	unattended: boolean;
+	/** Whether `unattendedWarning` has been shown and accepted. Required by `unattended`. */
+	acknowledged: boolean;
+	note?: string;
 }
