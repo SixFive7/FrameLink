@@ -44,6 +44,25 @@ namespace FrameLink.Agent.Link;
 /// of the string.
 /// </para>
 /// <para>
+/// <b>A refused restart or shutdown rides in it too</b>, appended after the firmware token by
+/// <see cref="PowerRefusalWire"/> (decision 94). It is the answer to the one question this field
+/// could not answer before: an operator's power verb is delivered down a live socket and answered
+/// 200 the instant the bytes leave, so a frame that turned it down over a firmware write in flight
+/// and a frame that went down as asked were the same picture from a desk. It appends rather than
+/// replaces for the same reason the firmware token does — a frame refusing a press is still whatever
+/// its reconciliation loop is, nothing has drifted, and <see cref="AgentHealth.Classify"/> reads only
+/// the head of the string.
+/// </para>
+/// <para>
+/// <b>It clears itself, and nothing here is what clears it.</b> The refusal is read live from
+/// <c>FrameRecovery.Refusal</c>, which re-asks the interlock that produced it, so the token
+/// disappears from the next self-report the moment the write's window shuts. That the next
+/// self-report happens at all is the write's own doing: <c>ArrayFlashProgressPump</c> publishes to
+/// the hub about once a second for the whole of a write and once more with the outcome after it, and
+/// each of those wakes the loop below. So a refusal appears within a beat of the press and is gone
+/// within a beat of the write finishing, and there is no latch anywhere that could be left set.
+/// </para>
+/// <para>
 /// <b>It is also the last link in the chain that must not reach the write.</b> Nothing here is on
 /// the writing thread: the flash publishes to the hub from a task of its own, the hub's signal into
 /// this class is a semaphore release that cannot block, and the send below is this class's own await
@@ -58,6 +77,7 @@ public sealed class AgentStatusReporter : IDisposable
     private readonly IAgentLog _log;
     private readonly string _deviceId;
     private readonly string? _detail;
+    private readonly Func<PowerRefusalStatus?> _refusal;
     private readonly SemaphoreSlim _changed = new(0, 1);
     private readonly IDisposable _subscription;
     private readonly Lock _gate = new();
@@ -75,12 +95,21 @@ public sealed class AgentStatusReporter : IDisposable
     /// <i>broken</i> agent legible, which is the frozen field's documented job, and everything
     /// that moves is the head in front of it.
     /// </param>
+    /// <param name="refusal">
+    /// What the frame is currently refusing to do, or null when it is refusing nothing — normally
+    /// <c>FrameRecovery.Refusal</c>. A delegate rather than a value because it has to be read at the
+    /// instant the report is composed: it is the one field here that stops being true on its own,
+    /// and a snapshot taken at construction would report a refused shutdown for the life of the
+    /// process. The default is a frame that refuses nothing, which is the honest answer for every
+    /// caller that has no recovery to point at, the test suite included.
+    /// </param>
     public AgentStatusReporter(
         AgentStatusHub hub,
         AgentUplink uplink,
         IAgentLog log,
         string deviceId,
-        string? detail)
+        string? detail,
+        Func<PowerRefusalStatus?>? refusal = null)
     {
         ArgumentNullException.ThrowIfNull(hub);
         ArgumentNullException.ThrowIfNull(uplink);
@@ -92,6 +121,7 @@ public sealed class AgentStatusReporter : IDisposable
         _log = log;
         _deviceId = deviceId;
         _detail = detail;
+        _refusal = refusal ?? (static () => null);
 
         // The hub is long-lived and so is this, so the subscription is not the shape §4.1's
         // cleanup rule is about — but it is released in Dispose all the same, because
@@ -104,9 +134,11 @@ public sealed class AgentStatusReporter : IDisposable
 
     /// <summary>What this frame would say about itself right now.</summary>
     /// <remarks>
-    /// One read of the hub, not two. The snapshot is immutable and replaced wholesale, so reading it
-    /// once is what makes the loop state and the firmware screen in the composed sentence describe
-    /// the same instant.
+    /// One read of the hub, not two, and one read of the refusal. The snapshot is immutable and
+    /// replaced wholesale, so reading it once is what makes the loop state and the firmware screen
+    /// in the composed sentence describe the same instant; the refusal is read once for the same
+    /// reason, and it is read <i>here</i> rather than held in a field because a refusal is only true
+    /// while the write that caused it is still running.
     /// </remarks>
     public string? Current
     {
@@ -114,9 +146,11 @@ public sealed class AgentStatusReporter : IDisposable
         {
             var status = _hub.Current;
 
-            return ArrayFlashWire.Append(
-                AgentHealth.ReportFor(status.Reconcile.LoopState, _detail),
-                FlashOf(status.ArrayFlash));
+            return PowerRefusalWire.Append(
+                ArrayFlashWire.Append(
+                    AgentHealth.ReportFor(status.Reconcile.LoopState, _detail),
+                    FlashOf(status.ArrayFlash)),
+                _refusal());
         }
     }
 

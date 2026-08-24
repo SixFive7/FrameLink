@@ -43,6 +43,35 @@ public sealed record LoginResponse
     public required DateTimeOffset ExpiresUtc { get; init; }
 }
 
+/// <summary>
+/// A power change one frame is refusing right now, as its self-report carries it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The frame's own words, never this server's.</b> <see cref="Detail"/> arrives composed on the
+/// frame and is shown exactly as it arrived, because the half of it that matters — <i>nothing has
+/// been queued and nothing is waiting its turn</i> — is the half a rewording would drop. Every
+/// other refusal in this product is answered by pressing again later; a person who assumes this one
+/// is waiting its turn walks away from a frame that is still on, or reaches for the plug, which is
+/// the hazard the refusal exists for.
+/// </para>
+/// <para>
+/// <b>Present only while it is true.</b> The <c>POST</c> that asks a frame to restart or switch off
+/// answers 200 the instant the bytes leave a live socket — the socket closing is what a successful
+/// shutdown looks like, so there is nothing to wait for — and the refusal therefore cannot come back
+/// down that call. It comes back on the frame's own self-report instead, and disappears from it as
+/// soon as the firmware write that caused it has finished.
+/// </para>
+/// </remarks>
+public sealed record PowerRefusalView
+{
+    /// <summary>Which button was refused, in prose: <c>restart</c> or <c>shut down</c>.</summary>
+    public required string Verb { get; init; }
+
+    /// <summary>The whole refusal, in the frame's own words.</summary>
+    public required string Detail { get; init; }
+}
+
 /// <summary>One row of the device list.</summary>
 public sealed record DeviceView
 {
@@ -77,6 +106,27 @@ public sealed record DeviceView
     /// The classification happens once, here, against the vocabulary both programs share.
     /// </remarks>
     public required string Health { get; init; }
+
+    /// <summary>
+    /// What this frame is refusing to do right now, or null when it is refusing nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Read out of <see cref="AgentStatus"/>, and only for a frame with a socket open.</b> The
+    /// self-report is the current picture rather than history: it is not buffered while a frame is
+    /// offline and it is not cleared when one disappears, so the last thing a frame said before it
+    /// went quiet stays in that column for as long as the row exists. Reading it on an offline frame
+    /// would leave a refusal on the row for a week over a write that may since have finished — the
+    /// same staleness guard, for the same reason, that <c>ArrayFlashEndpoints</c> puts on a live
+    /// write's progress bar.
+    /// </para>
+    /// <para>
+    /// <b>Beside the free text, never instead of it.</b> <see cref="AgentStatus"/> keeps carrying
+    /// the whole string, token and all; this is the parsed form so a row can draw it as its own
+    /// warning rather than leaving an operator to find a sentence inside a status column.
+    /// </para>
+    /// </remarks>
+    public PowerRefusalView? PowerRefusal { get; init; }
 
     /// <summary>Protocol version the agent last claimed.</summary>
     public int? ProtocolVersion { get; init; }

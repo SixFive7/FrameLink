@@ -51,6 +51,15 @@ export interface DeviceView {
 	 * share (`AgentHealth`). This is what `presence.ts` reads.
 	 */
 	health: AgentHealth;
+	/**
+	 * What this frame is refusing to do right now, or absent when it is refusing nothing.
+	 *
+	 * Set by the server only for an online frame, and only while the refusal is still true — the
+	 * frame drops it from its self-report as soon as the firmware write that caused it finishes.
+	 * Never composed here: the sentence is the frame's own, and the half that matters is that
+	 * *nothing has been queued*.
+	 */
+	powerRefusal?: PowerRefusalView;
 	protocolVersion?: number;
 	/** Whether that protocol version is the one this server speaks. */
 	protocolCompatible: boolean;
@@ -73,6 +82,21 @@ export interface DeviceView {
  * answer for anything outside the vocabulary, and `unknown` is explicitly not a problem.
  */
 export type AgentHealth = 'unknown' | 'in-sync' | 'working' | 'degraded';
+
+/**
+ * `PowerRefusalView` — a restart or shutdown one frame turned down, and is still turning down.
+ *
+ * The `POST` that asks for either answers 200 the moment the bytes leave a live socket, because the
+ * socket closing is what a successful shutdown looks like and there is nothing to wait for. So a
+ * refusal cannot come back down that call; it arrives on the frame's next self-report instead, and
+ * this is the parsed form of it.
+ */
+export interface PowerRefusalView {
+	/** Which button was refused, in prose: `restart` or `shut down`. */
+	verb: string;
+	/** The whole refusal, in the frame's own words. Rendered verbatim, never reworded. */
+	detail: string;
+}
 
 /** `DeviceListResponse` — `GET /api/devices`. */
 export interface DeviceListResponse {
@@ -127,7 +151,8 @@ export type DeviceEventKind =
 	| 'converged'
 	| 'display'
 	| 'array-firmware'
-	| 'array-flash';
+	| 'array-flash'
+	| 'power-refused';
 
 /** `ResourceReport` — one resource's standing. Frozen protocol type. */
 export interface ResourceReport {

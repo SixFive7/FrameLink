@@ -69,6 +69,16 @@ public static class OperatorEndpoints
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(registry);
 
+        var online = registry.IsOnline(record.DeviceId);
+
+        // <b>Only for a frame with a socket open, and that is the whole of the staleness guard.</b>
+        // A refusal is the current picture: it is composed on the frame while a firmware write holds
+        // its power state and it disappears from the self-report as soon as that write finishes. But
+        // the self-report is not cleared when a frame goes quiet, so the last thing a frame said
+        // before it disappeared would otherwise sit on the row indefinitely — asserting that a frame
+        // nobody can reach is refusing something, over a write that may have finished an hour ago.
+        var refusal = online ? PowerRefusalWire.Read(record.AgentStatus) : null;
+
         return new DeviceView
         {
             DeviceId = record.DeviceId,
@@ -80,12 +90,22 @@ public static class OperatorEndpoints
             },
 
             // Presence is the socket (§3.5). Nothing is read from the database to answer this.
-            Online = registry.IsOnline(record.DeviceId),
+            Online = online,
             Name = record.DisplayName,
             HardwareSerial = record.HardwareSerial,
             AgentVersion = record.AgentVersion,
             AgentStatus = record.AgentStatus,
             Health = AgentHealth.Classify(record.AgentStatus),
+            PowerRefusal = refusal is null
+                ? null
+                : new PowerRefusalView
+                {
+                    // The verb in prose, because it is rendered inside a sentence. The frame sends a
+                    // one-word token — a key-value value cannot carry a space — and the spelling both
+                    // programs agree on lives with the vocabulary rather than in a browser.
+                    Verb = PowerVerbs.Describe(refusal.Verb),
+                    Detail = refusal.Why,
+                },
             ProtocolVersion = record.ProtocolVersion,
             ProtocolCompatible = record.ProtocolVersion == ProtocolConstants.Version,
             FirstSeenUtc = record.FirstSeenUtc,

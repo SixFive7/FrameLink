@@ -10,6 +10,13 @@
 	 * Blocked rows render at reduced opacity with the state chip in the danger tone and a
 	 * single **Unblock** action, because the toggle that reveals them exists precisely so an
 	 * accidental block can be walked back (§3.3).
+	 *
+	 * A row also carries a **refused press** across its whole width when the frame is currently
+	 * turning down a restart or a shutdown. That is the one thing about a frame an operator cannot
+	 * otherwise find out from here: the call that asked for it answered 200 the instant the bytes
+	 * left a live socket, so from a desk a refused shutdown and a delivered one look identical.
+	 * The sentence is the frame's own and is shown whole — the half that matters is that *nothing
+	 * has been queued* — and it clears itself when the firmware write causing it finishes.
 	 */
 	import type { DeviceView } from '$lib/api/types';
 	import { timeAgo, timeExact } from '$lib/format';
@@ -98,6 +105,15 @@
 		{/if}
 		<span class="chevron" aria-hidden="true"><Icon name="chevronRight" size={16} /></span>
 	</div>
+
+	<!-- Last in the DOM so it spans a row of its own beneath the whole card. Anywhere earlier and
+	     the full-width span would push the actions onto a third line. -->
+	{#if device.powerRefusal}
+		<p class="refusal">
+			<Icon name="power" size={13} />
+			<span><b>Refused a {device.powerRefusal.verb}.</b> {device.powerRefusal.detail}</span>
+		</p>
+	{/if}
 </div>
 
 <ConfirmDialog
@@ -158,6 +174,7 @@
 	.state,
 	.facts,
 	.seen,
+	.refusal,
 	.actions {
 		position: relative;
 		z-index: 1;
@@ -223,6 +240,32 @@
 		font-size: var(--text-xs);
 		color: var(--text-3);
 		white-space: nowrap;
+	}
+
+	/* Full width, under everything else: it is a sentence rather than a field, and truncating it
+	   would cut off the part that says nothing was queued. */
+	.refusal {
+		grid-column: 1 / -1;
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-2);
+		padding: var(--space-3) var(--space-4);
+		border-radius: var(--radius-sm);
+		border: 1px solid var(--accent-line);
+		background: var(--accent-soft);
+		color: var(--text-2);
+		font-size: var(--text-xs);
+		line-height: var(--leading-snug);
+	}
+
+	.refusal b {
+		color: var(--accent);
+	}
+
+	.refusal :global(.icon) {
+		color: var(--accent);
+		flex: none;
+		margin-top: 1px;
 	}
 
 	.actions {

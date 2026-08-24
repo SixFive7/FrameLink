@@ -551,6 +551,21 @@ public sealed class AgentHost
             // flight refuses both verbs: a reboot leaves the microphone unit unbootable, and a
             // power-off leaves it that way with no process left to finish the write.
             Held = () => flashWindow.Reason,
+
+            // The refusal's half that is history. The other half — what this frame is refusing right
+            // now — is FrameRecovery.Refusal, read live by the status reporter below, and both are
+            // projections of the one FrameRefusal composed at the press. An operator's power verb is
+            // answered 200 the instant the bytes leave a live socket, so without this pair a refused
+            // shutdown and a delivered one are the same picture from a desk.
+            //
+            // It goes through the outbox like every other event, so a refusal on a frame whose Fleet
+            // Manager is unreachable is buffered on the card and drains on reconnect rather than
+            // being lost — and the delivered/buffered answer is ignored here, because unlike an
+            // escalation nothing about this refusal changes depending on whether anybody has been
+            // told yet. The frame has already refused.
+            OnRefused = async (refusal, token) => await outbox
+                .EventAsync(refusal.ToEvent(identity.DeviceId, _clock.UtcNow), token)
+                .ConfigureAwait(false),
         });
 
         // §2.7 item 9 on the console stage (decision 77). The browser stage's retry is a button on
@@ -603,7 +618,14 @@ public sealed class AgentHost
             uplink,
             _log,
             identity.DeviceId,
-            $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}");
+            $"{AgentBuild.RuntimeIdentifier}, endpoints resolved by {endpoints?.DiscoveredBy ?? "nothing yet"}",
+
+            // Decision 94's device-row half, read live on every compose rather than published into
+            // the hub. It answers null the instant the firmware write's window shuts, so the row
+            // stops saying this frame is refusing without anything having to remember to clear it —
+            // and the write itself is what wakes the reporter, because its progress pump publishes
+            // to the hub about once a second for the whole of it and once more with the outcome.
+            () => recovery?.Refusal?.Wire);
 
         var link = new ControlLink(
             new WebSocketControlTransportFactory(),

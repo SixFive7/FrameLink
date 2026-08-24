@@ -176,6 +176,15 @@ const EVENT: Record<DeviceEventKind, Presentation> = {
 			'A firmware write to the microphone unit happened, or was refused. Both are the same kind ' +
 			'of record: which interlock stopped a frame is as much a part of the trail as a write that ' +
 			'went ahead.'
+	},
+	'power-refused': {
+		label: 'Refused a press',
+		tone: 'warn',
+		icon: 'power',
+		meaning:
+			'Somebody asked this frame to restart or to switch off and it said no, because firmware ' +
+			'was being written to its microphone unit at the time. Nothing was queued — the press has ' +
+			'to be made again once the write has finished.'
 	}
 };
 

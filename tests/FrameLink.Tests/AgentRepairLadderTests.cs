@@ -1,5 +1,6 @@
 using FrameLink.Agent;
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Link;
 using FrameLink.Agent.Local;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Stage;
@@ -543,6 +544,308 @@ public sealed class AgentRepairLadderTests
 
         Assert.True(await free.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
         Assert.Null(free.LastRefusal);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // "It reaches the frame's own journal and nowhere else." Decision 94's gap: the HTTP call the
+    // operator made has already answered 200 — the bytes left down a live socket, and the socket
+    // closing is what a delivered shutdown looks like — so a refusal cannot come back down it. Two
+    // surfaces answer two different questions instead, and one FrameRefusal feeds both.
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_refused_press_reaches_the_event_trail_and_the_device_row_in_the_same_words()
+    {
+        // The event is the record of what happened and when; the self-report is the answer to "why
+        // is this frame not doing what I asked, right now". Both are projections of the one
+        // FrameRefusal composed at the press, which is what makes it impossible for the trail and
+        // the row to say different things about the same refusal.
+        const string Held = "the microphone unit's firmware is being written right now, and interrupting that is "
+            + "the one thing on this frame that cannot be undone (writing 2.1.0)";
+
+        var reported = new List<FrameRefusal>();
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = new RecordingSystemControl(),
+            Log = new RecordingLog(),
+            Held = () => Held,
+            OnRefused = (refusal, _) =>
+            {
+                reported.Add(refusal);
+                return ValueTask.CompletedTask;
+            },
+        });
+
+        Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+
+        var refusal = Assert.Single(reported);
+        Assert.Equal(PowerVerbs.Shutdown, refusal.Verb);
+        Assert.Equal(FrameRecovery.RefusalLine(Held), refusal.Line);
+        Assert.Same(refusal, recovery.Refusal);
+
+        // The trail's half. Who asked and which button, then the frame's own sentence in full: six
+        // months later "did anybody press it, and which one" is the first question anybody asks
+        // about a frame that stayed on, and the refusal alone cannot answer it.
+        var moment = refusal.ToEvent("TEST-DEVI-CEID-0001", DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(DeviceEventKinds.PowerRefused, moment.Kind);
+        Assert.Equal("TEST-DEVI-CEID-0001", moment.DeviceId);
+        Assert.Null(moment.Resource);
+        Assert.Equal(0, moment.Attempts);
+        Assert.StartsWith(
+            "The Fleet Manager asked this frame to shut down and it was refused. ",
+            moment.Summary,
+            StringComparison.Ordinal);
+        Assert.Equal($"expected 'shutdown', observed 'refused: {FrameRefusal.HeldBy}'", moment.Delta);
+
+        // The row's half, carried inside the self-report the Fleet Manager already stores. The
+        // load-bearing clause survives the trip verbatim.
+        var report = PowerRefusalWire.Append(
+            AgentHealth.ReportFor(LoopStateNames.Converged, "linux-arm64"),
+            refusal.Wire);
+
+        var read = PowerRefusalWire.Read(report);
+
+        Assert.NotNull(read);
+        Assert.Equal(PowerVerbs.Shutdown, read.Verb);
+        Assert.Equal(refusal.Line, read.Why);
+        Assert.Contains("Nothing has been queued and nothing is waiting its turn", read.Why, StringComparison.Ordinal);
+        Assert.Contains("Do not unplug it in the meantime.", read.Why, StringComparison.Ordinal);
+        Assert.Contains("writing 2.1.0", read.Why, StringComparison.Ordinal);
+
+        // And the trail and the row carry the same sentence, not two renderings of one idea.
+        Assert.EndsWith(read.Why, moment.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_row_stops_saying_a_frame_is_refusing_the_moment_the_write_finishes()
+    {
+        // A refusal is a moment; the part of it that is a *state* is true for exactly as long as
+        // the firmware write it names. The sentence tells the reader to wait until the frame's own
+        // screen says the update has finished and then ask again — so a row still reporting a
+        // refusal after that would be telling somebody to wait for something that already happened.
+        var window = "the microphone unit's firmware is being written right now (writing 2.1.0)";
+
+        using var uplink = new AgentUplink();
+        var hub = new AgentStatusHub(AgentStatusFactory.Green());
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = new RecordingSystemControl(),
+            Log = new RecordingLog(),
+            Held = () => window,
+        });
+
+        using var reporter = new AgentStatusReporter(
+            hub,
+            uplink,
+            NullLog.Instance,
+            "AAAA-BBBB-CCCC-DDDD",
+            "linux-arm64",
+            () => recovery.Refusal?.Wire);
+
+        Assert.Null(PowerRefusalWire.Read(reporter.Current));
+
+        Assert.False(await recovery.RestartAsync("Somebody at the frame", TestContext.Current.CancellationToken));
+
+        var refusing = PowerRefusalWire.Read(reporter.Current);
+        Assert.NotNull(refusing);
+        Assert.Equal(PowerVerbs.Restart, refusing.Verb);
+
+        // The write finishes: ArrayFlashWindow.Reason answers null, and nothing else happens.
+        // Nothing is notified, nothing is cleared by hand, and no second press is needed.
+        window = null!;
+
+        Assert.Null(recovery.Refusal);
+        Assert.Null(PowerRefusalWire.Read(reporter.Current));
+
+        // What is left is exactly the self-report the frame would have sent had nobody pressed
+        // anything: the refusal moved the vocabulary neither on the way in nor on the way out.
+        Assert.Equal(
+            AgentHealth.ReportFor(hub.Current.Reconcile.LoopState, "linux-arm64"),
+            reporter.Current);
+    }
+
+    [Fact]
+    public async Task A_press_that_goes_through_reports_nothing_and_leaves_no_refusal_behind()
+    {
+        // Two failures in one: an event filed for a press that was carried out would put a refusal
+        // in the trail of a frame that did as it was told, and a refusal left standing after a
+        // successful press would leave the row blaming a write that is over.
+        string? held = "a firmware write is running on the microphone unit";
+        var reported = 0;
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = new RecordingSystemControl(),
+            Log = new RecordingLog(),
+            Held = () => held,
+            OnRefused = (_, _) =>
+            {
+                reported++;
+                return ValueTask.CompletedTask;
+            },
+        });
+
+        Assert.False(await recovery.RestartAsync("Somebody at the frame", TestContext.Current.CancellationToken));
+        Assert.Equal(1, reported);
+
+        // A second press while the same write runs is a second moment and a second event: somebody
+        // pressed twice, and the trail is what says so.
+        Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+        Assert.Equal(2, reported);
+
+        held = null;
+
+        Assert.True(await recovery.RestartAsync("Somebody at the frame", TestContext.Current.CancellationToken));
+        Assert.Equal(2, reported);
+        Assert.Null(recovery.Refusal);
+        Assert.Null(recovery.LastRefusal);
+
+        // Both verbs, because both file their own event and either one filing on the way through
+        // would put a refusal in the trail of a frame that did exactly as it was told.
+        Assert.True(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+        Assert.Equal(2, reported);
+    }
+
+    [Fact]
+    public async Task The_next_firmware_write_does_not_bring_back_the_last_ones_refusal()
+    {
+        // The failure this closes is quiet and would look exactly like a bug in the frame: an
+        // operator opens the fleet list during a *second* write and finds a refusal for a press
+        // nobody made, naming a write that finished an hour ago. A refusal hidden behind the hold
+        // rather than dropped by it does precisely that, because the hold comes back — three times
+        // inside one operation, and again on the next authorisation.
+        string? held = "a firmware write is running on the microphone unit (attempt 1 of 3)";
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = new RecordingSystemControl(),
+            Log = new RecordingLog(),
+            Held = () => held,
+        });
+
+        Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+        Assert.NotNull(recovery.Refusal);
+
+        // The write ends. Nobody presses anything, and nobody tells this object anything.
+        held = null;
+        Assert.Null(recovery.Refusal);
+
+        // A second write opens a second window. Nothing was refused during it.
+        held = "a firmware write is running on the microphone unit (attempt 2 of 3)";
+        Assert.Null(recovery.Refusal);
+    }
+
+    [Fact]
+    public async Task A_reporting_failure_costs_a_line_in_the_trail_and_nothing_else()
+    {
+        // Reporting is downstream of the interlock in every sense — the press is already turned
+        // down and the journal already has it. These run from a channel event and from an inbound
+        // control message, neither of which has anywhere to put an exception, so a fault escaping
+        // here would be the silently-dead button this whole screen exists to prevent.
+        var systemControl = new RecordingSystemControl();
+        var log = new RecordingLog();
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = systemControl,
+            Log = log,
+            Held = () => "a firmware write is running on the microphone unit",
+            OnRefused = (_, _) => throw new InvalidOperationException("the outbox is wedged"),
+        });
+
+        Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+
+        Assert.Empty(systemControl.Commands);
+        Assert.NotNull(recovery.Refusal);
+        Assert.Contains(log.Lines, line => line.Contains("Nothing has been queued", StringComparison.Ordinal));
+        Assert.Contains(
+            log.Lines,
+            line => line.Contains("could not be reported to the Fleet Manager", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void A_refusal_rides_beside_the_firmware_token_and_moves_no_health()
+    {
+        // A refused press is not a rung on §2.6's ladder: nothing has drifted, the product runs,
+        // and the frame is exactly what the operator declared. Both tokens sit after the closing
+        // parenthesis for that reason, and each has to stay readable with the other present.
+        var flash = new ArrayFlashWireStatus { Screen = "writing", Stage = ArrayFlashStages.Manifesting };
+        var refusal = new PowerRefusalStatus
+        {
+            Verb = PowerVerbs.Restart,
+            Why = FrameRecovery.RefusalLine("a firmware write is running on the microphone unit"),
+        };
+
+        foreach (var state in new[] { LoopStateNames.Converged, LoopStateNames.Reconciling, LoopStateNames.Escalated })
+        {
+            var plain = AgentHealth.ReportFor(state, "linux-arm64");
+            var both = PowerRefusalWire.Append(ArrayFlashWire.Append(plain, flash), refusal);
+
+            Assert.Equal(AgentHealth.Classify(plain), AgentHealth.Classify(both));
+
+            Assert.Equal(ArrayFlashStages.Manifesting, ArrayFlashWire.Read(both)?.Stage);
+            Assert.Equal(refusal.Why, PowerRefusalWire.Read(both)?.Why);
+
+            // And each comes out of the string without taking the other with it.
+            Assert.Equal(plain, PowerRefusalWire.Without(ArrayFlashWire.Without(both)));
+        }
+    }
+
+    [Fact]
+    public void A_self_report_carrying_no_refusal_is_returned_exactly_as_it_arrived()
+    {
+        Assert.Null(PowerRefusalWire.Read(null));
+        Assert.Null(PowerRefusalWire.Read("InSync(linux-arm64)"));
+        Assert.Null(PowerRefusalWire.Without(null));
+        Assert.Equal("InSync(linux-arm64)", PowerRefusalWire.Without("InSync(linux-arm64)"));
+        Assert.Equal("InSync(linux-arm64)", PowerRefusalWire.Append("InSync(linux-arm64)", null));
+
+        // A token with no sentence in it carries nothing a surface could show, and inventing one
+        // here is exactly the recomposition the wire type exists to prevent.
+        Assert.Null(PowerRefusalWire.Read("InSync(x) [power-refused verb=restart]"));
+        Assert.Null(PowerRefusalWire.Read("InSync(x) [power-refused"));
+
+        // A frame with nothing else to say still says the one thing that matters.
+        Assert.Equal(
+            "[power-refused verb=restart why=Not now.]",
+            PowerRefusalWire.Append(null, new PowerRefusalStatus { Verb = PowerVerbs.Restart, Why = "Not now." }));
+    }
+
+    [Fact]
+    public void The_sentence_is_the_last_field_and_cannot_close_the_token_early()
+    {
+        // `why` runs to the closing bracket, which is what lets it carry a sentence rather than one
+        // word — so a sentence carrying a bracket of its own would truncate itself and leave a
+        // fragment sitting in the operator's status column. The frame's own refusal contains none,
+        // so this guards the shape rather than an attacker.
+        var report = PowerRefusalWire.Append(
+            "InSync(x)",
+            new PowerRefusalStatus { Verb = "shut down", Why = "Not now — [held] a write. Wait." });
+
+        var read = PowerRefusalWire.Read(report);
+
+        Assert.NotNull(read);
+        Assert.Equal("Not now — (held) a write. Wait.", read.Why);
+
+        // The verb is one word by the time it is on the wire, and it survives as one.
+        Assert.Equal("shut-down", read.Verb);
+        Assert.Equal("InSync(x)", PowerRefusalWire.Without(report));
+
+        // A key this build has never heard of is a newer frame saying something; it is skipped, and
+        // everything this build does understand still reads.
+        var newer = PowerRefusalWire.Read("InSync(x) [power-refused verb=restart at=99 why=Not now. Wait.]");
+
+        Assert.NotNull(newer);
+        Assert.Equal(PowerVerbs.Restart, newer.Verb);
+        Assert.Equal("Not now. Wait.", newer.Why);
     }
 
     [Fact]

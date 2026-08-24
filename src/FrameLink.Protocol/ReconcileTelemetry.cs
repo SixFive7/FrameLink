@@ -120,6 +120,36 @@ public static class DeviceEventKinds
     /// succeed. Without this event a dark frame is indistinguishable from a working one.
     /// </remarks>
     public const string Display = "display";
+
+    /// <summary>
+    /// An operator asked this frame to restart or to switch off, and the frame said no.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The record of a press that did nothing</b> — the one outcome that was previously
+    /// unknowable from a desk. The two power verbs are delivered down a live socket and answered
+    /// 200 the moment the bytes leave, because the socket closing is what a successful shutdown
+    /// looks like and there is nothing to wait for; so a frame that refuses over a firmware write in
+    /// flight and a frame that went down as asked were the same picture to the operator who pressed
+    /// the button. This is the half of that picture that says which happened.
+    /// </para>
+    /// <para>
+    /// <b>Its own kind rather than <see cref="ArrayFlash"/>, although a firmware write is what
+    /// causes it.</b> That kind is the audit trail of writes, and
+    /// <c>ArrayFlashReading</c> reads the newest one to decide what a frame's firmware standing is —
+    /// so a refused <i>reboot</i> filed under it would be read as the newest thing that happened to
+    /// the array and would displace the write it was protecting. What this event is about is a
+    /// button somebody pressed, not the array.
+    /// </para>
+    /// <para>
+    /// It carries no resource: nothing here is about one, and nothing alerts on it. The
+    /// <see cref="DeviceEvent.Summary"/> is the frame's own refusal sentence, whole and unreworded,
+    /// because the load-bearing half of it is that <i>nothing has been queued</i> — every other
+    /// refusal in this product is answered by asking again later, and a person who assumes this one
+    /// is waiting its turn walks away from a frame that is still on, or reaches for the plug.
+    /// </para>
+    /// </remarks>
+    public const string PowerRefused = "power-refused";
 }
 
 /// <summary>

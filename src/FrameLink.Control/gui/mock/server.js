@@ -106,7 +106,13 @@ const devices = flag('empty')
 				name: 'Studeerkamer',
 				hardwareSerial: '10000000cd11a3e9',
 				agentVersion: '0.4.2+9f1c3ae',
-				agentStatus: 'Degraded(audio.volume, expected 75 observed 40, attempt 3)',
+				agentStatus:
+					'Degraded(audio.volume, expected 75 observed 40, attempt 3) ' +
+					'[power-refused verb=restart why=Not now - the microphone unit\u2019s firmware is being ' +
+					'written right now, and interrupting that is the one thing on this frame that cannot be ' +
+					'undone (writing 2.1.0). Nothing has been queued and nothing is waiting its turn: wait ' +
+					"until this frame's own screen says the microphone update has finished, then ask again. " +
+					'Do not unplug it in the meantime.]',
 				protocolVersion: 1,
 				protocolCompatible: true,
 				firstSeenUtc: iso(60 * 24 * 12),
@@ -449,7 +455,39 @@ const classifyHealth = (agentStatus) => {
 	return 'unknown';
 };
 
-const view = (device) => ({ ...device, health: classifyHealth(device.agentStatus) });
+/**
+ * `PowerRefusalWire.Read`, in JavaScript, and the same online gate `ToView` puts on it.
+ *
+ * `why` is the last key inside the token and runs to the closing bracket, because it carries a
+ * whole sentence rather than one word. The sentence is the frame's own and is never reworded here:
+ * the half that matters is that *nothing has been queued*.
+ */
+const VERB_PROSE = { restart: 'restart', shutdown: 'shut down' };
+
+const readRefusal = (agentStatus) => {
+	const opening = (agentStatus ?? '').indexOf('[power-refused');
+	if (opening === -1) return undefined;
+
+	const closing = agentStatus.indexOf(']', opening);
+	if (closing === -1) return undefined;
+
+	const body = agentStatus.slice(opening + '[power-refused'.length, closing);
+	const at = body.indexOf(' why=');
+	if (at === -1) return undefined;
+
+	const verb = /(?:^|\s)verb=(\S+)/.exec(body.slice(0, at))?.[1] ?? '';
+	return { verb: VERB_PROSE[verb] ?? verb, detail: body.slice(at + ' why='.length).trim() };
+};
+
+const view = (device) => ({
+	...device,
+	health: classifyHealth(device.agentStatus),
+
+	// Only for a frame with a socket open. The self-report is not cleared when a frame goes quiet,
+	// so reading it on an offline one would leave a refusal on the row over a write that may have
+	// finished an hour ago.
+	powerRefusal: device.online ? readRefusal(device.agentStatus) : undefined
+});
 
 // ── the operator API ──────────────────────────────────────────────────────────────────────
 

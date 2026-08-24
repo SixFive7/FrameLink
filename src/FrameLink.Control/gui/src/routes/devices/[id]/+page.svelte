@@ -255,6 +255,21 @@
 			</div>
 		{/if}
 
+		<!-- A press this frame turned down, in the frame's own words. It is here rather than only in
+		     the event trail because the question it answers is about *now* — why is this frame not
+		     doing what I asked — and it disappears on its own the moment the firmware write that
+		     caused it finishes. Nothing here rewords it: "nothing has been queued" is the half a
+		     person acts on, and it only survives if the sentence is carried whole. -->
+		{#if device.powerRefusal}
+			<div class="state-note warn" in:rise={{ y: 8 }}>
+				<Icon name="power" size={16} />
+				<div>
+					<b>This frame refused a {device.powerRefusal.verb}.</b>
+					{device.powerRefusal.detail}
+				</div>
+			</div>
+		{/if}
+
 		<div class="columns">
 			<section in:settle={{ index: 0, count: 2 }}>
 				<Card>

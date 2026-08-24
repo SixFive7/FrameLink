@@ -1,6 +1,94 @@
 using FrameLink.Agent.Hosting;
+using FrameLink.Protocol;
 
 namespace FrameLink.Agent.Reconcile;
+
+/// <summary>
+/// <b>One refused press, composed once and read by everything that reports it.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Why this is an object rather than three strings written in three places.</b> A refusal has to
+/// reach three surfaces that answer different questions — the frame's own journal (what happened
+/// here), a <see cref="DeviceEvent"/> (what happened and when, kept for a month) and the self-report
+/// the device row renders (why this frame is not doing what you asked, right now). The first two
+/// used to be the whole of it and the third did not exist, so the operator who pressed the button
+/// two hundred kilometres away could not be told at all: the HTTP call answers 200 the instant the
+/// bytes leave, and there is nothing on that path to carry a "no" back down.
+/// </para>
+/// <para>
+/// <b>They cannot disagree because none of them composes anything.</b> <see cref="Line"/> is
+/// <see cref="FrameRecovery.RefusalLine"/>'s output, held once; <see cref="Summary"/> and
+/// <see cref="Wire"/> are projections of it. A surface that reworded it would drop the half that
+/// matters — <i>nothing has been queued and nothing is waiting its turn</i> — which is the half a
+/// person acts on, because every other refusal in this product is answered by asking again later.
+/// </para>
+/// </remarks>
+public sealed record FrameRefusal
+{
+    /// <summary>
+    /// What the event's delta names as the interlock that turned the press down.
+    /// </summary>
+    /// <remarks>
+    /// <b>There is exactly one thing that holds a frame's power state, so it is spelled once.</b>
+    /// <see cref="FrameRecoveryServices.Held"/> takes a clause rather than a name because the clause
+    /// is what a person reads and it names the image being written; this is the machine-readable
+    /// other half, in the same <c>expected … observed …</c> shape the firmware refusal's delta uses.
+    /// A second kind of hold would need its own name here, and adding one without it would file two
+    /// different reasons under one token.
+    /// </remarks>
+    public const string HeldBy = "firmware-write-in-flight";
+
+    /// <summary>Which button was refused: one of <see cref="PowerVerbs"/>.</summary>
+    public required string Verb { get; init; }
+
+    /// <summary>Who pressed it. For the journal and the trail, never for the frame's own screen.</summary>
+    public required string Who { get; init; }
+
+    /// <summary>The whole refusal sentence, from <see cref="FrameRecovery.RefusalLine"/>.</summary>
+    public required string Line { get; init; }
+
+    /// <summary>The one sentence the journal and the event trail carry.</summary>
+    /// <remarks>
+    /// Who asked and what for, then the frame's own words in full. The audit half is the prefix: six
+    /// months later "did anybody press it, and which button" is the first question anybody asks
+    /// about a frame that stayed on, and a record that only carried the refusal cannot answer it.
+    /// </remarks>
+    public string Summary => $"{Who} asked this frame to {PowerVerbs.Describe(Verb)} and it was refused. {Line}";
+
+    /// <summary>The same refusal as the self-report carries it.</summary>
+    /// <remarks>
+    /// <see cref="Who"/> is deliberately not on it. The self-report is the current picture of a
+    /// frame and is re-sent on every reconnect; who pressed a button belongs to the moment, which is
+    /// what the event is for.
+    /// </remarks>
+    public PowerRefusalStatus Wire => new() { Verb = Verb, Why = Line };
+
+    /// <summary>The same refusal as the events channel carries it.</summary>
+    /// <param name="deviceId">The frame this happened on.</param>
+    /// <param name="occurredUtc">When the press was refused, by the frame's own clock.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>Composed here rather than at the call site, so it is the same object the status is made
+    /// from.</b> An event assembled beside a telemetry outbox would be a second author of the same
+    /// sentence, and the two would drift the first time either was reworded — which is the whole
+    /// failure this record exists to make impossible.
+    /// </para>
+    /// <para>
+    /// It carries no resource. Nothing here is about one, nothing alerts on it, and
+    /// <see cref="DeviceEvent.Attempts"/> stays at zero because a refusal spends no attempt against
+    /// any budget: the frame did not try and fail, it declined.
+    /// </para>
+    /// </remarks>
+    public DeviceEvent ToEvent(string deviceId, DateTimeOffset occurredUtc) => new()
+    {
+        DeviceId = deviceId,
+        Kind = DeviceEventKinds.PowerRefused,
+        OccurredUtc = occurredUtc,
+        Summary = Summary,
+        Delta = $"expected '{Verb}', observed 'refused: {HeldBy}'",
+    };
+}
 
 /// <summary>Everything the two buttons on a stopped frame need.</summary>
 public sealed record FrameRecoveryServices
@@ -34,6 +122,26 @@ public sealed record FrameRecoveryServices
     /// assumed.
     /// </remarks>
     public Func<string?>? Held { get; init; }
+
+    /// <summary>
+    /// Where a refusal goes besides the journal — one call, at the moment of the press.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A delegate for the same reason <see cref="ResetBudgets"/> is one</b>: this class must be
+    /// able to say a press was refused without being able to reach a telemetry outbox, a device id
+    /// or a clock. What it hands over is the composed <see cref="FrameRefusal"/> and nothing else,
+    /// so the caller files it and cannot reword it.
+    /// </para>
+    /// <para>
+    /// <b>Called once per refused press, never on a timer and never on the clear.</b> An event is
+    /// history — a moment that happened — so a second press that is refused again is a second event,
+    /// and a write finishing is not an event at all. What the <i>current</i> picture does about the
+    /// clear is <see cref="FrameRecovery.Refusal"/>'s job, and it needs no notification because it
+    /// is not a latch.
+    /// </para>
+    /// </remarks>
+    public Func<FrameRefusal, CancellationToken, ValueTask>? OnRefused { get; init; }
 }
 
 /// <summary>
@@ -62,6 +170,16 @@ public sealed record FrameRecoveryServices
 /// somebody acts, locally or from the Fleet Manager. A refusal is recorded and reported rather than
 /// re-attempted, because the only thing that should ever produce a second attempt is a second
 /// press.
+/// </para>
+/// <para>
+/// <b>A refused press reaches the operator, and it does so twice on purpose.</b>
+/// <see cref="FrameRecoveryServices.OnRefused"/> files a <see cref="DeviceEvent"/> — the record of
+/// what happened and when, which is what the reconcile screen's trail is — and
+/// <see cref="Refusal"/> is what the self-report carries, which is the answer to "why is this frame
+/// not doing what I asked, right now". Two questions, two surfaces, one
+/// <see cref="FrameRefusal"/>: the HTTP call the operator made has already answered 200 and cannot
+/// carry a "no" back down, so without both of these a refused shutdown and a delivered one look
+/// identical from a desk.
 /// </para>
 /// </remarks>
 public sealed class FrameRecovery
@@ -110,6 +228,8 @@ public sealed class FrameRecovery
 
     private readonly FrameRecoveryServices _services;
 
+    private FrameRefusal? _refusal;
+
     /// <summary>Creates the pair of actions over <paramref name="services"/>.</summary>
     public FrameRecovery(FrameRecoveryServices services)
     {
@@ -124,7 +244,59 @@ public sealed class FrameRecovery
     public int Shutdowns { get; private set; }
 
     /// <summary>Why the last press did nothing, or null when the last one was carried out.</summary>
+    /// <remarks>
+    /// Every way a press can come to nothing lands here — the firmware hold, a <c>systemctl</c> that
+    /// answered no, an exception — because it is the frame's own "what happened when I pressed it".
+    /// <see cref="Refusal"/> is the narrower one, and the two are deliberately not the same field:
+    /// only the hold is a <i>state</i> that clears itself, and only the hold has a sentence written
+    /// for somebody who is not standing at the frame.
+    /// </remarks>
     public string? LastRefusal { get; private set; }
+
+    /// <summary>
+    /// <b>What this frame is refusing right now</b>, or null when it is refusing nothing.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A refusal is a moment, and this is the part of it that is a state — so it clears
+    /// itself.</b> The sentence tells the reader to wait until the frame's own screen says the
+    /// firmware write has finished and then ask again, so it is true for exactly as long as that
+    /// write is. This re-asks <see cref="FrameRecoveryServices.Held"/> — the same delegate the
+    /// sentence was composed from — and answers null the instant the write's window shuts. Nothing
+    /// has to remember to clear it, nothing is on a timer, and there is no path on which a frame
+    /// that is happily rebooting on request still reports that it refused to.
+    /// </para>
+    /// <para>
+    /// <b>The refusal that is shown is the one that was composed, not a fresh one.</b> The held
+    /// clause names the image being written and the attempt it is on, so re-composing the sentence
+    /// on every read would let the words drift under a reader while the same write ran. The gate is
+    /// re-asked; the sentence is not.
+    /// </para>
+    /// <para>
+    /// <b>It is dropped when the hold goes, not merely hidden behind it.</b> A frame can write
+    /// firmware more than once — three attempts inside one operation, and again the next time an
+    /// operator authorises one — and a refusal that was only hidden would come back the moment the
+    /// next window opened, reporting a press nobody had made about a write it does not name.
+    /// </para>
+    /// <para>
+    /// A refusal from <c>systemctl</c> or an exception never appears here. Those are not held
+    /// states — nothing is going to stop being true about them — and the honest thing to show for
+    /// one is the journal, which is where they go.
+    /// </para>
+    /// </remarks>
+    public FrameRefusal? Refusal
+    {
+        get
+        {
+            if (_services.Held?.Invoke() is { Length: > 0 })
+            {
+                return _refusal;
+            }
+
+            _refusal = null;
+            return null;
+        }
+    }
 
     /// <summary>
     /// <b>Restart and try again</b> — clears every exhausted budget, then restarts the frame.
@@ -136,8 +308,9 @@ public sealed class FrameRecovery
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(who);
 
-        if (Refused(who, "restart") is { Length: > 0 })
+        if (Refused(who, PowerVerbs.Restart) is { } refusal)
         {
+            await ReportAsync(refusal, cancellationToken).ConfigureAwait(false);
             return false;
         }
 
@@ -163,8 +336,9 @@ public sealed class FrameRecovery
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(who);
 
-        if (Refused(who, "shut down") is { Length: > 0 })
+        if (Refused(who, PowerVerbs.Shutdown) is { } refusal)
         {
+            await ReportAsync(refusal, cancellationToken).ConfigureAwait(false);
             return false;
         }
 
@@ -178,24 +352,65 @@ public sealed class FrameRecovery
         return await RunAsync(ShutdownVerb, who, cancellationToken).ConfigureAwait(false);
     }
 
-    private string? Refused(string who, string verb)
+    private FrameRefusal? Refused(string who, string verb)
     {
         var held = _services.Held?.Invoke();
 
         if (held is not { Length: > 0 })
         {
+            // Only LastRefusal is cleared here. The held refusal is dropped by the one thing that
+            // can decide it: the Refusal property asks the same delegate this line just asked, so
+            // clearing it a second time here would be a second clearing rule to keep in step with
+            // the first — and there is no interleaving in which the two could answer differently.
             LastRefusal = null;
             return null;
         }
 
-        // The composed sentence rather than the bare clause, because LastRefusal is what a surface
-        // shows and what a person reads. It is the return value too, so the caller's "was this
-        // refused" check and the words the refusal is explained in cannot drift apart.
-        var refusal = RefusalLine(held);
+        // <b>Composed once, here, and this object is what every surface reads.</b> The journal line
+        // below, the event the Fleet Manager files and the token the self-report carries are all
+        // projections of it — so the caller's "was this refused" check, the words the refusal is
+        // explained in, and the words the operator two hundred kilometres away reads cannot drift
+        // apart. There is nowhere left in this product that writes a second version of this
+        // sentence.
+        var refusal = new FrameRefusal
+        {
+            Verb = verb,
+            Who = who,
+            Line = RefusalLine(held),
+        };
 
-        LastRefusal = refusal;
-        _services.Log.Warn($"{who} asked this frame to {verb} and it was refused. {refusal}");
+        _refusal = refusal;
+        LastRefusal = refusal.Line;
+        _services.Log.Warn(refusal.Summary);
         return refusal;
+    }
+
+    /// <summary>Hands a refusal to whoever files it, and never lets that change what it did.</summary>
+    /// <remarks>
+    /// The reporting is downstream of the interlock in every sense: the press has already been
+    /// turned down, the journal already has it, and the frame is already doing exactly what it was
+    /// doing before. So a telemetry outbox that throws costs the operator one line in a trail and
+    /// nothing else — whereas letting it out of here would fault a task nobody awaits, on a path
+    /// reached from a channel event and from an inbound control message, neither of which has
+    /// anywhere to put an exception.
+    /// </remarks>
+    private async Task ReportAsync(FrameRefusal refusal, CancellationToken cancellationToken)
+    {
+        if (_services.OnRefused is not { } report)
+        {
+            return;
+        }
+
+        try
+        {
+            await report(refusal, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            _services.Log.Warn(
+                $"{refusal.Who}'s refused {PowerVerbs.Describe(refusal.Verb)} could not be reported to the "
+                + $"Fleet Manager: {exception.Message}. The refusal itself stands and is in this journal.");
+        }
     }
 
     private async Task<bool> RunAsync(string verb, string who, CancellationToken cancellationToken)

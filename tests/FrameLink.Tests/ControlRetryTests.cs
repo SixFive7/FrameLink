@@ -414,6 +414,95 @@ public sealed class ControlRetryTests
         return null;
     }
 
+    [Fact]
+    public async Task A_refusal_the_200_could_not_carry_comes_back_on_the_frames_next_self_report()
+    {
+        // The gap this closes. Both power routes answer 200 the instant the bytes leave a live
+        // socket — the socket closing is what a delivered shutdown looks like and is
+        // indistinguishable from the frame having gone for any other reason — so the answer above
+        // can only *name* a refusal as a possible outcome. It arrives on the frame's own
+        // self-report instead, and the server parses it onto the device row so an operator does not
+        // have to find a sentence inside a status column.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        var refusal = new PowerRefusalStatus
+        {
+            Verb = PowerVerbs.Shutdown,
+            Why = "Not now — the microphone unit's firmware is being written right now (writing 2.1.0). "
+                + "Nothing has been queued and nothing is waiting its turn: wait until this frame's own screen "
+                + "says the microphone update has finished, then ask again. Do not unplug it in the meantime.",
+        };
+
+        var reported = PowerRefusalWire.Append(
+            AgentHealth.ReportFor(LoopStateNames.Converged, "linux-arm64"),
+            refusal);
+
+        await using (await server.ConnectAgentAsync(key, agentStatus: reported))
+        {
+            Assert.True(await server.WaitForDeviceAsync(
+                deviceId,
+                device => device.PowerRefusal is not null,
+                TimeSpan.FromSeconds(5)));
+
+            var view = await (await server.Client.GetAsync($"/api/devices/{deviceId}", Token))
+                .ReadAsync(ControlJson.Default.DeviceView);
+
+            Assert.NotNull(view.PowerRefusal);
+
+            // The verb in prose, because it is rendered inside a sentence, and the frame's own words
+            // untouched. "Nothing has been queued" is the load-bearing half: every other refusal in
+            // this product is answered by pressing again later, so a person who assumes this one is
+            // waiting its turn walks away from a frame that is still on.
+            Assert.Equal("shut down", view.PowerRefusal.Verb);
+            Assert.Equal(refusal.Why, view.PowerRefusal.Detail);
+            Assert.Contains("Nothing has been queued", view.PowerRefusal.Detail, StringComparison.Ordinal);
+            Assert.Contains("Do not unplug it in the meantime.", view.PowerRefusal.Detail, StringComparison.Ordinal);
+
+            // Beside the free text, never instead of it, and the classification is untouched: a
+            // frame refusing a press is still whatever its reconciliation loop is.
+            Assert.Equal(reported, view.AgentStatus);
+            Assert.Equal(AgentHealth.InSync, view.Health);
+        }
+
+        // And it goes when the socket does. The self-report is the current picture: it is not
+        // buffered while a frame is offline and it is not cleared when one disappears, so reading it
+        // on a frame nobody can reach would leave a refusal on the row for a week over a write that
+        // may have finished an hour ago. The raw string stays, because that is history of a sort and
+        // is labelled as the last thing the frame said.
+        Assert.True(await server.WaitForDeviceAsync(
+            deviceId,
+            device => !device.Online,
+            TimeSpan.FromSeconds(5)));
+
+        var offline = await (await server.Client.GetAsync($"/api/devices/{deviceId}", Token))
+            .ReadAsync(ControlJson.Default.DeviceView);
+
+        Assert.Null(offline.PowerRefusal);
+        Assert.Equal(reported, offline.AgentStatus);
+    }
+
+    [Fact]
+    public async Task A_frame_that_is_refusing_nothing_carries_no_refusal_on_its_row()
+    {
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await AdoptedDeviceAsync(server, key);
+
+        await using (await server.ConnectAgentAsync(
+            key,
+            agentStatus: AgentHealth.ReportFor(LoopStateNames.Converged, "linux-arm64")))
+        {
+            Assert.True(await server.WaitForDeviceAsync(deviceId, device => device.Online, TimeSpan.FromSeconds(5)));
+
+            var view = await (await server.Client.GetAsync($"/api/devices/{deviceId}", Token))
+                .ReadAsync(ControlJson.Default.DeviceView);
+
+            Assert.Null(view.PowerRefusal);
+        }
+    }
+
     private static async Task<string> AdoptedDeviceAsync(ControlServer server, ECDsa key)
     {
         var deviceId = DeviceIdentity.FingerprintOf(key.ExportSubjectPublicKeyInfo());
