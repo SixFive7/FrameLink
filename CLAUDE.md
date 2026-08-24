@@ -178,7 +178,7 @@ The block below uses an outer four-backtick ```` ```` `markdown`` fence only so 
 
 ````markdown
 <a id="N-short-imperative-step-title"></a>
-<img src="https://img.shields.io/badge/STEP_NN-Short_imperative_step_title-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step NN — Short imperative step title"/>
+<img src="https://img.shields.io/badge/STEP_NN-Short_imperative_step_title-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step NN - Short imperative step title"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -213,7 +213,7 @@ The block below uses an outer four-backtick ```` ```` `markdown`` fence only so 
 <what the reader has actually accomplished by running this step, in plain language>
 ````
 
-The step-title badge is pinned: `for-the-badge` style, `height="50"`, left segment `STEP_NN` on `labelColor=228b22` (forest green, matching ACHIEVED / CHECKPOINT), right segment the title on `555555` (gray). `NN` is always two digits (`01`, `02`, ..., `12`). Shields.io URL encoding rules apply to the title: single `_` renders as a space, `__` renders as a literal underscore, `--` renders as a literal hyphen (so `Smoke-test` becomes `Smoke--test`). Characters shields.io cannot handle literally — parentheses, slashes, colons — must be percent-encoded (`%28`, `%29`, `%2F`, `%3A`). The `alt` attribute holds the human-readable `Step NN — Title` form and is what screen readers, GitHub's image-fallback text, and future search will see. The preceding `<a id="N-slug"></a>` anchor is the cross-reference target (see §2.7); the slug is the title lowercased with non-alphanumerics collapsed to single hyphens, matching GitHub's historical heading-slug convention.
+The step-title badge is pinned: `for-the-badge` style, `height="50"`, left segment `STEP_NN` on `labelColor=228b22` (forest green, matching ACHIEVED / CHECKPOINT), right segment the title on `555555` (gray). `NN` is always two digits (`01`, `02`, ..., `12`). Shields.io URL encoding rules apply to the title: single `_` renders as a space, `__` renders as a literal underscore, `--` renders as a literal hyphen (so `Smoke-test` becomes `Smoke--test`). Characters shields.io cannot handle literally — parentheses, slashes, colons — must be percent-encoded (`%28`, `%29`, `%2F`, `%3A`). The `alt` attribute holds the human-readable `Step NN - Title` form and is what screen readers, GitHub's image-fallback text, and future search will see. That separator is a plain ASCII hyphen with one space on each side, and it is pinned in that form: do not substitute an en dash or an em dash, and do not treat the ASCII hyphen as a typographic slip to be tidied up. The separator belongs to the `alt` attribute alone — the badge URL encodes only the title, and never the `Step NN` prefix or the separator — so changing it touches no URL, and in particular never calls for the `--` escape that a literal hyphen needs *inside* a title. The preceding `<a id="N-slug"></a>` anchor is the cross-reference target (see §2.7); the slug is the title lowercased with non-alphanumerics collapsed to single hyphens, matching GitHub's historical heading-slug convention.
 
 Do **not** wrap the badge in an H1, H3, or any other heading. The badge is the step title. Apart from the single structural heading guides 1 and 2 are permitted above, there are no markdown headings between the guide-opening H1 (§2.6) and the end of the file.
 
@@ -271,7 +271,7 @@ No stranded text anywhere inside a step. None.
 Every guide begins with an H1 title, followed by a one-paragraph summary, and a horizontal rule. The numbered steps follow directly after the horizontal rule — do not add a `## Steps` heading. The guide-opening H1 is the **only** markdown heading in the file; step titles are badges, not headings (see §2.1 and §2.5). Guides 1 and 2 are the sole exception on both counts, under the structural-heading allowance in §2.1. The guide-title H1 form differs between the hardware guide and the software guides:
 
 - **Guide 1** (hardware assembly) uses the form `# FrameLink Hardware Build Guide`.
-- **Guides 2 and later** (software) use the form `# Software Build Guide NN — <Title>` where `NN` is the two-digit sequence number matching the filename prefix (e.g. `02`, `03`, ...).
+- **Guides 2 and later** (software) use the form `# Software Build Guide NN - <Title>` where `NN` is the two-digit sequence number matching the filename prefix (e.g. `02`, `03`, ...). The separator is a plain ASCII hyphen with one space on each side, pinned exactly as in the step-badge `alt` text (§2.1); an en dash or em dash there is a failure, not a refinement.
 
 Every guide ends with a **CHECKPOINT** section: a horizontal rule, a single `<br>` tag for vertical breathing room, the checkpoint badge, then one or more sentences stating the observable condition(s) that prove the guide succeeded. The badge is pinned:
 
@@ -327,3 +327,9 @@ Rules:
 - `README.md` is the project index. It points at every build guide currently in `docs/` and holds the bill of materials. Update it whenever a guide is renamed, added, or removed.
 - Do not create new markdown files outside `docs/` and `research/` unless explicitly asked.
 - Never edit `CLAUDE.md` (this file) to weaken rules. Agents may propose strengthening them to the user.
+
+### 3.1 A worktree installs its own `node_modules`
+
+When you work in a git worktree, `src/FrameLink.Control/gui/node_modules` must be a real directory that this worktree installed for itself. Never point it at the main tree's copy with a junction, a symbolic link, or any other kind of link, however slow a fresh install looks next to the shortcut. The GUI build in `src/FrameLink.Control/FrameLink.Control.csproj` runs `npm ci`, and `npm ci` deletes `node_modules` before it installs anything. It follows the link and deletes what is on the far end of it, so the shortcut you took in a scratch worktree destroys the modules in the main tree — the one every other agent and every open editor is building against.
+
+The reason this is worth a rule of its own is that the obvious repair does not work. Putting the modules back with `npm ci` means deleting the directory first, and that delete fails: VS Code holds `node_modules/@rolldown/binding-win32-x64-msvc/rolldown-binding.win32-x64-msvc.node` open, and no amount of retrying will unlock it while the editor is running. **The repair is `npm install`** — run from `src/FrameLink.Control/gui` in the tree that lost its modules, which is the main tree rather than the worktree that caused it. `npm install` writes over what is there instead of clearing it first, so it completes with the file still locked.
