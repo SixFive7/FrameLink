@@ -348,6 +348,37 @@ public sealed class ControlArrayFlashTests
     }
 
     [Fact]
+    public async Task A_caller_with_no_session_cannot_arm_a_firmware_write()
+    {
+        // Inherited from `OperatorGate`, which guards the whole of /api before routing rather than
+        // route by route — so this cannot be forgotten for a new route. It is asserted by name
+        // anyway, because this is the one route in the product that authorises a write to hardware
+        // that rewriting the SD card does not repair, and "it inherits a guard" is a claim worth
+        // one test rather than a comment.
+        await using var server = await ControlServer.StartAsync(Password);
+        using var key = DeviceIdentity.CreateKeyPair();
+        var deviceId = await server.EnrolAsync(key, Password);
+
+        // A client of its own, which has never signed in. Clearing the bearer header on the
+        // server's own client would not do: `SignInAsync` also takes a session cookie, and the
+        // handler keeps sending it — a passing test that proved nothing.
+        using var stranger = new HttpClient { BaseAddress = server.BaseAddress };
+
+        var post = await stranger.PostAsJsonAsync(
+            $"/api/devices/{deviceId}/array-flash",
+            new ArrayFlashRequest { Unattended = true, Acknowledged = true },
+            ControlJson.Default.ArrayFlashRequest,
+            Token);
+
+        var get = await stranger.GetAsync($"/api/devices/{deviceId}/array-flash", Token);
+        var delete = await stranger.DeleteAsync($"/api/devices/{deviceId}/array-flash", Token);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, post.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, get.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, delete.StatusCode);
+    }
+
+    [Fact]
     public async Task Withdrawing_takes_the_authorisation_back_off_the_frame()
     {
         await using var server = await ControlServer.StartAsync(Password);
