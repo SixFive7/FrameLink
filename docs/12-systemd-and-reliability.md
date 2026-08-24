@@ -1,11 +1,11 @@
-# Software Build Guide 12 — systemd Services & Reliability Hardening
+# Software Build Guide 12 - systemd Services & Reliability Hardening
 
 Every service the frame runs was installed and verified by the earlier guides (the SPA server and Chromium kiosk from [guide 10](10-spa.md), the GPIO button daemon from [guide 11](11-gpio-button.md), the camera node and camera portal from [guide 6](6-camera.md), and the Immich Kiosk slideshow container from [guide 9](9-immich-kiosk.md)), and each is already set to restart after a crash and to come back after a reboot. This guide hardens that fleet for 24/7 unattended operation by adding what restart-on-crash cannot provide: one sweep that verifies the whole fleet is healthy, a watchdog that restarts Chromium when the browser's memory bloats, a scheduled fresh browser start every morning so a frame that hangs on a wall for weeks never goes stale, a set of changes that keeps everyday writes off the SD card so the card lasts years instead of months while keeping enough log history on it to diagnose a bad boot after the fact, automatic security updates, a CPU pinned at full speed so the first seconds of a video call never wait for the chip to ramp up, and a boot-time repair that heals the one way a power cut can break Docker and take the slideshow with it. A final reboot proves the hardened frame still brings itself up with no one touching it.
 
 ---
 
 <a id="1-verify-the-whole-service-fleet-is-healthy"></a>
-<img src="https://img.shields.io/badge/STEP_01-Verify_the_whole_service_fleet_is_healthy-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Verify the whole service fleet is healthy"/>
+<img src="https://img.shields.io/badge/STEP_01-Verify_the_whole_service_fleet_is_healthy-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Verify the whole service fleet is healthy"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -50,7 +50,7 @@ The first four lines must read `active`. The fifth line is the portal: `active` 
 You have confirmed the whole fleet (app server, browser, button daemon, camera node, camera portal, and slideshow container) is healthy in one sweep, and you know the one command pair that shows it at a glance. Nothing is hardened yet; that starts now.
 
 <a id="2-create-the-chromium-memory-watchdog-script"></a>
-<img src="https://img.shields.io/badge/STEP_02-Create_the_Chromium_memory_watchdog_script-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the Chromium memory watchdog script"/>
+<img src="https://img.shields.io/badge/STEP_02-Create_the_Chromium_memory_watchdog_script-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Create the Chromium memory watchdog script"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -106,7 +106,7 @@ Silence is the pass: no output, and the screen keeps showing the slideshow. If t
 The watchdog logic exists on the Pi and has been proven runnable: it can measure the browser's memory and restart it cleanly. Nothing runs it on a schedule yet; that is the next step.
 
 <a id="3-run-the-watchdog-every-five-minutes"></a>
-<img src="https://img.shields.io/badge/STEP_03-Run_the_watchdog_every_five_minutes-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Run the watchdog every five minutes"/>
+<img src="https://img.shields.io/badge/STEP_03-Run_the_watchdog_every_five_minutes-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Run the watchdog every five minutes"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -168,7 +168,7 @@ systemctl --user list-timers chromium-watchdog.timer --no-pager
 The frame now checks itself every five minutes and restarts the browser when memory turns unhealthy: a browser tree past 1.8 GB, or the whole system squeezed under 350 MB free. A failure mode that used to mean a slowly degrading frame until someone pulled the plug now heals itself within minutes.
 
 <a id="4-restart-chromium-early-every-morning"></a>
-<img src="https://img.shields.io/badge/STEP_04-Restart_Chromium_early_every_morning-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Restart Chromium early every morning"/>
+<img src="https://img.shields.io/badge/STEP_04-Restart_Chromium_early_every_morning-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Restart Chromium early every morning"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -229,7 +229,7 @@ A `Created symlink` line, then a `list-timers` row naming `chromium-restart.time
 The browser now gets a clean start every morning, so no session ever grows older than a day. Together with the watchdog, both slow-decay failure modes, bloating and staleness, are handled without anyone touching the frame.
 
 <a id="5-cut-sd-card-writes-to-make-the-card-last"></a>
-<img src="https://img.shields.io/badge/STEP_05-Cut_SD--card_writes_to_make_the_card_last-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Cut SD-card writes to make the card last"/>
+<img src="https://img.shields.io/badge/STEP_05-Cut_SD--card_writes_to_make_the_card_last-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Cut SD-card writes to make the card last"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -278,7 +278,7 @@ The first line should print a mount entry for `/tmp` with `tmpfs` in it, which i
 The frame's heaviest background writes, browser scratch files and swapped memory, now land in RAM instead of on the SD card, while the system log stays on the card, capped at 64 MB, so a frame that misbehaved yesterday can still tell you why today. That combination is the difference between a card that lasts months and one that lasts years, on a frame that never loses its memory of what went wrong.
 
 <a id="6-turn-on-unattended-security-updates"></a>
-<img src="https://img.shields.io/badge/STEP_06-Turn_on_unattended_security_updates-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Turn on unattended security updates"/>
+<img src="https://img.shields.io/badge/STEP_06-Turn_on_unattended_security_updates-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Turn on unattended security updates"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -317,7 +317,7 @@ The `apt` run must finish with no `E:` line. The `dpkg-reconfigure` dialog asks 
 The frame now keeps itself patched: security fixes install automatically in the background for as long as the frame is plugged in, with feature updates still left to a deliberate manual upgrade.
 
 <a id="7-pin-the-cpu-governor-to-performance"></a>
-<img src="https://img.shields.io/badge/STEP_07-Pin_the_CPU_governor_to_performance-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Pin the CPU governor to performance"/>
+<img src="https://img.shields.io/badge/STEP_07-Pin_the_CPU_governor_to_performance-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Pin the CPU governor to performance"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -372,7 +372,7 @@ The closing `cat` must print `performance`; the pin is live immediately, not jus
 The CPU now runs at full speed all the time, on this boot and every future one, so the first seconds of every call are encoded on a chip that is already awake.
 
 <a id="8-let-docker-repair-itself-after-power-loss"></a>
-<img src="https://img.shields.io/badge/STEP_08-Let_Docker_repair_itself_after_power_loss-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Let Docker repair itself after power loss"/>
+<img src="https://img.shields.io/badge/STEP_08-Let_Docker_repair_itself_after_power_loss-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 - Let Docker repair itself after power loss"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -422,7 +422,7 @@ Two things prove the step: the final line must print `live-restore: true`, and t
 The one known way a power cut could permanently kill the slideshow now heals itself at the next boot, Docker restarts no longer interrupt the photos, and any future repair leaves both a journal trail and the corrupt file preserved for diagnosis. The frame survives the treatment a real living room will give it.
 
 <a id="9-reboot-and-confirm-the-hardened-frame-comes-back"></a>
-<img src="https://img.shields.io/badge/STEP_09-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Reboot and confirm the hardened frame comes back"/>
+<img src="https://img.shields.io/badge/STEP_09-Reboot_and_confirm_the_hardened_frame_comes_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 - Reboot and confirm the hardened frame comes back"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

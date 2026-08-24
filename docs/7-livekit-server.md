@@ -1,11 +1,11 @@
-# Software Build Guide 07 — LiveKit Server Deployment
+# Software Build Guide 07 - LiveKit Server Deployment
 
 **This guide is superseded, and it is kept on purpose.** The FrameLink Fleet Manager now carries `livekit-server` inside itself (it generates the configuration, owns the API secret and mints every frame's call token when the frame is adopted), so a frame a Fleet Manager manages needs nothing from here, and there is no key, no secret and no `lk` command anywhere for a person to copy, which is why [guide 8](8-webrtc-validation.md) stopped asking for them. It stays in full, steps 5 and 6 included, for three reasons: what it builds is exactly the standalone deployment an operator can point an existing Fleet Manager at, so the server half of it is still a supported shape; [guide 10 step 2](10-spa.md#2-create-the-app-configuration) and [guide 13 step 5](13-multi-device-deploy.md#5-give-the-clone-its-own-app-identity) still consume the URL and the token it produces, and the hand-followed build stays the canonical path until the agent has been proven equal to it; and the bundled server has not yet carried a call on real hardware, so this is not the working call path to remove first. What it does: stand up the [LiveKit](https://github.com/livekit/livekit) server that carries every FrameLink video call. **The SSH target in this guide is not the Pi**: steps 1-4 run on the *server* (an always-on Linux machine on your home network that will host LiveKit) and steps 5-6 run on your Windows workstation in Git Bash. You install Docker on the server, write LiveKit's configuration with a freshly generated API secret, start the pinned `livekit/livekit-server` container, and confirm it answers; then, from the workstation, you install the LiveKit CLI, prove it can reach the server across the network, and mint the long-lived access token this frame will use to join calls. At the end the server is reachable on your home network at `ws://YOUR-SERVER:7880` with no domain name, TLS certificate, or internet exposure required, ready for [guide 10 step 2](10-spa.md#2-create-the-app-configuration) to consume the URL and token.
 
 ---
 
 <a id="1-install-docker-engine-on-the-server"></a>
-<img src="https://img.shields.io/badge/STEP_01-Install_Docker_Engine_on_the_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install Docker Engine on the server"/>
+<img src="https://img.shields.io/badge/STEP_01-Install_Docker_Engine_on_the_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Install Docker Engine on the server"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -41,7 +41,7 @@ The script ends without an error and reports an installed version (you can confi
 Docker Engine and Compose are installed on the server and the daemon is running. **Log out of this SSH session and reconnect to the server** before the next step, so the `docker` group membership takes effect and you can run `docker` without `sudo`.
 
 <a id="2-create-the-livekit-configuration"></a>
-<img src="https://img.shields.io/badge/STEP_02-Create_the_LiveKit_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the LiveKit configuration"/>
+<img src="https://img.shields.io/badge/STEP_02-Create_the_LiveKit_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Create the LiveKit configuration"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -101,7 +101,7 @@ The `cat` at the end must show the eight configuration lines, ending with `frame
 The server now has a complete LiveKit configuration and a master API credential recorded in your notes. Nothing is running yet; that is the next step.
 
 <a id="3-start-the-livekit-server"></a>
-<img src="https://img.shields.io/badge/STEP_03-Start_the_LiveKit_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Start the LiveKit server"/>
+<img src="https://img.shields.io/badge/STEP_03-Start_the_LiveKit_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Start the LiveKit server"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -136,7 +136,7 @@ The run ends with `Container livekit Started` (or `Running`). `docker ps` should
 The LiveKit server is running on your server and set to restart on every boot. Whether it is actually answering is confirmed next.
 
 <a id="4-confirm-the-server-is-answering"></a>
-<img src="https://img.shields.io/badge/STEP_04-Confirm_the_server_is_answering-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Confirm the server is answering"/>
+<img src="https://img.shields.io/badge/STEP_04-Confirm_the_server_is_answering-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Confirm the server is answering"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -172,7 +172,7 @@ docker logs --tail 20 livekit
 LiveKit is serving on port 7880 of your server. The server-side work is done; everything from here on happens on your Windows workstation.
 
 <a id="5-connect-the-workstation-cli-to-the-server"></a>
-<img src="https://img.shields.io/badge/STEP_05-Connect_the_workstation_CLI_to_the_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Connect the workstation CLI to the server"/>
+<img src="https://img.shields.io/badge/STEP_05-Connect_the_workstation_CLI_to_the_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Connect the workstation CLI to the server"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -211,7 +211,7 @@ The `winget` line finishes with "Successfully installed" (or notes the package i
 Your workstation can reach the LiveKit server across the network with valid credentials. The same tool now mints the frame's own access pass, so keep this Git Bash window open.
 
 <a id="6-mint-a-long-lived-token-for-the-frame"></a>
-<img src="https://img.shields.io/badge/STEP_06-Mint_a_long--lived_token_for_the_frame-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Mint a long-lived token for the frame"/>
+<img src="https://img.shields.io/badge/STEP_06-Mint_a_long--lived_token_for_the_frame-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Mint a long-lived token for the frame"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

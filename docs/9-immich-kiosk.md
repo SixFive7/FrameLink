@@ -1,11 +1,11 @@
-# Software Build Guide 09 — Immich Kiosk (Docker photo slideshow)
+# Software Build Guide 09 - Immich Kiosk (Docker photo slideshow)
 
 The frame's resting screen is a photo slideshow. We run [Immich Kiosk](https://github.com/damongolding/immich-kiosk) (a small web app that pulls photos from your Immich server and displays them full-screen) in Docker on the Pi itself, with offline caching so the slideshow keeps working even when your Immich server is unreachable. This guide installs Docker, has you create a read-only API key on your Immich server so Kiosk can read your photos, writes the Kiosk configuration, and starts it serving the slideshow at `http://127.0.0.1:3000` for the kiosk SPA ([guide 10](10-spa.md)) to embed. Hosting Kiosk locally on the Pi, rather than pointing the frame at a Kiosk running elsewhere, is what makes the offline cache possible: if your Immich server goes down, the Pi still has its own copy of recent photos to show.
 
 ---
 
 <a id="1-install-docker-engine"></a>
-<img src="https://img.shields.io/badge/STEP_01-Install_Docker_Engine-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install Docker Engine"/>
+<img src="https://img.shields.io/badge/STEP_01-Install_Docker_Engine-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Install Docker Engine"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -41,7 +41,7 @@ The script ends without an error and reports an installed version (you can confi
 Docker Engine and Compose are installed and the daemon is running. **Log out of this SSH session and reconnect** before the next step, so the `docker` group membership takes effect and you can run `docker` without `sudo`.
 
 <a id="2-create-the-immich-kiosk-configuration"></a>
-<img src="https://img.shields.io/badge/STEP_02-Create_the_Immich_Kiosk_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the Immich Kiosk configuration"/>
+<img src="https://img.shields.io/badge/STEP_02-Create_the_Immich_Kiosk_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Create the Immich Kiosk configuration"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -105,7 +105,7 @@ No output and no error means all four commands succeeded. A `chown: invalid user
 Immich Kiosk is configured to read your photo library and cache recent photos locally. Nothing is running yet; that is the next step.
 
 <a id="3-start-the-immich-kiosk-container"></a>
-<img src="https://img.shields.io/badge/STEP_03-Start_the_Immich_Kiosk_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Start the Immich Kiosk container"/>
+<img src="https://img.shields.io/badge/STEP_03-Start_the_Immich_Kiosk_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Start the Immich Kiosk container"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -140,7 +140,7 @@ The run ends with `Container immich-kiosk Started` (or `Running`). `docker ps` s
 Immich Kiosk is running and set to restart on every boot. It is reachable on the Pi at `http://127.0.0.1:3000`.
 
 <a id="4-confirm-the-slideshow-is-serving"></a>
-<img src="https://img.shields.io/badge/STEP_04-Confirm_the_slideshow_is_serving-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Confirm the slideshow is serving"/>
+<img src="https://img.shields.io/badge/STEP_04-Confirm_the_slideshow_is_serving-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Confirm the slideshow is serving"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

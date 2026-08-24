@@ -1,11 +1,11 @@
-# Software Build Guide 10 — Kiosk SPA (Shell + LiveKit Client)
+# Software Build Guide 10 - Kiosk SPA (Shell + LiveKit Client)
 
 This guide deploys the FrameLink web app onto the Pi and serves it locally so the kiosk browser loads it. The app is the frame's brain: by default it shows the [Immich Kiosk](9-immich-kiosk.md) slideshow built in guide 9, and it switches to a [LiveKit](7-livekit-server.md) video call when the physical button from [guide 11](11-gpio-button.md) is pressed or an incoming call arrives. The app ships as plain files with its `lit` and `livekit-client` libraries vendored in, so there is no build step and no `npm`. We serve those files with `busybox httpd` bound to `127.0.0.1:8888`, which is already on the base image, so the frame depends on no external web host, then point the Chromium kiosk service at `http://localhost:8888/` and order it to wait for that local server before it opens.
 
 ---
 
 <a id="1-clone-the-framelink-app-onto-the-pi"></a>
-<img src="https://img.shields.io/badge/STEP_01-Clone_the_FrameLink_app_onto_the_Pi-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Clone the FrameLink app onto the Pi"/>
+<img src="https://img.shields.io/badge/STEP_01-Clone_the_FrameLink_app_onto_the_Pi-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Clone the FrameLink app onto the Pi"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -46,7 +46,7 @@ The `apt` line finishes with `git` set up and no `E:` error, and `git clone` end
 The FrameLink app and its vendored `lit` and `livekit-client` libraries are on the Pi at `~/FrameLink/app`, ready to configure and serve. The app cannot connect to anything yet, because it has no configuration.
 
 <a id="2-create-the-app-configuration"></a>
-<img src="https://img.shields.io/badge/STEP_02-Create_the_app_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the app configuration"/>
+<img src="https://img.shields.io/badge/STEP_02-Create_the_app_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Create the app configuration"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -91,7 +91,7 @@ nano config.json
 The app now has its per-unit configuration: which slideshow to embed, which LiveKit room to join, and the token that authorises it. The files still are not being served to a browser; that is the next step.
 
 <a id="3-serve-the-app-locally"></a>
-<img src="https://img.shields.io/badge/STEP_03-Serve_the_app_locally-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Serve the app locally"/>
+<img src="https://img.shields.io/badge/STEP_03-Serve_the_app_locally-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Serve the app locally"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -147,7 +147,7 @@ The closing `curl` prints `HTTP 200`, proving `busybox httpd` is serving the app
 The FrameLink app is being served on the Pi at `http://127.0.0.1:8888/`, from a service that restarts on its own and comes back after a reboot, with no dependency on any external web host. The kiosk browser is still pointed at the placeholder URL from guide 5; the next step redirects it here.
 
 <a id="4-point-the-kiosk-browser-at-the-app"></a>
-<img src="https://img.shields.io/badge/STEP_04-Point_the_kiosk_browser_at_the_app-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Point the kiosk browser at the app"/>
+<img src="https://img.shields.io/badge/STEP_04-Point_the_kiosk_browser_at_the_app-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Point the kiosk browser at the app"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -225,7 +225,7 @@ systemctl --user restart chromium-kiosk.service
 The kiosk browser now loads the FrameLink app from the local server, and it is ordered to wait for both the display and that server before it opens, so it survives a cold boot without landing on an error page. The final step confirms the whole frame comes up correctly.
 
 <a id="5-verify-the-frame-works"></a>
-<img src="https://img.shields.io/badge/STEP_05-Verify_the_frame_works-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Verify the frame works"/>
+<img src="https://img.shields.io/badge/STEP_05-Verify_the_frame_works-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Verify the frame works"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

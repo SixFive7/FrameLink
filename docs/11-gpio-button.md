@@ -1,11 +1,11 @@
-# Software Build Guide 11 — GPIO Button Daemon
+# Software Build Guide 11 - GPIO Button Daemon
 
 The frame rests on the [Immich Kiosk](9-immich-kiosk.md) slideshow and switches to a [LiveKit](7-livekit-server.md) video call when someone presses the physical button on the case. This guide connects that button to the [FrameLink app](10-spa.md). The app already listens for a `toggle` command on a localhost WebSocket; what is missing is something that watches the button and sends that command when it is pressed. That something is a small Python daemon, `framelink-gpio.py`, which already arrived on the Pi with the `git clone` in [guide 10](10-spa.md), so this guide does not write any code. The daemon has a second, quieter job too: after every call ends it gives the camera from [guide 6](6-camera.md) a fresh start, so the next call always finds a camera in perfect health. This guide installs the libraries the daemon needs, confirms the daemon is set to the pin the button is actually wired to, runs the daemon as a service that starts on boot, and then verifies the toggle both with and without the physical button.
 
 ---
 
 <a id="1-install-the-gpio-and-websocket-packages"></a>
-<img src="https://img.shields.io/badge/STEP_01-Install_the_GPIO_and_WebSocket_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install the GPIO and WebSocket packages"/>
+<img src="https://img.shields.io/badge/STEP_01-Install_the_GPIO_and_WebSocket_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Install the GPIO and WebSocket packages"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -46,7 +46,7 @@ The command ends with all three packages installed and no `E:` line. On a re-run
 The Pi has the GPIO and WebSocket libraries the button daemon needs, including the lgpio backend the Pi 5 depends on. The daemon still is not running, and the button is not wired yet; those come next.
 
 <a id="2-wire-the-button-and-set-its-pin"></a>
-<img src="https://img.shields.io/badge/STEP_02-Wire_the_button_and_set_its_pin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Wire the button and set its pin"/>
+<img src="https://img.shields.io/badge/STEP_02-Wire_the_button_and_set_its_pin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Wire the button and set its pin"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -87,7 +87,7 @@ grep -n BUTTON_PIN ~/FrameLink/deploy/gpio/framelink-gpio.py
 The button is wired between a GPIO pin and ground using the Pi's internal pull-up, and the daemon is confirmed to be watching that same pin. Nothing is reading the button yet; the next step starts the daemon that does.
 
 <a id="3-run-the-daemon-as-a-service"></a>
-<img src="https://img.shields.io/badge/STEP_03-Run_the_daemon_as_a_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Run the daemon as a service"/>
+<img src="https://img.shields.io/badge/STEP_03-Run_the_daemon_as_a_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Run the daemon as a service"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -147,7 +147,7 @@ The final `ss` line shows a `LISTEN` socket on `127.0.0.1:8889` with `python3` n
 The button daemon is running as a user service, listening on `127.0.0.1:8889`, and set to restart on its own and come back after a reboot. The app can now reach it. The next step proves the toggle works even before you touch the physical button.
 
 <a id="4-test-the-toggle-without-the-button"></a>
-<img src="https://img.shields.io/badge/STEP_04-Test_the_toggle_without_the_button-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Test the toggle without the button"/>
+<img src="https://img.shields.io/badge/STEP_04-Test_the_toggle_without_the_button-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Test the toggle without the button"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -184,7 +184,7 @@ The command is silent; the proof is on the screen. The first run switches the fr
 You have confirmed the daemon-to-app path works end to end: a simulated press toggles the frame between the slideshow and the call, and back. All that is left is to prove the physical button drives that same toggle.
 
 <a id="5-verify-the-physical-button"></a>
-<img src="https://img.shields.io/badge/STEP_05-Verify_the_physical_button-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Verify the physical button"/>
+<img src="https://img.shields.io/badge/STEP_05-Verify_the_physical_button-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Verify the physical button"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

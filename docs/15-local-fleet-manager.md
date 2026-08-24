@@ -1,11 +1,11 @@
-# Software Build Guide 15 — The Fleet Manager on Your Workstation
+# Software Build Guide 15 - The Fleet Manager on Your Workstation
 
 Run the Fleet Manager on your own PC as a Docker container instead of starting it by hand with `dotnet run`, with the same bundled call server, the same database and the same address the frames already know, and with the frame software itself inside the image, which is what makes one container tag decide what every frame in the house runs. This is the guide in daily use; [guide 14](14-fleet-manager-deployment.md) is the same server on an always-on host behind a reverse proxy, and it is deferred until a release has been cut. Every step here runs on the Windows workstation: most of them in Git Bash from the repository root, and two of them in a PowerShell window opened with **Run as administrator**, which the step says so where it matters. Two things about Windows shape this guide more than anything else, and both were measured on this machine rather than reasoned about: Windows hands out the ports call media needs as temporary ports to other programs, and a database file shared between Windows and a Linux container is not safely shared at all. Steps 1 and 5 are what those two facts turn into. **About the captured output:** every EXPECTED OUTPUT block is real output from this workstation. Image digests, container ids, port counts, LiveKit node ids and timestamps will differ on yours. Where a block could not be captured, because the command needs an Administrator shell this session did not have or because running it would have taken the port a live frame is using, LOOK FOR says so in those words rather than showing something invented.
 
 ---
 
 <a id="1-reserve-the-media-ports-windows-lends-out"></a>
-<img src="https://img.shields.io/badge/STEP_01-Reserve_the_media_ports_Windows_lends_out-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Reserve the media ports Windows lends out"/>
+<img src="https://img.shields.io/badge/STEP_01-Reserve_the_media_ports_Windows_lends_out-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Reserve the media ports Windows lends out"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -80,7 +80,7 @@ Start Port    End Port
 The sixty numbers call audio and video travel over now belong to FrameLink and to nothing else on this PC, permanently, so the call server can always have all of them.
 
 <a id="2-let-the-fleet-reach-the-container"></a>
-<img src="https://img.shields.io/badge/STEP_02-Let_the_fleet_reach_the_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Let the fleet reach the container"/>
+<img src="https://img.shields.io/badge/STEP_02-Let_the_fleet_reach_the_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Let the fleet reach the container"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -135,7 +135,7 @@ WslCore Inbound IPv6 mDNS Default Allow Rule
 You know why a container that looks healthy can be unreachable, and the frames' console traffic, call signalling and call media have an explicit path in, and nothing else does.
 
 <a id="3-build-the-fleet-manager-image"></a>
-<img src="https://img.shields.io/badge/STEP_03-Build_the_Fleet_Manager_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Build the Fleet Manager image"/>
+<img src="https://img.shields.io/badge/STEP_03-Build_the_Fleet_Manager_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Build the Fleet Manager image"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -190,7 +190,7 @@ The `...` stands in for several hundred lines of Docker build progress, which ar
 You have a container image that has been proven to start and serve on this machine, tagged with a name that will never mean anything else.
 
 <a id="4-create-the-volume-that-must-outlive-the-stack"></a>
-<img src="https://img.shields.io/badge/STEP_04-Create_the_volume_that_must_outlive_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Create the volume that must outlive the stack"/>
+<img src="https://img.shields.io/badge/STEP_04-Create_the_volume_that_must_outlive_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Create the volume that must outlive the stack"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -229,7 +229,7 @@ One line, the volume's name, and nothing else. Printing the name again on a seco
 The one piece of storage that must survive every future mistake now exists, and it exists independently of the stack that is about to use it.
 
 <a id="5-move-an-existing-fleet-database-into-the-volume"></a>
-<img src="https://img.shields.io/badge/STEP_05-Move_an_existing_fleet_database_into_the_volume-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Move an existing fleet database into the volume"/>
+<img src="https://img.shields.io/badge/STEP_05-Move_an_existing_fleet_database_into_the_volume-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Move an existing fleet database into the volume"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -281,7 +281,7 @@ The two `sha256` lines must be the same string, and the line that says so is the
 Your existing fleet (every adopted frame, its name, its settings and its call credential) is now inside the volume, verified identical, with the original still sitting untouched where it was.
 
 <a id="6-start-the-stack-on-a-spare-port"></a>
-<img src="https://img.shields.io/badge/STEP_06-Start_the_stack_on_a_spare_port-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Start the stack on a spare port"/>
+<img src="https://img.shields.io/badge/STEP_06-Start_the_stack_on_a_spare_port-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Start the stack on a spare port"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -334,7 +334,7 @@ Six lines ending in `Started`, then a table with the tag you built in step 3 and
 The Fleet Manager is running in Docker on this PC with its storage, its password and its media ports, on an address nothing else is using, and the instance the frames are talking to has not been touched.
 
 <a id="7-prove-the-console-and-the-call-server"></a>
-<img src="https://img.shields.io/badge/STEP_07-Prove_the_console_and_the_call_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Prove the console and the call server"/>
+<img src="https://img.shields.io/badge/STEP_07-Prove_the_console_and_the_call_server-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Prove the console and the call server"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -392,7 +392,7 @@ info: FrameLink.Control.LiveKit.LiveKitService[1810]
 You have seen the console answer, the password arrive, the call server download itself and start, and the media range publish. You have also seen the one that decides whether step 8 can work: whether anything outside this PC can reach any of it.
 
 <a id="8-cut-over-from-dotnet-run-to-the-container"></a>
-<img src="https://img.shields.io/badge/STEP_08-Cut_over_from_dotnet_run_to_the_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Cut over from dotnet run to the container"/>
+<img src="https://img.shields.io/badge/STEP_08-Cut_over_from_dotnet_run_to_the_container-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 - Cut over from dotnet run to the container"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -461,7 +461,7 @@ Line 1 must **fail** with a `curl: (7)` connection refusal naming port 5199 befo
 The Fleet Manager the fleet talks to is now a container rather than a program in a terminal window, at the same address, with the same frames adopted under the same names, and the folder it came from is still there, untouched, if you want to go back.
 
 <a id="9-back-up-the-database-and-roll-back"></a>
-<img src="https://img.shields.io/badge/STEP_09-Back_up_the_database_and_roll_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Back up the database and roll back"/>
+<img src="https://img.shields.io/badge/STEP_09-Back_up_the_database_and_roll_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 - Back up the database and roll back"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -510,7 +510,7 @@ Exactly one `framelink.db` in the listing, owned by `10001/10001`. **A `framelin
 You hold a small, consistent, restorable copy of every adopted frame's identity, name, settings and call credential, and you can move the Fleet Manager, and with it the software running on every frame in the house, forwards and backwards between builds with one variable.
 
 <a id="10-read-which-agent-the-fleet-is-being-served"></a>
-<img src="https://img.shields.io/badge/STEP_10-Read_which_agent_the_fleet_is_being_served-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 — Read which agent the fleet is being served"/>
+<img src="https://img.shields.io/badge/STEP_10-Read_which_agent_the_fleet_is_being_served-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 - Read which agent the fleet is being served"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

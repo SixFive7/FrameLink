@@ -1,11 +1,11 @@
-# Software Build Guide 03 — Hardware Configuration
+# Software Build Guide 03 - Hardware Configuration
 
 Configure the Pi's firmware and kernel to recognise the hardware assembled in [guide 1](1-hardware-build-guide.md). A stock Raspberry Pi OS install leaves the Waveshare DSI touch display dark (the firmware's auto-detection only knows Raspberry Pi's own official panel), and the panel itself is built portrait while the frame hangs landscape. This guide loads the Waveshare display overlay, rotates the text console to landscape, and reboots to apply both changes. After it, the display is lit and the bare console is usable on the Pi itself; the graphical kiosk that will fill the screen comes later, in [guide 5](5-kiosk-base.md).
 
 ---
 
 <a id="1-enable-the-dsi-touch-display-and-rotate-the-console-to-landscape"></a>
-<img src="https://img.shields.io/badge/STEP_01-Enable_the_DSI_touch_display_and_rotate_the_console_to_landscape-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Enable the DSI touch display and rotate the console to landscape"/>
+<img src="https://img.shields.io/badge/STEP_01-Enable_the_DSI_touch_display_and_rotate_the_console_to_landscape-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Enable the DSI touch display and rotate the console to landscape"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

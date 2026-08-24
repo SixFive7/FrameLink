@@ -1,11 +1,11 @@
-# Software Build Guide 08 — WebRTC Call-Load Validation
+# Software Build Guide 08 - WebRTC Call-Load Validation
 
 The Pi 5 with 2 GB RAM has no hardware video decoder, so Chromium software-decodes every incoming WebRTC stream and a video call is by a wide margin the heaviest thing a frame ever does. This guide loads a finished frame with a real call between the household's own units, measures RAM, CPU and temperature at the start, logs them every thirty seconds for four hours or more, and ends in a pass or fail against five criteria. Nothing here needs a LiveKit URL, an API key, an API secret or a token: the Fleet Manager owns the call server and issues every frame its credentials, so the call is started the way a person starts one, by pressing the button, and the only thing you supply is time.
 
 ---
 
 <a id="1-confirm-the-frame-is-idle-and-green"></a>
-<img src="https://img.shields.io/badge/STEP_01-Confirm_the_frame_is_idle_and_green-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Confirm the frame is idle and green"/>
+<img src="https://img.shields.io/badge/STEP_01-Confirm_the_frame_is_idle_and_green-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Confirm the frame is idle and green"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -50,7 +50,7 @@ The first line reads exactly `active`. Anything else (`inactive`, `failed`, `act
 You have a written-down starting point for this frame at rest, and you have confirmed it is healthy enough for the measurement to mean anything.
 
 <a id="2-start-a-call-and-snapshot-the-load"></a>
-<img src="https://img.shields.io/badge/STEP_02-Start_a_call_and_snapshot_the_load-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Start a call and snapshot the load"/>
+<img src="https://img.shields.io/badge/STEP_02-Start_a_call_and_snapshot_the_load-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Start a call and snapshot the load"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -91,7 +91,7 @@ On the frame's screen: one video tile per other unit in the call, all of them mo
 The frame is carrying a real call from the household's own units, and you have confirmed it has room to keep doing so for long enough to be worth measuring.
 
 <a id="3-run-the-four-hour-soak"></a>
-<img src="https://img.shields.io/badge/STEP_03-Run_the_four--hour_soak-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Run the four-hour soak"/>
+<img src="https://img.shields.io/badge/STEP_03-Run_the_four--hour_soak-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Run the four-hour soak"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -133,7 +133,7 @@ The `tail` at the end should already show a timestamp header, a `Mem:` line and 
 The frame is under continuous call load and recording its own vital signs unattended. There is nothing more to do until the soak has run.
 
 <a id="4-evaluate-and-clean-up"></a>
-<img src="https://img.shields.io/badge/STEP_04-Evaluate_and_clean_up-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Evaluate and clean up"/>
+<img src="https://img.shields.io/badge/STEP_04-Evaluate_and_clean_up-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Evaluate and clean up"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

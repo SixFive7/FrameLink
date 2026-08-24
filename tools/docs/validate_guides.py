@@ -115,8 +115,8 @@ for path in sorted(DOCS.glob("*.md")):
                 fail(f"guide 1 H1 form: {h1!r}")
         else:
             nn = name.split("-")[0].zfill(2)
-            if not re.match(rf"^Software Build Guide {nn} — .+", h1):
-                fail(f"H1 must read 'Software Build Guide {nn} — <Title>'; found {h1!r}")
+            if not re.match(rf"^Software Build Guide {nn} - .+", h1):
+                fail(f"H1 must read 'Software Build Guide {nn} - <Title>'; found {h1!r}")
 
     # Steps: anchor line followed by the step badge.
     steps = []
@@ -138,8 +138,8 @@ for path in sorted(DOCS.glob("*.md")):
         if nn != index:
             fail(f"step badge numbered {nn:02d} at position {index}", line_no + 1)
         human = slug(title)
-        if alt != f"Step {nn:02d} — {human}":
-            fail(f"alt text {alt!r} does not match 'Step {nn:02d} — {human}'", line_no + 1)
+        if alt != f"Step {nn:02d} - {human}":
+            fail(f"alt text {alt!r} does not match 'Step {nn:02d} - {human}'", line_no + 1)
         want = f"{nn}-{slugify(human)}"
         if anchor_id != want:
             fail(f"anchor {anchor_id!r} should be {want!r}", line_no)

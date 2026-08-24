@@ -1,11 +1,11 @@
-# Software Build Guide 13 — Multi-Device Deployment
+# Software Build Guide 13 - Multi-Device Deployment
 
 Scale from the first validated unit to the full household fleet. Rather than repeating guides 02 through 12 by hand on every remaining unit, this guide captures the finished first unit's SD card as a single golden image, flashes that image into each new unit, and changes only what must be unique per device: the hostname, the app's calling identity and token, and the Raspberry Pi Connect registration. Each clone is then verified on its own, the whole fleet is soak-tested in one call, and each frame is delivered to its household and proven in place. This guide is written ahead of the first real rollout, so every EXPECTED OUTPUT below is a pending capture to be filled in verbatim when the fleet is built.
 
 ---
 
 <a id="1-plan-the-rollout"></a>
-<img src="https://img.shields.io/badge/STEP_01-Plan_the_rollout-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Plan the rollout"/>
+<img src="https://img.shields.io/badge/STEP_01-Plan_the_rollout-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Plan the rollout"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -60,7 +60,7 @@ Four lines reading `active`, and an `immich-kiosk: Up ...` line. Any `inactive` 
 You have confirmed the first unit is in the exact state worth copying. Nothing has been cloned yet; the next step turns this unit's SD card into the golden image.
 
 <a id="2-capture-the-golden-image"></a>
-<img src="https://img.shields.io/badge/STEP_02-Capture_the_golden_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Capture the golden image"/>
+<img src="https://img.shields.io/badge/STEP_02-Capture_the_golden_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Capture the golden image"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -106,7 +106,7 @@ The two `journalctl` lines report what they rotated and vacuumed; the other comm
 The master is clean and powered off, and its card is ready to be copied into `framelink-golden.img` on your computer. That one file is now the installer for every remaining unit.
 
 <a id="3-flash-and-boot-a-clone"></a>
-<img src="https://img.shields.io/badge/STEP_03-Flash_and_boot_a_clone-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Flash and boot a clone"/>
+<img src="https://img.shields.io/badge/STEP_03-Flash_and_boot_a_clone-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Flash and boot a clone"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -143,7 +143,7 @@ The `Static hostname:` line shows the **master's** name, which is correct at thi
 A second unit is running the complete validated build. It still answers to the first unit's name and calls itself the first unit inside the app; the next three steps give it its own identity.
 
 <a id="4-give-the-clone-its-own-hostname"></a>
-<img src="https://img.shields.io/badge/STEP_04-Give_the_clone_its_own_hostname-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Give the clone its own hostname"/>
+<img src="https://img.shields.io/badge/STEP_04-Give_the_clone_its_own_hostname-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Give the clone its own hostname"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -179,7 +179,7 @@ The rename is silent, so no output means it worked. After the reboot, reconnect 
 The unit now has its own name on the network. Inside the app it still claims to be the first unit; its calling identity and token are replaced next.
 
 <a id="5-give-the-clone-its-own-app-identity"></a>
-<img src="https://img.shields.io/badge/STEP_05-Give_the_clone_its_own_app_identity-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Give the clone its own app identity"/>
+<img src="https://img.shields.io/badge/STEP_05-Give_the_clone_its_own_app_identity-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Give the clone its own app identity"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -223,7 +223,7 @@ In `nano`, change only the `identity` and `token` values (each between its quote
 The unit now joins family calls as itself, with its own admission token. One inherited identity remains: if the master was registered with Raspberry Pi Connect, this clone is still carrying that registration.
 
 <a id="6-re-register-raspberry-pi-connect"></a>
-<img src="https://img.shields.io/badge/STEP_06-Re--register_Raspberry_Pi_Connect-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Re-register Raspberry Pi Connect"/>
+<img src="https://img.shields.io/badge/STEP_06-Re--register_Raspberry_Pi_Connect-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Re-register Raspberry Pi Connect"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -259,7 +259,7 @@ A verification link from `signin`: open it on your computer, sign in with your R
 The clone is now fully itself: its own hostname, its own calling identity and token, and its own remote-access registration. What is not yet proven is that it behaves like the master from a cold start; that is next.
 
 <a id="7-verify-the-clone-end-to-end"></a>
-<img src="https://img.shields.io/badge/STEP_07-Verify_the_clone_end--to--end-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Verify the clone end-to-end"/>
+<img src="https://img.shields.io/badge/STEP_07-Verify_the_clone_end--to--end-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Verify the clone end-to-end"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -299,7 +299,7 @@ Reconnect to the new hostname after the reboot, then look for three `active` lin
 This unit is a verified, self-starting frame with its own identity. Run steps 03 through 07 again for each remaining unit; when all of them pass this step, the fleet is ready to be tested together.
 
 <a id="8-soak-test-the-fleet-together"></a>
-<img src="https://img.shields.io/badge/STEP_08-Soak--test_the_fleet_together-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Soak-test the fleet together"/>
+<img src="https://img.shields.io/badge/STEP_08-Soak--test_the_fleet_together-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 - Soak-test the fleet together"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -341,7 +341,7 @@ When line 1 runs, every frame in the room switches to the call grid within a few
 The whole fleet has held a call together and survived a night of unattended running. The units are ready to leave the build network; the last two steps prepare each one for its destination household and prove it there.
 
 <a id="9-pre-configure-the-household-wifi"></a>
-<img src="https://img.shields.io/badge/STEP_09-Pre--configure_the_household_WiFi-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Pre-configure the household WiFi"/>
+<img src="https://img.shields.io/badge/STEP_09-Pre--configure_the_household_WiFi-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 - Pre-configure the household WiFi"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -377,7 +377,7 @@ A `successfully added` line, and `household-wifi` present in the listing. Nothin
 The unit can join its destination household's network by itself the first time it powers up there. It has not left your house yet; the final step is the delivery and the proof in place.
 
 <a id="10-deploy-and-verify-in-the-household"></a>
-<img src="https://img.shields.io/badge/STEP_10-Deploy_and_verify_in_the_household-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 — Deploy and verify in the household"/>
+<img src="https://img.shields.io/badge/STEP_10-Deploy_and_verify_in_the_household-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 - Deploy and verify in the household"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

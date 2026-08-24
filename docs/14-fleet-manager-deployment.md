@@ -1,11 +1,11 @@
-# Software Build Guide 14 — Fleet Manager Deployment
+# Software Build Guide 14 - Fleet Manager Deployment
 
 Put the FrameLink Fleet Manager into production: build its container image on your workstation, ship it to your always-on Docker host, and run it there as a Portainer stack published at `https://framelink.huisman.io` through your existing Traefik, with the call server supervised inside it and alerting wired to Home Assistant. **This guide is for later, and nothing in it is a pending action.** Deployment onto the server waits until a release has been cut; until then the Fleet Manager runs on the workstation under Docker, and that is [guide 15](15-local-fleet-manager.md), the guide in daily use, and the one to read first. What follows is the procedure kept ready for the day the server deployment happens, with its reasoning intact so that none of it has to be worked out twice. Unlike every guide before it, **the target is your server, not the frame**: steps 2 and 3 run on your Windows workstation in Git Bash, and every other step runs over SSH on the Docker host. Five things must be true on that day before step 1: the name resolves to that host, Traefik is running there with a working certificate resolver, Authelia is available, Portainer manages that Docker endpoint, and the `/24` question of step 5 has been answered. Both candidates are already computed in `deploy/fleet-manager/stack.env.example`, so answering it is a minute's work rather than an investigation. Every value this guide takes from the server's own configuration (the entrypoint names, the certificate resolver, the reverse proxy's address, the firewall schema) was true when it was written and must be re-checked against that configuration on the day, because an estate moves and a stale value that looks confident is worse than a blank. **About the captured output:** every EXPECTED OUTPUT block below is real output from a real Docker host running exactly these files, but that host is the author's workstation, not the server, so image digests, container ids, generated keys, LiveKit node ids, the pinned container address and timestamps will differ line for line. Where a value must match rather than merely resemble, LOOK FOR says so.
 
 ---
 
 <a id="1-create-the-volume-that-must-outlive-the-stack"></a>
-<img src="https://img.shields.io/badge/STEP_01-Create_the_volume_that_must_outlive_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Create the volume that must outlive the stack"/>
+<img src="https://img.shields.io/badge/STEP_01-Create_the_volume_that_must_outlive_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Create the volume that must outlive the stack"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -44,7 +44,7 @@ One line, the volume's name, and nothing else. If Docker answers `Error response
 The one piece of storage that must survive every future mistake now exists, and it exists independently of the stack that is about to use it.
 
 <a id="2-build-the-fleet-manager-image"></a>
-<img src="https://img.shields.io/badge/STEP_02-Build_the_Fleet_Manager_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Build the Fleet Manager image"/>
+<img src="https://img.shields.io/badge/STEP_02-Build_the_Fleet_Manager_image-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Build the Fleet Manager image"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -99,7 +99,7 @@ The `...` replaces several hundred lines of Docker build progress, which are noi
 You have a container image that has been proven to start and serve on the machine that built it, tagged with a name that will never mean anything else.
 
 <a id="3-copy-the-image-to-the-docker-host"></a>
-<img src="https://img.shields.io/badge/STEP_03-Copy_the_image_to_the_Docker_host-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Copy the image to the Docker host"/>
+<img src="https://img.shields.io/badge/STEP_03-Copy_the_image_to_the_Docker_host-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Copy the image to the Docker host"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -141,7 +141,7 @@ Loaded image: framelink/fleet-manager:0.0.0-a95958b.dirty
 The server now holds the exact image you built and tested, byte for byte, with no registry involved.
 
 <a id="4-confirm-the-host-has-the-image-you-built"></a>
-<img src="https://img.shields.io/badge/STEP_04-Confirm_the_host_has_the_image_you_built-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Confirm the host has the image you built"/>
+<img src="https://img.shields.io/badge/STEP_04-Confirm_the_host_has_the_image_you_built-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Confirm the host has the image you built"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -178,7 +178,7 @@ The `sha256:` value **must be character-for-character the `digest` line from ste
 You have proved that the server is holding the image you tested, rather than something that shares its name.
 
 <a id="5-deploy-the-stack"></a>
-<img src="https://img.shields.io/badge/STEP_05-Deploy_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Deploy the stack"/>
+<img src="https://img.shields.io/badge/STEP_05-Deploy_the_stack-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Deploy the stack"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -237,7 +237,7 @@ framelink   framelink/fleet-manager:0.0.0-a95958b.dirty   Up 13 seconds (health:
 The Fleet Manager is running on your server with its storage, its password, its network address and its media ports. Nothing has yet proved that anything outside the container can reach it.
 
 <a id="6-prove-the-server-answers-where-traefik-reaches-it"></a>
-<img src="https://img.shields.io/badge/STEP_06-Prove_the_server_answers_where_Traefik_reaches_it-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Prove the server answers where Traefik reaches it"/>
+<img src="https://img.shields.io/badge/STEP_06-Prove_the_server_answers_where_Traefik_reaches_it-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Prove the server answers where Traefik reaches it"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -280,7 +280,7 @@ ok
 You have proved the Fleet Manager is serving, configured, and reachable at the address Traefik will use, so the browser half is now the only thing that can still be wrong.
 
 <a id="7-prove-the-call-server-is-supervised"></a>
-<img src="https://img.shields.io/badge/STEP_07-Prove_the_call_server_is_supervised-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Prove the call server is supervised"/>
+<img src="https://img.shields.io/badge/STEP_07-Prove_the_call_server_is_supervised-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Prove the call server is supervised"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -328,7 +328,7 @@ info: FrameLink.Control.LiveKit.LiveKitService[1810]
 The call server has been fetched, checked against its published checksum, configured with a secret only this server holds, started, and given the network ports call audio and video need, which means the separate LiveKit of [guide 7](7-livekit-server.md) is now redundant and can be retired, if you had one running and did not have to retire it before step 5 to free these ports.
 
 <a id="8-send-the-first-alert-to-home-assistant"></a>
-<img src="https://img.shields.io/badge/STEP_08-Send_the_first_alert_to_Home_Assistant-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Send the first alert to Home Assistant"/>
+<img src="https://img.shields.io/badge/STEP_08-Send_the_first_alert_to_Home_Assistant-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 - Send the first alert to Home Assistant"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -371,7 +371,7 @@ On a correctly configured server the first command prints **nothing at all**, an
 The failure that started this whole project, something expiring or going quiet with nobody watching, now reaches a phone, and you have seen with your own eyes that the path from the Fleet Manager to Home Assistant works.
 
 <a id="9-back-up-the-fleet-database"></a>
-<img src="https://img.shields.io/badge/STEP_09-Back_up_the_fleet_database-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Back up the fleet database"/>
+<img src="https://img.shields.io/badge/STEP_09-Back_up_the_fleet_database-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 - Back up the fleet database"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -416,7 +416,7 @@ Exactly one `framelink.db` in the listing, owned by `10001/10001`, the unprivile
 You hold a small, consistent, restorable copy of every adopted frame's identity, name, settings and call credential.
 
 <a id="10-redeploy-and-roll-back"></a>
-<img src="https://img.shields.io/badge/STEP_10-Redeploy_and_roll_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 — Redeploy and roll back"/>
+<img src="https://img.shields.io/badge/STEP_10-Redeploy_and_roll_back-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 - Redeploy and roll back"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

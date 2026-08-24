@@ -1,11 +1,11 @@
-# Software Build Guide 04 — Audio Configuration
+# Software Build Guide 04 - Audio Configuration
 
 Configure the ReSpeaker XVF3800 USB mic array and its attached speaker so that audio capture and playback work reliably end-to-end: pin the USB device to a stable ALSA card index (and switch off the HDMI sound cards that can otherwise steal that index on a slow boot), install Seeed's host-side tool that talks to the array's on-board DSP, pin the array's firmware to a known version, enable the speaker amplifier and set **both** playback volumes (including a second, easily-missed one that ships at -20 dB and costs most of the speaker's loudness), persist it all across reboots, and prove both directions with a spoken-word playback test and a round-trip microphone recording.
 
 ---
 
 <a id="1-pin-the-xvf3800-to-a-stable-alsa-card-index"></a>
-<img src="https://img.shields.io/badge/STEP_01-Pin_the_XVF3800_to_a_stable_ALSA_card_index-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Pin the XVF3800 to a stable ALSA card index"/>
+<img src="https://img.shields.io/badge/STEP_01-Pin_the_XVF3800_to_a_stable_ALSA_card_index-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Pin the XVF3800 to a stable ALSA card index"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -45,7 +45,7 @@ The first line is the options line echoed back as `tee` writes it into `/etc/mod
 The ReSpeaker is now card 0 on this boot and every future one, no matter what else is plugged into the USB ports. No sound has been made yet; the amplifier and volume come after the control tool is installed.
 
 <a id="2-install-and-verify-the-xvf3800-host-control-tool"></a>
-<img src="https://img.shields.io/badge/STEP_02-Install_and_verify_the_XVF3800_host_control_tool-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Install and verify the XVF3800 host control tool"/>
+<img src="https://img.shields.io/badge/STEP_02-Install_and_verify_the_XVF3800_host_control_tool-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Install and verify the XVF3800 host control tool"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -116,7 +116,7 @@ The `...` marks trimmed apt download-and-unpack lines. The last two lines are th
 The Pi can now talk to the ReSpeaker's on-board sound processor, and the device answered with its firmware version. The speaker is still silent; switching on its amplifier and setting the volume is next.
 
 <a id="3-pin-the-array-firmware-to-v2-0-10"></a>
-<img src="https://img.shields.io/badge/STEP_03-Pin_the_array_firmware_to_v2.0.10-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Pin the array firmware to v2.0.10"/>
+<img src="https://img.shields.io/badge/STEP_03-Pin_the_array_firmware_to_v2.0.10-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Pin the array firmware to v2.0.10"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -161,7 +161,7 @@ The last line must read `VERSION 2 0 10`. If the array already ran v2.0.10, the 
 Every frame in the fleet now runs the exact firmware this build was validated against. The array is still silent; switching on its amplifier and setting the volumes correctly is next.
 
 <a id="4-enable-the-speaker-amplifier-and-set-the-volumes"></a>
-<img src="https://img.shields.io/badge/STEP_04-Enable_the_speaker_amplifier_and_set_the_volumes-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Enable the speaker amplifier and set the volumes"/>
+<img src="https://img.shields.io/badge/STEP_04-Enable_the_speaker_amplifier_and_set_the_volumes-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Enable the speaker amplifier and set the volumes"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -202,7 +202,7 @@ In the `GPO_READ_VALUES` readback (five digits, e.g. `0 0 0 1 0`) the third valu
 The whole playback path works, from card 0 through the ReSpeaker's processor, the amplifier and both volume stages to the speaker, at the loudness the frame will actually use. Those volumes live only in the sound card's running memory so far; making them survive a reboot is next.
 
 <a id="5-persist-the-alsa-mixer-state-across-reboots"></a>
-<img src="https://img.shields.io/badge/STEP_05-Persist_the_ALSA_mixer_state_across_reboots-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Persist the ALSA mixer state across reboots"/>
+<img src="https://img.shields.io/badge/STEP_05-Persist_the_ALSA_mixer_state_across_reboots-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Persist the ALSA mixer state across reboots"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -238,7 +238,7 @@ Connection to framelink-douwe.local closed by remote host.
 The mixer levels are saved on disk and the Pi is rebooting. Whether the saved state actually comes back on boot has not been proven yet; that is exactly what the next step checks.
 
 <a id="6-confirm-the-mixer-state-survived-the-reboot"></a>
-<img src="https://img.shields.io/badge/STEP_06-Confirm_the_mixer_state_survived_the_reboot-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Confirm the mixer state survived the reboot"/>
+<img src="https://img.shields.io/badge/STEP_06-Confirm_the_mixer_state_survived_the_reboot-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Confirm the mixer state survived the reboot"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -278,7 +278,7 @@ Both `Playback 60 [100%] [0.00dB]` lines are the two volume stages coming back u
 The volume now survives reboots with no manual step, so the frame will always wake up at full playback level. The speaker side is complete; only the microphones remain untested.
 
 <a id="7-validate-mic-capture-with-a-round-trip-recording"></a>
-<img src="https://img.shields.io/badge/STEP_07-Validate_mic_capture_with_a_round--trip_recording-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Validate mic capture with a round-trip recording"/>
+<img src="https://img.shields.io/badge/STEP_07-Validate_mic_capture_with_a_round--trip_recording-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Validate mic capture with a round-trip recording"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

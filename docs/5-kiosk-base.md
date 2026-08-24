@@ -1,11 +1,11 @@
-# Software Build Guide 05 — Kiosk Base (labwc + Chromium)
+# Software Build Guide 05 - Kiosk Base (labwc + Chromium)
 
 Install the Wayland compositor (`labwc`) and Chromium, enable console autologin, run labwc on tty1 after login, and hand Chromium to a systemd user service so it starts deterministically (waiting for the Wayland socket, not a fixed sleep) and restarts automatically if it crashes. After this guide the Pi boots directly into a fullscreen Chromium kiosk on the DSI display in landscape orientation.
 
 ---
 
 <a id="1-confirm-zram-swap-is-active"></a>
-<img src="https://img.shields.io/badge/STEP_01-Confirm_ZRAM_swap_is_active-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Confirm ZRAM swap is active"/>
+<img src="https://img.shields.io/badge/STEP_01-Confirm_ZRAM_swap_is_active-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Confirm ZRAM swap is active"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -41,7 +41,7 @@ A `/dev/zram0` line with type `partition`, size `2G`, and priority `100`. If `sw
 ZRAM swap is active. The Pi effectively has ~2 GB of compressed swap on top of its physical RAM, with no SD-card wear.
 
 <a id="2-install-the-kiosk-packages"></a>
-<img src="https://img.shields.io/badge/STEP_02-Install_the_kiosk_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Install the kiosk packages"/>
+<img src="https://img.shields.io/badge/STEP_02-Install_the_kiosk_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Install the kiosk packages"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -108,7 +108,7 @@ All five requested packages in the `Installing:` list, around 215 dependencies, 
 The full kiosk software stack is on disk. Nothing is configured or running yet; every piece still needs wiring up in the following steps.
 
 <a id="3-enable-console-autologin"></a>
-<img src="https://img.shields.io/badge/STEP_03-Enable_console_autologin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Enable console autologin"/>
+<img src="https://img.shields.io/badge/STEP_03-Enable_console_autologin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Enable console autologin"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -146,7 +146,7 @@ A `[Service]` section with exactly these three lines. The first `ExecStart=` on 
 tty1 will autologin as `framelink` at the next boot. No password prompt on the console.
 
 <a id="4-start-labwc-on-tty1-after-autologin"></a>
-<img src="https://img.shields.io/badge/STEP_04-Start_labwc_on_tty1_after_autologin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Start labwc on tty1 after autologin"/>
+<img src="https://img.shields.io/badge/STEP_04-Start_labwc_on_tty1_after_autologin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Start labwc on tty1 after autologin"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -196,7 +196,7 @@ The echoed `~/.bash_profile` matches the heredoc byte-for-byte: the profile-sour
 When framelink autologs in on tty1 at the next boot, bash will source `~/.profile` and then `exec labwc`. Nothing is running yet; this takes effect on the reboot in step 8.
 
 <a id="5-create-the-chromium-systemd-user-service"></a>
-<img src="https://img.shields.io/badge/STEP_05-Create_the_Chromium_systemd_user_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Create the Chromium systemd user service"/>
+<img src="https://img.shields.io/badge/STEP_05-Create_the_Chromium_systemd_user_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Create the Chromium systemd user service"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -281,7 +281,7 @@ The `Created symlink` line confirms `systemctl --user enable` wrote the target-w
 The kiosk service is enabled and will start automatically when `default.target` is reached in the framelink user session. It is not running yet; the autostart in step 6 fires it once labwc is up.
 
 <a id="6-create-the-labwc-autostart"></a>
-<img src="https://img.shields.io/badge/STEP_06-Create_the_labwc_autostart-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Create the labwc autostart"/>
+<img src="https://img.shields.io/badge/STEP_06-Create_the_labwc_autostart-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Create the labwc autostart"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -326,7 +326,7 @@ The `ls` line must show permissions starting `-rwx` (the owner's executable bit 
 When labwc starts on the next boot it will rotate the DSI output to landscape and start the Chromium service in one motion. The full autostart chain is wired but not yet fired.
 
 <a id="7-map-touch-input-to-the-rotated-dsi-output"></a>
-<img src="https://img.shields.io/badge/STEP_07-Map_touch_input_to_the_rotated_DSI_output-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Map touch input to the rotated DSI output"/>
+<img src="https://img.shields.io/badge/STEP_07-Map_touch_input_to_the_rotated_DSI_output-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Map touch input to the rotated DSI output"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -370,7 +370,7 @@ The echoed XML matches the heredoc byte-for-byte: XML declaration, opening `<lab
 Touch input is configured to follow the rotated DSI-2 output. Takes effect on the next labwc start, alongside the rest of the autostart chain.
 
 <a id="8-reboot-to-fire-the-whole-autostart-chain"></a>
-<img src="https://img.shields.io/badge/STEP_08-Reboot_to_fire_the_whole_autostart_chain-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 — Reboot to fire the whole autostart chain"/>
+<img src="https://img.shields.io/badge/STEP_08-Reboot_to_fire_the_whole_autostart_chain-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 08 - Reboot to fire the whole autostart chain"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -405,7 +405,7 @@ The workstation-side "Connection ... closed by remote host." message confirms th
 The Pi is rebooting.
 
 <a id="9-verify-the-kiosk-came-up"></a>
-<img src="https://img.shields.io/badge/STEP_09-Verify_the_kiosk_came_up-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 — Verify the kiosk came up"/>
+<img src="https://img.shields.io/badge/STEP_09-Verify_the_kiosk_came_up-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 09 - Verify the kiosk came up"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

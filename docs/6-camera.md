@@ -1,11 +1,11 @@
-# Software Build Guide 06 — Camera (libcamera → PipeWire → desktop portal)
+# Software Build Guide 06 - Camera (libcamera → PipeWire → desktop portal)
 
 Make the Pi Camera Module 3 available to Chromium's `getUserMedia()` using Raspberry Pi OS's modern camera path: libcamera → PipeWire → the desktop portal. PipeWire and WirePlumber are already running on the base image (they are Pi OS Trixie's audio stack), so this guide adds the desktop portal that Chromium requests a camera through, points it at the labwc session, pre-authorizes camera access so the unattended kiosk never blocks on a permission dialog, and then builds the camera itself: a small always-on service captures the Pi Camera at its full field of view and publishes it into PipeWire as a single camera named `FrameLinkCam`, while WirePlumber's own camera-finding is switched off so that node is the only camera Chromium can ever see. The Chromium flag that selects this camera path (`--enable-features=UsePipeWireCamera`) was set when the kiosk service was created in [guide 5 step 5](5-kiosk-base.md#5-create-the-chromium-systemd-user-service); this guide makes the camera that flag points at actually exist. This is the feed the app from [guide 10](10-spa.md) publishes into every call as H.264 1080p30.
 
 ---
 
 <a id="1-install-the-camera-packages"></a>
-<img src="https://img.shields.io/badge/STEP_01-Install_the_camera_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 — Install the camera packages"/>
+<img src="https://img.shields.io/badge/STEP_01-Install_the_camera_packages-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 01 - Install the camera packages"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -48,7 +48,7 @@ A `Setting up ...` line for each of the six named packages, each completing with
 The portal Chromium asks a camera through is installed, and every building block of the camera service (the pipeline runner, the capture element, and the PipeWire publisher) is on the system. Nothing is wired together yet: the portal still has to be pointed at this device's session, and the camera node itself does not exist until step 5.
 
 <a id="2-point-the-desktop-portal-at-the-labwc-session"></a>
-<img src="https://img.shields.io/badge/STEP_02-Point_the_desktop_portal_at_the_labwc_session-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Point the desktop portal at the labwc session"/>
+<img src="https://img.shields.io/badge/STEP_02-Point_the_desktop_portal_at_the_labwc_session-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 - Point the desktop portal at the labwc session"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -91,7 +91,7 @@ systemctl --user restart xdg-desktop-portal
 The portal now knows it is running under labwc and offers the Camera interface that Chromium needs. The camera is not yet authorized for unattended use; that is the next step.
 
 <a id="3-pre-authorize-camera-access-for-the-kiosk"></a>
-<img src="https://img.shields.io/badge/STEP_03-Pre--authorize_camera_access_for_the_kiosk-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Pre-authorize camera access for the kiosk"/>
+<img src="https://img.shields.io/badge/STEP_03-Pre--authorize_camera_access_for_the_kiosk-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 - Pre-authorize camera access for the kiosk"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -129,7 +129,7 @@ The `SetPermission` call is silent on success. The `Lookup` line must contain `"
 Camera access is permanently granted for the kiosk. When the frame enters a call, the portal will hand Chromium the camera with no dialog and no human in the loop. The camera itself does not exist yet; building it is the next two steps.
 
 <a id="4-route-the-camera-through-a-dedicated-pipewire-node"></a>
-<img src="https://img.shields.io/badge/STEP_04-Route_the_camera_through_a_dedicated_PipeWire_node-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Route the camera through a dedicated PipeWire node"/>
+<img src="https://img.shields.io/badge/STEP_04-Route_the_camera_through_a_dedicated_PipeWire_node-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 - Route the camera through a dedicated PipeWire node"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -185,7 +185,7 @@ systemctl --user restart wireplumber
 WirePlumber no longer surfaces any camera on its own, so right now the frame deliberately has no camera at all. The next step creates the single camera Chromium will see from now on.
 
 <a id="5-run-the-camera-node-service"></a>
-<img src="https://img.shields.io/badge/STEP_05-Run_the_camera_node_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Run the camera node service"/>
+<img src="https://img.shields.io/badge/STEP_05-Run_the_camera_node_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 - Run the camera node service"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -245,7 +245,7 @@ In the Video section: exactly one entry under `Sources:`, `FrameLinkCam`, and no
 The frame now has exactly one camera: `FrameLinkCam`, full field of view, 1080p at 30 fps, published into PipeWire from boot and revived automatically if it ever dies. What remains is confirming that Chromium's route to it, the portal, is really live.
 
 <a id="6-confirm-the-camera-portal-is-on-the-session-bus"></a>
-<img src="https://img.shields.io/badge/STEP_06-Confirm_the_Camera_portal_is_on_the_session_bus-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Confirm the Camera portal is on the session bus"/>
+<img src="https://img.shields.io/badge/STEP_06-Confirm_the_Camera_portal_is_on_the_session_bus-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 - Confirm the Camera portal is on the session bus"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
@@ -280,7 +280,7 @@ Exactly one line containing `org.freedesktop.portal.Camera` and the word `interf
 The Camera interface Chromium asks through is live on the session bus. The portal, the permission, and the camera source are all in place; only Chromium's own configuration remains to confirm.
 
 <a id="7-confirm-chromium-uses-the-pipewire-camera-path"></a>
-<img src="https://img.shields.io/badge/STEP_07-Confirm_Chromium_uses_the_PipeWire_camera_path-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 — Confirm Chromium uses the PipeWire camera path"/>
+<img src="https://img.shields.io/badge/STEP_07-Confirm_Chromium_uses_the_PipeWire_camera_path-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 07 - Confirm Chromium uses the PipeWire camera path"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 

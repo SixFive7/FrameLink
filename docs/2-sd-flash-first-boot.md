@@ -1,4 +1,4 @@
-# Software Build Guide 02 — SD Card Flashing & First Boot
+# Software Build Guide 02 - SD Card Flashing & First Boot
 
 Flash Raspberry Pi OS Lite (Trixie, 64-bit) onto the microSD card from your workstation, insert it into the assembled Pi, boot, reach a working SSH session, and bring the system fully up to date.
 
