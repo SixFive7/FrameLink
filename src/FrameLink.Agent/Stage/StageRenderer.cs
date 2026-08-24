@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using FrameLink.Agent.Firmware;
+using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.State;
 
@@ -492,11 +493,19 @@ public static class StageRenderer
 
             AddField(lines, string.Empty, ReconcileVoice.ContactLine(status.Contact), inner, colour);
 
-            // §2.7 item 9, and the sentence is chosen from what the agent found rather than from
-            // what was assumed (decision 77). A frame with a touchscreen says how to use it; a
+            // §2.7 item 9, and the sentences are chosen from what the agent found rather than from
+            // what was assumed (decision 77). A frame with a touchscreen explains both gestures; a
             // frame without one — every frame whose panel overlay has not been applied yet — names
             // the Fleet Manager, which is then true rather than a hedge.
-            AddField(lines, string.Empty, ReconcileVoice.RetryLine(status.Touch), inner, colour);
+            //
+            // Deliberately above the technical block: Render truncates the head from the bottom on a
+            // console too short to hold it, so the block that gets dropped first is the one to be
+            // photographed rather than the one telling the person in the room what to do with their
+            // finger (decision 92).
+            foreach (var line in ReconcileVoice.TouchLines(status.Touch))
+            {
+                AddField(lines, string.Empty, line, inner, colour);
+            }
 
             // The technical half, last, because it is the part nobody in the room reads: it is
             // there to be photographed. Every line is already a complete `key: value` pair — the
@@ -549,12 +558,22 @@ public static class StageRenderer
         }
 
         lines.Add(Compose([], inner, colour));
-        lines.Add(BuildActivity(status, now, tick, inner, accent, colour));
+        lines.AddRange(BuildActivity(status, now, tick, inner, accent, colour));
 
         return lines;
     }
 
-    private static string BuildActivity(
+    /// <summary>
+    /// The activity block — one line, or two while a finger is deciding between two verbs.
+    /// </summary>
+    /// <remarks>
+    /// A list rather than a string because of that second line and nothing else (decision 92). The
+    /// bar's tail has room for about twenty characters beside it, which is enough for a word and not
+    /// enough for a sentence — and the sentence is the half that has to say what letting go now
+    /// would do <i>and</i> what holding on would do instead. Squeezing both into the tail would
+    /// truncate exactly the promise the release then has to keep.
+    /// </remarks>
+    private static List<string> BuildActivity(
         AgentStatus status,
         DateTimeOffset now,
         int tick,
@@ -572,6 +591,56 @@ public static class StageRenderer
         // happening, and what moves here is the person's own hold — determinate, measured against
         // the instant being rendered rather than against a tick counter, and gone the moment they
         // lift. Nothing about it claims the reconciler is doing anything.
+        if (status.Touch.HoldingSince is not null && status.Touch.TwoWay)
+        {
+            // Decision 92: one finger, two verbs, and the release is what chooses. So the bar is
+            // not counting down to anything — it is showing where in the gesture the finger has got
+            // to — and the word beside it plus the sentence under it both come from the same
+            // TouchRetryState.Commit the release will consult. A screen that promised one verb and
+            // took the other would be decision 77's defect in words instead of in coordinates.
+            var commit = status.Touch.Commit(now);
+
+            // The tone carries the same fact across a room, before a word has been read: blue is
+            // §2.7's "waiting on a person" and is what this is until the first mark, amber is work
+            // about to happen, and red is the one band a person cannot undo from anywhere.
+            var tone = commit switch
+            {
+                TouchCommit.Shutdown => StagePalette.Red,
+                TouchCommit.Restart => StagePalette.Amber,
+                _ => StagePalette.Blue,
+            };
+
+            var holding = new List<string>(3)
+            {
+                Compose(
+                    [
+                        new Run(Pad("Holding", LabelWidth), StagePalette.Label),
+                        new Run(Bar(status.Touch.Progress(now), barWidth) + "  ", tone),
+                        new Run(ReconcileVoice.HoldBand(commit), tone),
+                    ],
+                    inner,
+                    colour),
+            };
+
+            AddField(holding, string.Empty, ReconcileVoice.HoldPromise(status.Touch, now), inner, colour);
+
+            return holding;
+        }
+
+        return [BuildActivityLine(status, now, tick, inner, accent, colour)];
+    }
+
+    /// <summary>Every activity state that fits on one line, which is all of them but one.</summary>
+    private static string BuildActivityLine(
+        AgentStatus status,
+        DateTimeOffset now,
+        int tick,
+        int inner,
+        int accent,
+        bool colour)
+    {
+        var barWidth = Math.Max(8, inner - 34);
+
         if (status.Touch.HoldingSince is not null)
         {
             var left = Math.Max(0, (int)Math.Ceiling(status.Touch.Remaining(now).TotalSeconds));

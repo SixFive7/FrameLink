@@ -10,22 +10,84 @@ namespace FrameLink.Agent.Hosting;
 public readonly record struct TouchDevice(string Node, string Name);
 
 /// <summary>
+/// <b>What taking a finger off the panel does at the instant it is lifted</b> — the console's two
+/// recovery gestures, resolved to one answer.
+/// </summary>
+/// <remarks>
+/// An enum rather than two booleans, because the three cases are exclusive and the screen has to
+/// name exactly one of them in the words under the bar. A person watching that line is reading
+/// this value.
+/// </remarks>
+public enum TouchCommit
+{
+    /// <summary>
+    /// Nothing at all — the finger has not been down long enough to mean anything yet, which is
+    /// also the whole of how somebody changes their mind.
+    /// </summary>
+    Nothing,
+
+    /// <summary>Restart the frame and try everything again.</summary>
+    Restart,
+
+    /// <summary>Switch the frame off, and it stays off until somebody is standing at it.</summary>
+    Shutdown,
+}
+
+/// <summary>
 /// What the frame's own screen can do about a resource that has given up — §2.7 item 9.
 /// </summary>
 /// <param name="Device">The evdev node being read, or null when this frame has no touchscreen.</param>
-/// <param name="Hold">How long a finger has to stay down for a retry.</param>
+/// <param name="Hold">
+/// How long a finger has to stay down for the whole gesture — the length the bar fills over, which
+/// for the two-way recovery hold is the <i>shutdown</i> mark rather than the restart one.
+/// </param>
 /// <param name="HoldingSince">
 /// When the finger now on the screen went down, or null when nothing is being held. Published
 /// rather than a remaining time, so the console and the browser compose the same countdown from
 /// the same snapshot and neither has to be woken to keep it moving.
 /// </param>
-public readonly record struct TouchRetryState(string? Device, TimeSpan Hold, DateTimeOffset? HoldingSince)
+/// <param name="RestartAt">
+/// <b>The earlier of the two marks, or null when this hold means only one thing (decision 92).</b>
+/// </param>
+/// <remarks>
+/// <para>
+/// <b>Two marks on one gesture, and the second one is why the first cannot act on its own.</b> A
+/// hold that restarted the frame the instant it reached three seconds could never reach ten, so
+/// two hold lengths on one finger force the decision to the moment the finger comes <i>off</i>.
+/// That is not a preference: it is the only arrangement in which both lengths are reachable.
+/// </para>
+/// <para>
+/// <b>Which is also what gives the gesture a way out.</b> Nothing happens while the finger is
+/// down, so the first band — everything before <paramref name="RestartAt"/> — is a real "I have
+/// changed my mind": take the finger off and the frame does nothing at all. No timer takes an
+/// action and no timer withdraws one; the finger decides, always.
+/// </para>
+/// <para>
+/// <b>Null means the single-meaning hold, which is the firmware question.</b> That one fires while
+/// the finger is still down, at <paramref name="Hold"/>, because it has one answer and waiting for
+/// a release would leave a person holding a full bar wondering what else was wanted. So
+/// <see cref="Commit"/> never commits anything for that shape, and the renderer tells the two
+/// apart by this field rather than by guessing from the duration.
+/// </para>
+/// </remarks>
+public readonly record struct TouchRetryState(
+    string? Device,
+    TimeSpan Hold,
+    DateTimeOffset? HoldingSince,
+    TimeSpan? RestartAt = null)
 {
     /// <summary>A frame with no touchscreen found, which is every machine that is not a frame.</summary>
     public static TouchRetryState None { get; } = new(null, TimeSpan.FromSeconds(3), null);
 
     /// <summary>Whether a retry can be pressed on this frame's own screen.</summary>
     public bool Available => Device is { Length: > 0 };
+
+    /// <summary>Whether this hold has two marks, so a release is what decides.</summary>
+    public bool TwoWay => RestartAt is { Ticks: > 0 };
+
+    /// <summary>How long the finger now on the screen has been down, or zero.</summary>
+    public TimeSpan Elapsed(DateTimeOffset now) =>
+        HoldingSince is not { } since || now < since ? TimeSpan.Zero : now - since;
 
     /// <summary>How far through the hold the finger on the screen has got, from 0 to 1.</summary>
     public double Progress(DateTimeOffset now) =>
@@ -38,6 +100,30 @@ public readonly record struct TouchRetryState(string? Device, TimeSpan Hold, Dat
         HoldingSince is not { } since
             ? Hold
             : Hold - (now - since) is { Ticks: > 0 } left ? left : TimeSpan.Zero;
+
+    /// <summary>
+    /// What taking the finger off at <paramref name="now"/> would do.
+    /// </summary>
+    /// <remarks>
+    /// <b>One place, both readers.</b> The watch asks this on the release edge to decide what to
+    /// call, and the renderer asks it every repaint to decide what to promise — so the sentence
+    /// under the bar and the thing that then happens are the same decision rather than two
+    /// implementations of it. A hold with one mark commits nothing here on purpose: it has already
+    /// acted, or it is not finished.
+    /// </remarks>
+    public TouchCommit Commit(DateTimeOffset now)
+    {
+        if (!TwoWay || HoldingSince is null)
+        {
+            return TouchCommit.Nothing;
+        }
+
+        var elapsed = Elapsed(now);
+
+        return elapsed >= Hold ? TouchCommit.Shutdown
+            : elapsed >= RestartAt!.Value ? TouchCommit.Restart
+            : TouchCommit.Nothing;
+    }
 }
 
 /// <summary>A source of finger-down and finger-up, opened once and drained.</summary>

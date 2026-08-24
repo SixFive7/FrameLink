@@ -192,38 +192,83 @@ public sealed class AgentTouchRetryTests
     }
 
     [Fact]
-    public void A_hold_asks_for_a_retry_once_and_a_tap_never_does()
+    public void Nothing_happens_while_the_finger_is_down_however_long_it_stays_there()
     {
-        // §2.7 item 9. A tap would fire on a brush past the frame or on somebody wiping it clean,
-        // and what it fires is a retry that starts a frame rebooting. Three seconds is deliberate
-        // in a way a tap cannot be.
+        // Decision 92, and the property everything else about this gesture rests on. A hold that
+        // restarted the frame the instant it reached three seconds could never reach ten, so two
+        // hold lengths on one finger force the decision to the release. Nothing acts before then —
+        // not at three seconds, not at ten, not at thirty.
         var harness = new TouchHarness();
 
         harness.Down();
-        harness.Advance(TimeSpan.FromSeconds(1));
+        harness.Advance(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
+
+        // And the screen is still showing the hold, because the finger is still there.
+        Assert.NotNull(harness.Hub.Current.Touch.HoldingSince);
+    }
+
+    [Fact]
+    public void A_tap_and_a_short_hold_are_how_somebody_changes_their_mind()
+    {
+        // The first band is the whole of the way out of a gesture that has no cancel button and no
+        // coordinates to put one at: take the finger off before the first mark and the frame does
+        // nothing at all. It is also what makes a brush past the frame or somebody wiping it clean
+        // harmless, which is the accident §2.7 item 9 rejected a tap over in the first place.
+        var harness = new TouchHarness();
+
+        harness.Down();
         harness.Up();
         harness.Tick();
 
-        Assert.Equal(0, harness.Retries);
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
 
         harness.Down();
-        harness.Advance(TouchRetry.HoldDuration - TimeSpan.FromMilliseconds(50));
-        Assert.Equal(0, harness.Retries);
-
-        harness.Advance(TimeSpan.FromMilliseconds(100));
-        Assert.Equal(1, harness.Retries);
-
-        // Once per hold, however long the finger stays down. A retry per poll would be twenty
-        // budget resets a second for as long as somebody leant on the screen.
-        harness.Advance(TimeSpan.FromSeconds(10));
-        Assert.Equal(1, harness.Retries);
-
-        // And releasing arms it again, so a second fault can be retried without a reboot.
+        harness.Advance(TouchRetry.RestartHold - TimeSpan.FromMilliseconds(100));
         harness.Up();
         harness.Tick();
+
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
+    }
+
+    [Fact]
+    public void Letting_go_after_three_seconds_restarts_and_letting_go_after_ten_switches_off()
+    {
+        // The two verbs §2.5 rung 5 puts side by side as buttons on the browser stage, as two
+        // lengths of the one gesture the console can read. Each fires once per press: a release is
+        // a single edge, and the hold is forgotten at it.
+        var harness = new TouchHarness();
+
         harness.Down();
-        harness.Advance(TouchRetry.HoldDuration);
-        Assert.Equal(2, harness.Retries);
+        harness.Advance(TouchRetry.RestartHold);
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
+
+        harness.Down();
+        harness.Advance(TouchRetry.ShutdownHold);
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Restarts);
+        Assert.Equal(1, harness.Shutdowns);
+
+        // Anything past the second mark is still the second mark. Nothing expires and nothing is
+        // withdrawn for holding on too long — there is no third band, because a length that stopped
+        // meaning what the screen said it meant would be the countdown that gives up on its own.
+        harness.Down();
+        harness.Advance(TimeSpan.FromMinutes(2));
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Restarts);
+        Assert.Equal(2, harness.Shutdowns);
     }
 
     [Fact]
@@ -232,23 +277,28 @@ public sealed class AgentTouchRetryTests
         // The screen only invites a hold when there is a budget to reset (§2.7 item 9), so a hold
         // when nothing is on offer must be inert — and must not draw a progress bar either, because
         // an indicator that fills and then achieves nothing is exactly the affordance decision 72
-        // refused to ship.
+        // refused to ship. Including at the release, which is where the two verbs now act.
         var harness = new TouchHarness(offered: false);
 
         harness.Down();
-        harness.Advance(TouchRetry.HoldDuration * 2);
+        harness.Advance(TouchRetry.ShutdownHold * 2);
 
-        Assert.Equal(0, harness.Retries);
         Assert.Null(harness.Hub.Current.Touch.HoldingSince);
+
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
     }
 
     [Fact]
     public void The_hold_publishes_when_it_starts_and_stops_and_at_no_other_time()
     {
         // Twenty polls a second against a hub every subscriber repaints on would be twenty console
-        // frames a second for a screen where nothing is happening. The remaining seconds are worked
-        // out by the renderer from the instant it is rendering, which is what keeps it a pure
-        // function and what keeps this quiet.
+        // frames a second for a screen where nothing is happening. The band and the seconds still to
+        // go are worked out by the renderer from the instant it is rendering, which is what keeps it
+        // a pure function and what keeps this quiet.
         var harness = new TouchHarness();
         var atStart = harness.Publishes;
 
@@ -260,11 +310,20 @@ public sealed class AgentTouchRetryTests
 
         Assert.NotNull(harness.Hub.Current.Touch.HoldingSince);
 
-        // Firing ends the hold on screen: the frame is about to start working again, and a bar that
-        // stayed would be the animation decision 70 forbids.
-        harness.Advance(TouchRetry.HoldDuration);
-        Assert.Equal(1, harness.Retries);
+        // Still one publish eight seconds in, having crossed the first mark on the way: the bar
+        // moving and the words under it changing are both composed by the renderer, so crossing a
+        // band costs nothing on the wire.
+        harness.Advance(TimeSpan.FromSeconds(7));
+        Assert.Equal(atStart + 1, harness.Publishes);
+
+        // The release ends the hold on screen and is the one thing that acts. A bar that stayed
+        // would be the animation decision 70 forbids.
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(atStart + 2, harness.Publishes);
         Assert.Null(harness.Hub.Current.Touch.HoldingSince);
+        Assert.Equal(1, harness.Restarts);
     }
 
     [Fact]
@@ -274,7 +333,8 @@ public sealed class AgentTouchRetryTests
 
         Assert.False(harness.Watch.EnsureOpen());
         Assert.False(harness.Hub.Current.Touch.Available);
-        Assert.Equal(0, harness.Retries);
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
     }
 
     [Fact]
@@ -297,32 +357,74 @@ public sealed class AgentTouchRetryTests
     }
 
     [Fact]
-    public void The_console_offers_the_hold_when_there_is_a_touchscreen_and_names_the_server_when_there_is_not()
+    public void The_console_explains_both_gestures_and_names_the_server_when_there_is_no_touchscreen()
     {
-        // Decision 77, and the whole point of it: the sentence is chosen from what the agent found
-        // rather than from what was assumed.
+        // Decision 77, and the whole point of it: the sentences are chosen from what the agent
+        // found rather than from what was assumed. Decision 92 adds the second verb, and names
+        // *both* buttons in the no-touchscreen case — a sentence naming only the restart would
+        // leave somebody who wanted the frame off believing there was nowhere to do it.
         Assert.Equal(
-            "This frame has no touchscreen — the button that restarts it and tries again is in the Fleet Manager.",
-            ReconcileVoice.RetryLine(TouchRetryState.None));
+            [
+                "This frame has no touchscreen, so nothing can be pressed on this screen. The buttons that "
+                + "restart it and switch it off are in the Fleet Manager.",
+            ],
+            ReconcileVoice.TouchLines(TouchRetryState.None));
 
+        var lines = ReconcileVoice.TouchLines(Panel);
+
+        // Five sentences, in the order somebody who has never used a touchscreen needs them: that
+        // the glass responds at all, where to look to see the frame noticed, the way out *before*
+        // either verb, then the two verbs, cheapest first.
+        Assert.Equal(5, lines.Count);
         Assert.Equal(
-            "Touch the screen and hold for 3 seconds to restart this frame and try again.",
-            ReconcileVoice.RetryLine(new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(3), null)));
+            "This screen feels your finger. Put one finger anywhere on it and keep it still. Do not tap the "
+            + "screen, and do not take your finger off straight away.",
+            lines[0]);
+        Assert.Equal(
+            "While your finger rests there a bar fills up near the bottom of this box, and the line under the "
+            + "bar always says what would happen if you took your finger off at that moment. Nothing happens "
+            + "while your finger is still on the screen.",
+            lines[1]);
+        Assert.Equal(
+            "Take your finger off in the first 3 seconds and nothing happens at all. That is how you change "
+            + "your mind.",
+            lines[2]);
+        Assert.Equal(
+            "Keep your finger there for 3 seconds, then take it off: this frame restarts and tries everything "
+            + "again. The screen goes dark for about a minute and then comes back on its own.",
+            lines[3]);
+
+        // The one line that has to state a cost rather than a name: nothing remote brings a frame
+        // back, so the sentence says who has to walk over to it and what they have to do there.
+        Assert.Equal(
+            "Keep your finger there for 10 seconds instead, then take it off: this frame switches off and "
+            + "stays off. Nothing can switch it on again from anywhere else — somebody has to come to this "
+            + "frame, unplug it and plug it in again.",
+            lines[4]);
+
+        // And a firmware question says none of this: that screen writes its own sentences, and the
+        // hold in front of the person does neither of these two things.
+        Assert.Empty(ReconcileVoice.TouchLines(
+            new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(5), null)));
     }
 
     [Fact]
     public void A_stopped_frame_with_a_touchscreen_tells_the_person_in_front_of_it_what_to_do()
     {
         var frame = StageRenderer.Render(
-            Stopped with { Touch = new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(3), null) },
+            Stopped with { Touch = Panel },
             DateTimeOffset.UnixEpoch,
             tick: 0,
             160,
             40,
             colour: false);
 
-        Assert.Contains("Touch the screen and hold for 3 seconds to restart this frame and try again.", frame, StringComparison.Ordinal);
-        Assert.DoesNotContain("is in the Fleet Manager", frame, StringComparison.Ordinal);
+        Assert.Contains("This screen feels your finger.", frame, StringComparison.Ordinal);
+        Assert.Contains("nothing happens at all. That is how you change your mind.", frame, StringComparison.Ordinal);
+        Assert.Contains("3 seconds, then take it off: this frame restarts", frame, StringComparison.Ordinal);
+        Assert.Contains("10 seconds instead, then take it off: this frame switches off", frame, StringComparison.Ordinal);
+        Assert.Contains("unplug it and plug it in again", frame, StringComparison.Ordinal);
+        Assert.DoesNotContain("are in the Fleet Manager", frame, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -330,39 +432,116 @@ public sealed class AgentTouchRetryTests
     {
         // The honest half of decision 72 survives, and is now true of the frame that prints it: a
         // frame whose panel overlay has not been applied yet really has no touchscreen, and on that
-        // frame the Fleet Manager really is where the button is.
+        // frame the Fleet Manager really is where both buttons are.
         var frame = StageRenderer.Render(Stopped, DateTimeOffset.UnixEpoch, tick: 0, 160, 40, colour: false);
 
-        Assert.Contains("the button that restarts it and tries again is in the Fleet Manager", frame, StringComparison.Ordinal);
-        Assert.DoesNotContain("hold for", frame, StringComparison.Ordinal);
+        Assert.Contains(
+            "The buttons that restart it and switch it off are in the Fleet Manager",
+            frame,
+            StringComparison.Ordinal);
+
+        Assert.DoesNotContain("Keep your finger there", frame, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void A_hold_in_progress_is_counted_down_on_screen_rather_than_left_to_guess_at()
+    public void A_hold_in_progress_says_what_letting_go_would_do_and_what_holding_on_would_do()
     {
-        // Somebody holding a screen for three seconds with nothing happening lets go at two and
-        // concludes the frame is dead. The bar is determinate and measured against the instant
-        // being rendered, so it is a report of the person's own finger rather than the animation
-        // decision 70 forbids.
+        // Somebody holding a screen with nothing happening lets go at two seconds and concludes the
+        // frame is dead. So the bar is determinate and measured against the instant being rendered
+        // — a report of the person's own finger rather than the animation decision 70 forbids — and
+        // the line under it always names the band the release is in *and* the next one, because
+        // "nothing happens" on its own reads as a screen that has not noticed.
         var began = DateTimeOffset.UnixEpoch;
-        var status = Stopped with
-        {
-            Touch = new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(3), began),
-        };
+        var status = Stopped with { Touch = Panel with { HoldingSince = began } };
 
-        var early = StageRenderer.Render(status, began + TimeSpan.FromSeconds(1), 0, 160, 40, colour: false);
-        var late = StageRenderer.Render(status, began + TimeSpan.FromSeconds(2.5), 0, 160, 40, colour: false);
+        string At(double seconds) =>
+            StageRenderer.Render(status, began + TimeSpan.FromSeconds(seconds), 0, 160, 40, colour: false);
 
-        Assert.Contains("keep holding — 2s", early, StringComparison.Ordinal);
-        Assert.Contains("keep holding — 1s", late, StringComparison.Ordinal);
+        Assert.Contains("nothing yet", At(1), StringComparison.Ordinal);
+        Assert.Contains(
+            "Take your finger off now and nothing happens. Keep it there for 2 more seconds to restart this frame.",
+            At(1),
+            StringComparison.Ordinal);
+
+        // Rounded up, and never zero: the number is an instruction, so a person told "1 second" at
+        // 1.5 s to go lets go at 1 s and lands back in the band they were trying to leave.
+        Assert.Contains("Keep it there for 2 more seconds to restart", At(1.5), StringComparison.Ordinal);
+        Assert.Contains("Keep it there for 1 more second to restart", At(2.5), StringComparison.Ordinal);
+        Assert.Contains("Keep it there for 1 more second to restart", At(2.99), StringComparison.Ordinal);
+
+        Assert.Contains("restart", At(4), StringComparison.Ordinal);
+        Assert.Contains(
+            "Take your finger off now and this frame restarts and tries everything again. Keep it there for "
+            + "6 more seconds instead and it switches off.",
+            At(4),
+            StringComparison.Ordinal);
+
+        Assert.Contains("switch off", At(11), StringComparison.Ordinal);
+        Assert.Contains(
+            "Take your finger off now and this frame switches off. It stays off until somebody comes to it, "
+            + "unplugs it and plugs it in again.",
+            At(11),
+            StringComparison.Ordinal);
 
         // And only while a finger is actually down. A bar that survived the release would be the
         // animation decision 70 forbids, drawn on the one screen that rule was written for.
-        Assert.DoesNotContain(
-            "keep holding",
-            StageRenderer.Render(Stopped, began, 0, 160, 40, colour: false),
-            StringComparison.Ordinal);
+        var released = StageRenderer.Render(Stopped with { Touch = Panel }, began, 0, 160, 40, colour: false);
+
+        Assert.DoesNotContain("Take your finger off now", released, StringComparison.Ordinal);
+        Assert.DoesNotContain("nothing yet", released, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void The_band_the_screen_promises_is_the_band_the_release_takes()
+    {
+        // The one property that makes the whole gesture honest: the words under the bar and the verb
+        // the release calls come from the same TouchRetryState.Commit, so there is no arrangement of
+        // state in which the frame does something other than what it just said it would do.
+        var began = DateTimeOffset.UnixEpoch;
+        var hold = Panel with { HoldingSince = began };
+
+        Assert.Equal(TouchCommit.Nothing, hold.Commit(began));
+        Assert.Equal(TouchCommit.Nothing, hold.Commit(began + TimeSpan.FromSeconds(2.999)));
+        Assert.Equal(TouchCommit.Restart, hold.Commit(began + TouchRetry.RestartHold));
+        Assert.Equal(TouchCommit.Restart, hold.Commit(began + TimeSpan.FromSeconds(9.999)));
+        Assert.Equal(TouchCommit.Shutdown, hold.Commit(began + TouchRetry.ShutdownHold));
+        Assert.Equal(TouchCommit.Shutdown, hold.Commit(began + TimeSpan.FromHours(1)));
+
+        // A hold with one mark commits nothing on a release, whatever its length: it has already
+        // acted while the finger was down, or it is not finished.
+        var question = new TouchRetryState("/dev/input/event4", TimeSpan.FromSeconds(5), began);
+
+        Assert.False(question.TwoWay);
+        Assert.Equal(TouchCommit.Nothing, question.Commit(began + TimeSpan.FromMinutes(1)));
+
+        // And a frame with nothing on the glass has nothing to commit.
+        Assert.Equal(TouchCommit.Nothing, Panel.Commit(began + TimeSpan.FromMinutes(1)));
+
+        Assert.Equal("nothing yet", ReconcileVoice.HoldBand(TouchCommit.Nothing));
+        Assert.Equal("restart", ReconcileVoice.HoldBand(TouchCommit.Restart));
+        Assert.Equal("switch off", ReconcileVoice.HoldBand(TouchCommit.Shutdown));
+    }
+
+    [Fact]
+    public void The_bar_fills_over_the_whole_gesture_so_the_first_mark_is_visibly_not_the_end()
+    {
+        // The bar is the frame saying it noticed, and it fills over the *shutdown* length. Filling
+        // it over three seconds and then leaving it full for seven more would tell somebody the
+        // gesture was finished at exactly the moment they still had a decision to make.
+        var began = DateTimeOffset.UnixEpoch;
+        var hold = Panel with { HoldingSince = began };
+
+        Assert.Equal(0.3, hold.Progress(began + TouchRetry.RestartHold), 3);
+        Assert.Equal(1, hold.Progress(began + TouchRetry.ShutdownHold), 3);
+        Assert.Equal(1, hold.Progress(began + TimeSpan.FromMinutes(1)), 3);
+    }
+
+    /// <summary>The measured panel, with both marks and nothing being held.</summary>
+    private static TouchRetryState Panel => new(
+        "/dev/input/event4",
+        TouchRetry.ShutdownHold,
+        null,
+        TouchRetry.RestartHold);
 
     // ---------------------------------------------------------------------------------------
     // Decision 91: one reader, two things a hold can mean, and the precedence between them
@@ -383,14 +562,22 @@ public sealed class AgentTouchRetryTests
         harness.Advance(TimeSpan.FromSeconds(3.5));
 
         Assert.Equal(0, harness.Answers);
-        Assert.Equal(0, harness.Retries);
+        Assert.Equal(0, harness.Restarts);
 
         harness.Advance(TimeSpan.FromSeconds(2));
 
         Assert.Equal(1, harness.Answers);
 
-        // And never the retry. The two are not both taken by one hold, however long it is held.
-        Assert.Equal(0, harness.Retries);
+        // And never a recovery verb. The two are not both taken by one hold, however long it is
+        // held — and the release, which is what the recovery pair acts on, is answered by a hold
+        // that has already fired rather than by a second action.
+        harness.Advance(TimeSpan.FromSeconds(20));
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Answers);
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
     }
 
     [Fact]
@@ -407,11 +594,72 @@ public sealed class AgentTouchRetryTests
 
         Assert.Equal(TimeSpan.FromSeconds(5), harness.Watch.State.Hold);
 
+        // And it has one mark, not two, which is how the renderer tells a question from the
+        // recovery pair: a question fires while the finger is down and has nothing to say about a
+        // release.
+        Assert.Null(harness.Watch.State.RestartAt);
+        Assert.False(harness.Watch.State.TwoWay);
+
         harness.Up();
         harness.Ask = null;
         harness.Tick();
 
-        Assert.Equal(TouchRetry.HoldDuration, harness.Watch.State.Hold);
+        Assert.Equal(TouchRetry.ShutdownHold, harness.Watch.State.Hold);
+        Assert.Equal(TouchRetry.RestartHold, harness.Watch.State.RestartAt);
+        Assert.True(harness.Watch.State.TwoWay);
+    }
+
+    [Fact]
+    public void Letting_go_early_under_a_question_does_not_restart_the_frame_instead()
+    {
+        // The sequence this is written for: a firmware screen is up asking for five seconds, and
+        // somebody holds for four and changes their mind. Four seconds is past the restart mark, so
+        // a release that only looked at its own length would restart a frame in the middle of a
+        // question it had just declined to answer — a verb nothing on that screen offered.
+        var harness = new TouchHarness();
+        harness.Ask = harness.FirmwareAsk();
+
+        harness.Down();
+        harness.Advance(TimeSpan.FromSeconds(4));
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(0, harness.Answers);
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
+    }
+
+    [Fact]
+    public void Answering_a_question_and_then_letting_go_does_not_also_restart_the_frame()
+    {
+        // The other half, and the likelier of the two: the hold completes, the question is answered,
+        // the screen it was on goes away — and only then does the finger come off. By that point
+        // there is no ask any more, so the release is looking at a nine-second hold on a frame that
+        // offers a restart at three. It must do nothing: this press has already been spent.
+        var harness = new TouchHarness();
+        harness.Ask = harness.FirmwareAsk();
+
+        harness.Down();
+        harness.Advance(TimeSpan.FromSeconds(5.5));
+
+        Assert.Equal(1, harness.Answers);
+
+        harness.Ask = null;
+        harness.Advance(TimeSpan.FromSeconds(3.5));
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Answers);
+        Assert.Equal(0, harness.Restarts);
+        Assert.Equal(0, harness.Shutdowns);
+
+        // And the next press is a fresh one, so the panel is not left inert by the answer it gave.
+        harness.Down();
+        harness.Advance(TouchRetry.RestartHold);
+        harness.Up();
+        harness.Tick();
+
+        Assert.Equal(1, harness.Restarts);
     }
 
     [Fact]
@@ -476,7 +724,8 @@ public sealed class AgentTouchRetryTests
                 Clock = Clock,
                 Log = Log,
                 Offered = () => Offered,
-                Retry = () => Retries++,
+                Restart = () => Restarts++,
+                Shutdown = () => Shutdowns++,
                 Ask = () => Ask,
             });
 
@@ -500,7 +749,11 @@ public sealed class AgentTouchRetryTests
         /// <summary>Something on the screen that outranks the retry, or null (decision 91).</summary>
         public TouchAsk? Ask { get; set; }
 
-        public int Retries { get; private set; }
+        /// <summary>How many times the shorter hold's action has been taken.</summary>
+        public int Restarts { get; private set; }
+
+        /// <summary>How many times the longer hold's action has been taken.</summary>
+        public int Shutdowns { get; private set; }
 
         /// <summary>How many times the ask's own action has been taken.</summary>
         public int Answers { get; private set; }

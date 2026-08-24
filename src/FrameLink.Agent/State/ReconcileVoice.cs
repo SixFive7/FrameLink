@@ -545,7 +545,8 @@ public static class ReconcileVoice
     }
 
     /// <summary>
-    /// §2.7 item 9 — how to retry at the frame, or where the button is instead.
+    /// §2.7 item 9 — <b>how to restart and how to switch off at the frame</b>, or where the buttons
+    /// are instead (decision 92).
     /// </summary>
     /// <remarks>
     /// <para>
@@ -561,15 +562,148 @@ public static class ReconcileVoice
     /// <para>
     /// <b>Both sentences are still needed and both are now true of the frame that prints them.</b>
     /// A frame whose panel is not up yet — the overlay is 2nd in the catalog and takes a reboot —
-    /// genuinely has no touchscreen, and on that frame the Fleet Manager really is where the button
-    /// is. The sentence is chosen from what the agent found rather than from what was assumed.
+    /// genuinely has no touchscreen, and on that frame the Fleet Manager really is where the buttons
+    /// are. The sentence is chosen from what the agent found rather than from what was assumed.
+    /// </para>
+    /// <para>
+    /// <b>Several lines rather than one, because a gesture nobody understands is worse than a single
+    /// button.</b> This screen is the first thing a new frame shows and the reader may never have
+    /// used a touchscreen: what the words have to establish, in order, is that the glass responds to
+    /// a finger at all, that resting a finger there commits to nothing, where to look to see that
+    /// the frame noticed, which length does which thing, and — first, before either verb — that
+    /// taking the finger off early does nothing at all. The last of those is the whole of the way
+    /// out, so it is said before the two things it is a way out of.
+    /// </para>
+    /// <para>
+    /// <b>The two verbs are stated as their costs, not as their names.</b> "Restarts and tries
+    /// everything again" carries the dark minute the person will otherwise watch and worry about;
+    /// the shutdown line says what nothing else in the product says, which is that no button
+    /// anywhere brings the frame back and somebody has to walk over to it.
     /// </para>
     /// </remarks>
-    public static string RetryLine(TouchRetryState touch) => touch.Available
-        ? string.Create(
-            CultureInfo.InvariantCulture,
-            $"Touch the screen and hold for {(int)touch.Hold.TotalSeconds} seconds to restart this frame and try again.")
-        : "This frame has no touchscreen — the button that restarts it and tries again is in the Fleet Manager.";
+    public static IReadOnlyList<string> TouchLines(TouchRetryState touch)
+    {
+        if (!touch.Available)
+        {
+            // The honest half of decision 72 survives and is now true of the frame that prints it:
+            // a frame whose panel overlay has not been applied yet really has no touchscreen, and
+            // on that frame the Fleet Manager really is where both buttons are. Both, now — a
+            // sentence naming only the restart would leave the reader of a frame they wanted off
+            // believing there was nowhere to do it.
+            return
+            [
+                "This frame has no touchscreen, so nothing can be pressed on this screen. The buttons that "
+                + "restart it and switch it off are in the Fleet Manager.",
+            ];
+        }
+
+        if (!touch.TwoWay)
+        {
+            // A single-meaning hold is a firmware question, and that screen writes its own
+            // sentences (ArrayFlashVoice). Saying anything about restarting or switching off
+            // underneath it would offer two things the hold in front of the person does not do.
+            return [];
+        }
+
+        var restart = ((int)Math.Round(touch.RestartAt!.Value.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+        var shutdown = ((int)Math.Round(touch.Hold.TotalSeconds)).ToString(CultureInfo.InvariantCulture);
+
+        return
+        [
+            "This screen feels your finger. Put one finger anywhere on it and keep it still. Do not tap "
+            + "the screen, and do not take your finger off straight away.",
+
+            "While your finger rests there a bar fills up near the bottom of this box, and the line under "
+            + "the bar always says what would happen if you took your finger off at that moment. Nothing "
+            + "happens while your finger is still on the screen.",
+
+            "Take your finger off in the first " + restart + " seconds and nothing happens at all. That is "
+            + "how you change your mind.",
+
+            "Keep your finger there for " + restart + " seconds, then take it off: this frame restarts and "
+            + "tries everything again. The screen goes dark for about a minute and then comes back on its own.",
+
+            "Keep your finger there for " + shutdown + " seconds instead, then take it off: this frame "
+            + "switches off and stays off. Nothing can switch it on again from anywhere else — somebody has "
+            + "to come to this frame, unplug it and plug it in again.",
+        ];
+    }
+
+    /// <summary>
+    /// The word beside the bar — what letting go right now would do, in as few characters as the
+    /// console has room for.
+    /// </summary>
+    /// <remarks>
+    /// <b>Two lengths of words for one fact, and both are needed.</b> This is the one a person
+    /// glances at while their finger is on the glass and their eye is on the bar; the sentence in
+    /// <see cref="HoldPromise"/> under it is the one they read the first time. Neither is a summary
+    /// of the other — they are the same decision at two reading distances, and both come from
+    /// <see cref="TouchRetryState.Commit"/> so neither can promise something the release will not
+    /// do.
+    /// </remarks>
+    public static string HoldBand(TouchCommit commit) => commit switch
+    {
+        TouchCommit.Restart => "restart",
+        TouchCommit.Shutdown => "switch off",
+        _ => "nothing yet",
+    };
+
+    /// <summary>
+    /// The sentence under the bar — what letting go now would do, and what holding on would do
+    /// instead.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It always names the next band as well as this one.</b> A line saying only "nothing
+    /// happens" would read, to somebody two seconds into their first attempt, as a screen that had
+    /// not noticed them — which is the failure this whole surface exists to prevent, and it is why
+    /// the seconds still to go are said out loud.
+    /// </para>
+    /// <para>
+    /// <b>Nothing here counts down towards an action.</b> The number is how much longer the person
+    /// would have to keep doing what they are already doing, not how long until something happens
+    /// to them: at zero the frame does nothing and waits, exactly as it did at three seconds.
+    /// </para>
+    /// </remarks>
+    public static string HoldPromise(TouchRetryState touch, DateTimeOffset now)
+    {
+        if (!touch.TwoWay || touch.HoldingSince is null)
+        {
+            return string.Empty;
+        }
+
+        var elapsed = touch.Elapsed(now);
+
+        return touch.Commit(now) switch
+        {
+            TouchCommit.Shutdown =>
+                "Take your finger off now and this frame switches off. It stays off until somebody comes to "
+                + "it, unplugs it and plugs it in again.",
+
+            TouchCommit.Restart =>
+                "Take your finger off now and this frame restarts and tries everything again. Keep it there "
+                + "for " + Seconds(touch.Hold - elapsed) + " instead and it switches off.",
+
+            _ =>
+                "Take your finger off now and nothing happens. Keep it there for "
+                + Seconds(touch.RestartAt!.Value - elapsed) + " to restart this frame.",
+        };
+    }
+
+    /// <summary>Whole seconds, rounded up, never below one, with the noun agreeing.</summary>
+    /// <remarks>
+    /// Rounded up rather than down because the number is an instruction: a person told "1 second"
+    /// at 1.4 s to go lets go at 1 s and gets the band they were trying to leave. Never zero, for
+    /// the same reason — "keep it there for 0 more seconds" is not something to ask of anybody.
+    /// </remarks>
+    private static string Seconds(TimeSpan left)
+    {
+        var whole = Math.Max(1, (int)Math.Ceiling(left.TotalSeconds));
+
+        return whole == 1
+            ? "1 more second"
+            : string.Create(CultureInfo.InvariantCulture, $"{whole} more seconds");
+    }
 
     /// <summary>
     /// §2.7 item 8 — who to contact, in one sentence a non-technical reader can act on.
