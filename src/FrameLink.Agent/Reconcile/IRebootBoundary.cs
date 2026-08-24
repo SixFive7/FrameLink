@@ -232,7 +232,16 @@ public sealed class RebootFloor : IRebootBoundary
     /// the history in place would make the retry silently powerless on exactly the frame that has
     /// reached the floor, which is the failure decision 75 records at length.
     /// </remarks>
-    public void Forget() => _journal.Update(state => state with { Reboots = [] });
+    public void Forget()
+    {
+        _journal.Update(state => state with { Reboots = [] });
+
+        // The same person, in the same act, clearing the same kind of doubt: an unreadable journal
+        // is a reason to stop rebooting and a retry is somebody standing at the frame saying try
+        // anyway. Leaving the fault set here would make the button visibly powerless on the one
+        // frame that most needs it, which is the failure decision 75 records at length.
+        _journal.Forgive();
+    }
 
     /// <inheritdoc/>
     public async Task<RebootOutcome> CrossAsync(RebootRequest request, CancellationToken cancellationToken)
@@ -240,6 +249,26 @@ public sealed class RebootFloor : IRebootBoundary
         ArgumentNullException.ThrowIfNull(request);
 
         var now = _clock.UtcNow;
+
+        // A floor that cannot count must not permit. An unreadable journal means the list below is
+        // empty because the record was lost, not because this frame has not rebooted — and an
+        // empty list is indistinguishable from a frame that has taken none, which is precisely the
+        // silent reset this closes. Refusing costs a stalled provision; permitting costs the
+        // unbounded reboot loop §2.4 calls the more damaging of the two, and costs it on a frame
+        // that has already given one hard piece of evidence that its card is failing.
+        if (_journal.Unreadable)
+        {
+            var lost =
+                "this frame could not read its own record of recent reboots, so it has stopped "
+                + "rebooting until that record can be trusted again";
+
+            _log.Fail(
+                $"{request.Resource}: {lost}. Restarting the agent on a journal that parses, or a "
+                + "person pressing retry, gives the reboots back.");
+
+            return new RebootOutcome(RebootCrossing.Refused, lost);
+        }
+
         var recent = Within(_journal.Read().Reboots, now, _window);
 
         if (_limit > 0 && recent.Count >= _limit)

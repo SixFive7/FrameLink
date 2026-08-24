@@ -222,10 +222,23 @@ public sealed record ReconcileJournalState
 /// or an agent that updates itself mid-provision forgets what it was proving.
 /// </para>
 /// <para>
-/// A corrupt or unreadable journal is treated as an empty one. That is deliberately the
-/// forgiving choice: an empty journal costs one extra reconcile pass, because every resource is
-/// simply observed again and the level-triggered loop finds the same drift it found before. A
-/// journal that threw would cost the frame its ability to start.
+/// <b>An unreadable journal is a fault, not an empty journal.</b> Those were the same thing here
+/// once, and the difference is three reboots: an empty journal means every attempt counter is
+/// zero, so a frame that could not read this file awarded itself a fresh budget and a fresh set
+/// of reboots, silently, every time — which is the unbounded reboot loop §2.4 calls "more
+/// damaging than a stalled provision", reached by the mechanism built to prevent it. The
+/// forgiving reading was correct about one thing and wrong about the other: <i>absent</i> really
+/// is an empty journal, because a frame that has never written one has nothing to forget.
+/// <i>Present and unreadable</i> is a frame that has forgotten something.
+/// </para>
+/// <para>
+/// <b>It still cannot cost the frame its ability to start</b>, which is the constraint that
+/// shapes the whole of <see cref="Load"/>: nothing in it throws, whatever the file contains. A
+/// state store that bricks a frame would be worse than the bug it was fixing. So a fault is
+/// loud rather than fatal — it is logged at <see cref="IAgentLog.Fail"/>, the bytes are kept
+/// beside the journal as <c>.unreadable</c> so a post-mortem can still see them, and the
+/// <see cref="Unreadable"/> flag is what refuses the reboot. The frame boots, observes, repairs
+/// what needs no reboot, draws its screen and reports.
 /// </para>
 /// </remarks>
 public sealed class ReconcileJournal
@@ -233,12 +246,25 @@ public sealed class ReconcileJournal
     /// <summary>File name inside the state store.</summary>
     public const string FileName = "reconcile-journal.json";
 
+    /// <summary>
+    /// File the journal's bytes are kept under when they could not be read.
+    /// </summary>
+    /// <remarks>
+    /// The evidence outlives the fault on purpose. The next <see cref="Update"/> overwrites the
+    /// journal with a state this build can serialise, so without this the only trace of what the
+    /// frame actually found would be one log line on a card whose logs may not have survived
+    /// either. It is a fixed name rather than a timestamped one because the interesting copy is
+    /// the latest, and an unbounded family of them on a full card is its own fault.
+    /// </remarks>
+    public const string UnreadableFileName = FileName + ".unreadable";
+
     private readonly IStateStore _store;
     private readonly IAgentLog _log;
     private readonly Lock _gate = new();
 
     private ReconcileJournalState _state = new();
     private bool _loaded;
+    private bool _unreadable;
 
     /// <summary>Creates a journal over <paramref name="store"/>.</summary>
     public ReconcileJournal(IStateStore store, IAgentLog log)
@@ -253,18 +279,66 @@ public sealed class ReconcileJournal
     /// <summary>Where the journal file lives.</summary>
     public string Path => _store.PathOf(FileName);
 
+    /// <summary>Where the bytes of an unreadable journal are kept.</summary>
+    public string UnreadablePath => _store.PathOf(UnreadableFileName);
+
+    /// <summary>
+    /// Whether the state being served came from a journal that was there and could not be read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>What every counter in this file being zero actually means.</b> A caller cannot tell an
+    /// empty ledger that means "nothing has been attempted" from one that means "this frame has
+    /// forgotten what it attempted", and the two call for opposite behaviour. This is that bit.
+    /// </para>
+    /// <para>
+    /// <b>It stays set for the life of this object, including after a good journal is written.</b>
+    /// Rewriting the file makes the <i>next</i> load clean; it does not recover the history this
+    /// load lost, so this process still cannot count what came before it. Clearing the flag on the
+    /// first successful write would restore exactly the fresh budget the flag exists to withhold —
+    /// the loop writes the journal on every pass, so the fault would clear within a second and
+    /// nothing would ever see it. A frame gets its reboots back when a process starts on a journal
+    /// that parses, or when a person presses retry.
+    /// </para>
+    /// </remarks>
+    public bool Unreadable
+    {
+        get
+        {
+            lock (_gate)
+            {
+                EnsureLoaded();
+                return _unreadable;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Forgets that the journal was unreadable — what a person pressing <b>retry</b> means for the
+    /// fault.
+    /// </summary>
+    /// <remarks>
+    /// <b>The escape hatch, and the reason the fault cannot strand a frame.</b>
+    /// <see cref="Unreadable"/> deliberately does not clear itself, so without this a frame whose
+    /// card hiccuped once would decline to reboot until somebody reached it over SSH — and the
+    /// people who own these frames do not have SSH. A person pressing retry can see the frame and
+    /// has read the reason on it, which is exactly the standing decision 67 already gives them for
+    /// a fresh attempt budget.
+    /// </remarks>
+    public void Forgive()
+    {
+        lock (_gate)
+        {
+            _unreadable = false;
+        }
+    }
+
     /// <summary>Reads the journal, caching it for the life of this object.</summary>
     public ReconcileJournalState Read()
     {
         lock (_gate)
         {
-            if (_loaded)
-            {
-                return _state;
-            }
-
-            _loaded = true;
-            _state = Load();
+            EnsureLoaded();
             return _state;
         }
     }
@@ -276,11 +350,7 @@ public sealed class ReconcileJournal
 
         lock (_gate)
         {
-            if (!_loaded)
-            {
-                _loaded = true;
-                _state = Load();
-            }
+            EnsureLoaded();
 
             var next = update(_state);
             ArgumentNullException.ThrowIfNull(next);
@@ -372,24 +442,114 @@ public sealed class ReconcileJournal
         };
     }
 
+    private void EnsureLoaded()
+    {
+        if (_loaded)
+        {
+            return;
+        }
+
+        _loaded = true;
+        _state = Load();
+    }
+
+    /// <summary>
+    /// The journal on disk, or an empty one — with <see cref="_unreadable"/> set if the empty one
+    /// is a guess rather than the truth.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Nothing in here throws.</b> Every branch ends in a state, because the alternative is a
+    /// frame that will not start because a file will not parse, and that is worse than anything
+    /// this method is defending against.
+    /// </para>
+    /// <para>
+    /// <b>Absent and empty are not the same file, and telling them apart is the whole fix.</b>
+    /// <see cref="IStateStore.ReadText"/> returns null for a file that is not there and
+    /// <c>""</c> for a file that is there and holds nothing, and the old
+    /// <c>IsNullOrWhiteSpace</c> collapsed the two into "start from nothing". That mattered more
+    /// than the malformed-JSON case it was written for: the write this replaced was
+    /// <c>File.WriteAllText</c>, which <i>truncates before it writes</i>, so the single most
+    /// likely thing a power cut left behind was a zero-length journal — and a zero-length journal
+    /// took the silent branch. No exception, no log line, every counter zero, three more reboots.
+    /// </para>
+    /// </remarks>
     private ReconcileJournalState Load()
     {
-        var text = _store.ReadText(FileName);
-        if (string.IsNullOrWhiteSpace(text))
+        string? text;
+        try
         {
+            text = _store.ReadText(FileName);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Not readable at all — a dying card, a mode somebody changed. There is nothing to
+            // quarantine because there are no bytes, and it is still a fault rather than a fresh
+            // frame. Previously this threw straight out of the reconcile loop's task.
+            return Faulted($"it could not be opened ({exception.Message})", quarantine: null);
+        }
+
+        if (text is null)
+        {
+            // Genuinely absent: this frame has never written one, so there is nothing it could
+            // have forgotten. The only branch that is allowed to be an empty journal.
             return new ReconcileJournalState();
         }
 
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return Faulted("it is there and holds nothing", quarantine: text);
+        }
+
+        ReconcileJournalState? parsed;
         try
         {
-            return Normalise(
-                JsonSerializer.Deserialize(text, AgentJson.Default.ReconcileJournalState)
-                    ?? new ReconcileJournalState());
+            parsed = JsonSerializer.Deserialize(text, AgentJson.Default.ReconcileJournalState);
         }
         catch (JsonException exception)
         {
-            _log.Warn($"The reconcile journal at {Path} could not be read ({exception.Message}); starting from nothing.");
-            return new ReconcileJournalState();
+            return Faulted($"it is not valid JSON ({exception.Message})", quarantine: text);
+        }
+
+        if (parsed is null)
+        {
+            // Well-formed JSON `null`. Nothing this build writes can produce it, so it is a file
+            // that has been damaged or edited rather than a journal, and reading it as an empty
+            // one would be the same silent reset by a narrower door.
+            return Faulted("it parsed as nothing at all", quarantine: text);
+        }
+
+        return Normalise(parsed);
+    }
+
+    private ReconcileJournalState Faulted(string because, string? quarantine)
+    {
+        _unreadable = true;
+
+        var kept = quarantine is not null && Quarantine(quarantine);
+
+        _log.Fail(
+            $"The reconcile journal at {Path} could not be read: {because}. This frame has lost its "
+            + "record of what it has already attempted and how recently it has rebooted, so it will "
+            + "not reboot again until that record can be trusted"
+            + (kept ? $" — the bytes it found are kept at {UnreadablePath}." : "."));
+
+        return new ReconcileJournalState();
+    }
+
+    private bool Quarantine(string text)
+    {
+        try
+        {
+            _store.WriteText(UnreadableFileName, text);
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Keeping the evidence is worth a try and never worth a throw. The fault is already
+            // being reported; losing the copy makes the post-mortem harder, not the frame worse.
+            _log.Warn($"The unreadable journal could not be kept at {UnreadablePath}: {exception.Message}");
+            return false;
         }
     }
 
