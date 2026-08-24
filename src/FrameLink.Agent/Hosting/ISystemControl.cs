@@ -44,7 +44,13 @@ public sealed class SystemdControl : ISystemControl
     {
         ArgumentNullException.ThrowIfNull(arguments);
 
-        var result = await _processes.RunAsync(Executable, arguments, cancellationToken).ConfigureAwait(false);
+        // Every command through here is systemctl, so the deadline is the same one every time and
+        // belongs here rather than at sixty call sites. ProcessDeadline.Service is derived from
+        // systemd's own DefaultTimeoutStartSec: a job it has not finished in 90 seconds is one it is
+        // itself about to fail, so two minutes cannot fire on a job that was about to answer.
+        var result = await _processes
+            .RunAsync(Executable, arguments, ProcessDeadline.Service, cancellationToken)
+            .ConfigureAwait(false);
         return new SystemControlResult(result.Succeeded, result.Combined.Trim());
     }
 }

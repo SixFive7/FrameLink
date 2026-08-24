@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using FrameLink.Agent.Hosting;
+using FrameLink.Agent.Resources;
 
 namespace FrameLink.Tests;
 
@@ -405,6 +406,85 @@ public sealed class AgentProcessDeadlineTests
         Assert.Equal([ProcessDeadline.PackageChange, ProcessDeadline.Local], runner.Deadlines);
     }
 
+    [Fact]
+    public async Task Every_systemctl_call_is_bounded_by_systemds_own_job_timeout()
+    {
+        var runner = new DeadlineRecordingRunner();
+        var systemd = new SystemdControl(runner);
+
+        await systemd.RunAsync(["restart", "chromium-kiosk.service"], TestContext.Current.CancellationToken);
+
+        // One deadline for the whole adapter rather than one per caller: everything through here is
+        // systemctl, so the cost profile is the adapter's and not the call site's.
+        Assert.Equal([ProcessDeadline.Service], runner.Deadlines);
+    }
+
+    [Fact]
+    public async Task A_user_scope_command_is_bounded_and_so_is_the_lookup_in_front_of_it()
+    {
+        var runner = new DeadlineRecordingRunner();
+        runner.Answers["id -u framelink"] = new ProcessResult(0, "1000", string.Empty);
+        var session = new LoginUserSession(runner, () => "framelink");
+
+        await session.RunAsync(
+            "systemctl",
+            ["--user", "is-active", "chromium-kiosk.service"],
+            TestContext.Current.CancellationToken);
+
+        // Two commands, two different questions, two different bounds. `id` reads a local file and
+        // is measured in milliseconds; the runuser wrapper reaches a session bus and a systemd job.
+        // The old code gave both of them for ever.
+        Assert.Equal(
+            [(ProcessDeadline.Local, "id"), (ProcessDeadline.Service, "runuser")],
+            runner.Calls.ConvertAll(call => (call.Deadline, call.Executable)));
+    }
+
+    [Fact]
+    public async Task Handing_a_file_to_the_login_user_is_bounded()
+    {
+        var runner = new DeadlineRecordingRunner();
+        var session = new LoginUserSession(runner, () => "framelink");
+
+        await session.GiveToUserAsync("/home/framelink/.config/labwc/autostart", TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(runner.Calls);
+        Assert.All(runner.Calls, call => Assert.Equal(ProcessDeadline.Local, call.Deadline));
+        Assert.All(runner.Calls, call => Assert.Equal("chown", call.Executable));
+    }
+
+    [Fact]
+    public async Task Talking_to_the_microphone_array_is_bounded_by_the_bus_and_not_by_the_transaction()
+    {
+        var runner = new DeadlineRecordingRunner();
+        var tool = new XvfHost(new MemorySystemFiles(), runner, new FakeUserSession());
+
+        await tool.RunAsync("/opt/framelink", [XvfHost.VersionCommand], TestContext.Current.CancellationToken);
+
+        // The transaction is a sub-second control transfer. What the deadline allows for is an array
+        // that has just been reset and is re-enumerating on the bus.
+        Assert.Equal([ProcessDeadline.Array], runner.Deadlines);
+    }
+
+    [Fact]
+    public async Task Reading_what_is_installed_is_bounded_tightly_and_changing_it_is_not()
+    {
+        var runner = new DeadlineRecordingRunner();
+        var apt = new AptPackages(runner);
+
+        await apt.ListInstalledAsync(TestContext.Current.CancellationToken);
+        Assert.Equal([ProcessDeadline.Local], runner.Deadlines);
+
+        runner.Calls.Clear();
+        await apt.InstallAsync("chromium", TestContext.Current.CancellationToken);
+
+        // <b>The asymmetry the operator asked for, in one test.</b> Querying the package database is
+        // a local read and gets thirty seconds; changing it downloads over the household's
+        // connection and gets an hour, because a false timeout here would kill an apt mid-dpkg and
+        // leave a state the agent cannot repair from.
+        Assert.Contains(ProcessDeadline.PackageChange, runner.Deadlines);
+        Assert.DoesNotContain(ProcessDeadline.Local, runner.Deadlines);
+    }
+
     /// <summary>A runner with no notion of time, which is every double in the suite.</summary>
     private sealed class DeadlineBlindRunner : IProcessRunner
     {
@@ -415,16 +495,40 @@ public sealed class AgentProcessDeadlineTests
             Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
     }
 
-    /// <summary>A runner that records what each call site asked for.</summary>
+    /// <summary>What one call site asked for.</summary>
+    private readonly record struct RecordedCall(string Executable, string Line, TimeSpan Deadline);
+
+    /// <summary>
+    /// A runner that records what each call site asked for.
+    /// </summary>
+    /// <remarks>
+    /// <b>It overrides the deadline-bearing overload</b>, which is the arrangement that makes "did
+    /// this call site choose the right bound?" an assertion rather than a code review. A double that
+    /// only implemented the older overload would see the deadline discarded by the interface's
+    /// default and could never tell a right choice from no choice at all.
+    /// </remarks>
     private sealed class DeadlineRecordingRunner : IProcessRunner
     {
-        public List<TimeSpan> Deadlines { get; } = [];
+        /// <summary>
+        /// What a call site that has not chosen a deadline records as.
+        /// </summary>
+        /// <remarks>
+        /// A value no real call site uses, so a test asserting a deadline fails loudly rather than
+        /// quietly matching whatever a transitional overload happens to pass.
+        /// </remarks>
+        private static readonly TimeSpan Unchosen = TimeSpan.FromTicks(1);
+
+        public List<RecordedCall> Calls { get; } = [];
+
+        public Dictionary<string, ProcessResult> Answers { get; } = new(StringComparer.Ordinal);
+
+        public List<TimeSpan> Deadlines => Calls.ConvertAll(call => call.Deadline);
 
         public Task<ProcessResult> RunAsync(
             string executable,
             IReadOnlyList<string> arguments,
             CancellationToken cancellationToken) =>
-            Task.FromResult(new ProcessResult(0, string.Empty, string.Empty));
+            RunAsync(executable, arguments, Unchosen, cancellationToken);
 
         public Task<ProcessResult> RunAsync(
             string executable,
@@ -432,9 +536,16 @@ public sealed class AgentProcessDeadlineTests
             TimeSpan deadline,
             CancellationToken cancellationToken)
         {
-            Deadlines.Add(deadline);
-            return RunAsync(executable, arguments, cancellationToken);
+            var line = ProcessResultLine(executable, arguments);
+            Calls.Add(new RecordedCall(executable, line, deadline));
+
+            return Task.FromResult(Answers.TryGetValue(line, out var scripted)
+                ? scripted
+                : new ProcessResult(0, string.Empty, string.Empty));
         }
+
+        private static string ProcessResultLine(string executable, IReadOnlyList<string> arguments) =>
+            arguments.Count == 0 ? executable : executable + " " + string.Join(' ', arguments);
     }
 
     // ---- the process shapes, per platform -------------------------------------------------

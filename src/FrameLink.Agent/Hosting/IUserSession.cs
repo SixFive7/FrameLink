@@ -195,7 +195,14 @@ public sealed class LoginUserSession : IUserSession
 
         vector.AddRange(arguments);
 
-        return await _processes.RunAsync("runuser", vector, cancellationToken).ConfigureAwait(false);
+        // One deadline for the whole family, because the whole family is the same kind of call:
+        // systemctl --user, busctl, wpctl, wlr-randr and loginctl all reach a service manager or a
+        // session bus through runuser, and none of them is cheaper than the systemd job behind it.
+        // The wrapping is also exactly why the kill has to reach a tree — runuser starts env, which
+        // becomes the tool, and the process this holds a handle to is neither of them.
+        return await _processes
+            .RunAsync("runuser", vector, ProcessDeadline.Service, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc/>
@@ -259,7 +266,9 @@ public sealed class LoginUserSession : IUserSession
 
         foreach (var target in SelfAndAncestors(path, HomeDirectory))
         {
-            await _processes.RunAsync("chown", [owner, target], cancellationToken).ConfigureAwait(false);
+            await _processes
+                .RunAsync("chown", [owner, target], ProcessDeadline.Local, cancellationToken)
+                .ConfigureAwait(false);
         }
     }
 
@@ -312,7 +321,7 @@ public sealed class LoginUserSession : IUserSession
         }
 
         var result = _processes
-            .RunAsync("getent", ["passwd", "1000"], CancellationToken.None)
+            .RunAsync("getent", ["passwd", "1000"], ProcessDeadline.Local, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
 
@@ -339,7 +348,9 @@ public sealed class LoginUserSession : IUserSession
             }
         }
 
-        var result = await _processes.RunAsync("id", ["-u", user], cancellationToken).ConfigureAwait(false);
+        var result = await _processes
+            .RunAsync("id", ["-u", user], ProcessDeadline.Local, cancellationToken)
+            .ConfigureAwait(false);
         if (!result.Succeeded || result.StandardOutput.Trim() is not { Length: > 0 } uid)
         {
             return null;

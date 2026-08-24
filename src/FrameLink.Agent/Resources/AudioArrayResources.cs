@@ -692,7 +692,9 @@ public sealed class XvfHost
 
         try
         {
-            return await _processes.RunAsync("env", vector, cancellationToken).ConfigureAwait(false);
+            return await _processes
+                .RunAsync("env", vector, ProcessDeadline.Array, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

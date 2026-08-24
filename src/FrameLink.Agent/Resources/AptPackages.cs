@@ -238,7 +238,7 @@ public sealed class AptPackages
         ArgumentException.ThrowIfNullOrWhiteSpace(package);
 
         var result = await _processes
-            .RunAsync(DpkgQuery, ["-W", QueryFormat, package], cancellationToken)
+            .RunAsync(DpkgQuery, ["-W", QueryFormat, package], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         if (!result.Succeeded)
@@ -281,7 +281,7 @@ public sealed class AptPackages
     public async Task<IReadOnlyDictionary<string, string>> ListInstalledAsync(CancellationToken cancellationToken)
     {
         var result = await _processes
-            .RunAsync(DpkgQuery, ["-W", ListFormat], cancellationToken)
+            .RunAsync(DpkgQuery, ["-W", ListFormat], ProcessDeadline.Local, cancellationToken)
             .ConfigureAwait(false);
 
         return result.Succeeded ? ParseList(result.StandardOutput) : ReadOnlyEmpty;
@@ -538,7 +538,14 @@ public sealed class AptPackages
         string[] arguments = [NoninteractiveFrontend, AptGet, .. aptArguments];
         var command = Env + " " + string.Join(' ', arguments);
 
-        var result = await _processes.RunAsync(Env, arguments, cancellationToken).ConfigureAwait(false);
+        // <b>The one deadline in the agent that is deliberately late.</b> This downloads over the
+        // household's own connection and then runs maintainer scripts, so its healthy duration is
+        // genuinely unbounded — and killing it mid-transaction leaves dpkg half-configured, which is
+        // a worse state than the hang and one the agent cannot repair from. An hour turns "never"
+        // into a number without ever being the thing that broke a working upgrade.
+        var result = await _processes
+            .RunAsync(Env, arguments, ProcessDeadline.PackageChange, cancellationToken)
+            .ConfigureAwait(false);
         var detail = Summarise(result.Combined);
         var diagnosis = Classify(result.Combined);
 
