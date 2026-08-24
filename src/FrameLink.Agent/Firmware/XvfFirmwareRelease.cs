@@ -102,10 +102,27 @@ public readonly record struct XvfFirmwareImage(
 /// anyone has tried.
 /// </para>
 /// <para>
-/// <b>Fetched, never vendored</b>, on decision 63's reasoning unchanged: the upstream repository
-/// carries no licence file at all, so redistribution is unlicensed. Upstream's own warning that a
-/// GitHub "save as" corrupts these files is answered by fetching the raw path and checking the
-/// digest, which is a stronger check than the warning asks for.
+/// <b>The target is vendored and embedded; the other two are still fetched.</b> The bytes of
+/// <c>respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin</c> are in this repository under
+/// <c>vendor/respeaker-xvf3800/</c> and compiled into this binary, so a frame that has an agent has
+/// the firmware and can flash with no network at all — which is the whole reason the vendoring
+/// happened, since the one operation on a frame that cannot be undone should not depend on a route
+/// to GitHub. <see cref="XvfVendoredFirmware"/> is the accessor and
+/// <c>vendor/respeaker-xvf3800/NOTICE.md</c> records where the bytes came from, unmodified, and
+/// what they hash to. The v2.0.6 fallback and <c>4mb_all_ff.bin</c> are <i>not</i> vendored;
+/// whether they join it is an open question the operator has not answered, and until it is answered
+/// a flash still needs a network on any frame that has not already fetched them — see
+/// <c>ArrayFirmwareFlash</c>'s recovery-pair pre-flight, which refuses without them.
+/// </para>
+/// <para>
+/// <b>What has not changed is the licence position that produced "fetched, never vendored".</b> The
+/// upstream repository still carries no licence file at all, which was decision 63's reasoning for
+/// the control tool and was applied unchanged to these images when they were pinned. The three
+/// <c>upstream-review.json</c> entries record that reasoning, the notice beside the bytes records
+/// the redistribution as it now stands, and neither this file nor the accessor re-decides it.
+/// Upstream's own warning that a GitHub "save as" corrupts these files is answered the same way in
+/// both directions: every byte that reaches the card is hashed against the digest below, whether it
+/// came off the network or out of this executable.
 /// </para>
 /// <para>
 /// <b>Verified live 2026-08-23</b>, and every value below was measured rather than recalled: each
@@ -253,11 +270,22 @@ public enum XvfFirmwareInstallResult
 /// than no flash at all</b>, so this class exists before anything that could perform one.
 /// </para>
 /// <para>
-/// <b>The digest is re-read from disk, never remembered.</b> <see cref="VerifyAsync"/> is called
-/// twice for every flash — once by the resource that keeps the images in sync, and again by the
-/// flash itself in the instant before <c>dfu-util</c> starts — because a record that an install
-/// succeeded would outlive the bytes it describes, and the reader that matters is the one holding
-/// the file open.
+/// <b>The digest is re-read from disk, never remembered</b>, and embedding the bytes makes that
+/// <i>more</i> load-bearing rather than less. <see cref="VerifyAsync"/> is called twice for every
+/// flash — once by the resource that keeps the images in sync, and again by the flash itself in the
+/// instant before <c>dfu-util</c> starts — because a record that an install succeeded would outlive
+/// the bytes it describes, and the reader that matters is the one holding the file open. An image
+/// that came out of this executable has still travelled to a file on an SD card, and everything
+/// that can happen to a file on an SD card can happen to it there: a truncated write, a power cut
+/// between the copy and the flash, a hand staging something else over it. Neither on-disk check is
+/// derivable from anything the binary knows about itself.
+/// </para>
+/// <para>
+/// <b>Where the bytes come from is chosen per image, and the card cannot tell.</b>
+/// <see cref="XvfVendoredFirmware"/> answers for whatever this build carries and
+/// <see cref="VerifiedFetch"/> for the rest, but both funnel through one length bound, one digest
+/// comparison and one fsync-then-rename — so an installed image means exactly what it meant before
+/// anything was embedded, and a frame cannot end up with a weaker guarantee by being offline.
 /// </para>
 /// </remarks>
 public sealed class XvfFirmwareInstaller
@@ -340,14 +368,24 @@ public sealed class XvfFirmwareInstaller
         return faults;
     }
 
-    /// <summary>Fetches, verifies and installs every pinned image that is not already right.</summary>
+    /// <summary>Installs every pinned image that is not already right, from inside this binary
+    /// where it can be and over the network where it cannot.</summary>
+    /// <remarks>
+    /// <b>Embedded first, network second, and the ordering is the guarantee.</b> Sorting on
+    /// <see cref="XvfVendoredFirmware.Carries"/> rather than walking
+    /// <see cref="XvfFirmwarePin.Images"/> in its own order means a frame with no route still
+    /// receives everything this binary carries, whatever order the pin happens to list them in —
+    /// today the target is first and it would work either way, and the day somebody reorders the
+    /// pin it would silently stop working. The sort is stable, so within each group the pin's order
+    /// is kept.
+    /// </remarks>
     public async Task<XvfFirmwareInstallResult> InstallAsync(CancellationToken cancellationToken)
     {
-        var fetched = 0;
+        var installed = 0;
 
         try
         {
-            foreach (var image in Pin.Images)
+            foreach (var image in Pin.Images.OrderBy(image => XvfVendoredFirmware.Carries(image) ? 0 : 1))
             {
                 var path = PathOf(image);
                 _files.EnsureDirectory(path[..path.LastIndexOf('/')]);
@@ -357,22 +395,11 @@ public sealed class XvfFirmwareInstaller
                     continue;
                 }
 
-                var fetch = await VerifiedFetch
-                    .IntoAsync(
-                        _files,
-                        _download,
-                        _log,
-                        Pin.UrlOf(image),
-                        path,
-                        image.Sha256,
-                        image.SizeBytes,
-                        ImageMode,
-                        cancellationToken)
-                    .ConfigureAwait(false);
+                var placed = await PlaceAsync(image, path, cancellationToken).ConfigureAwait(false);
 
-                if (fetch != VerifiedFetchResult.Installed)
+                if (placed != VerifiedFetchResult.Installed)
                 {
-                    return fetch switch
+                    return placed switch
                     {
                         VerifiedFetchResult.Unreachable => XvfFirmwareInstallResult.Unreachable,
                         VerifiedFetchResult.SizeMismatch => XvfFirmwareInstallResult.SizeMismatch,
@@ -380,7 +407,7 @@ public sealed class XvfFirmwareInstaller
                     };
                 }
 
-                fetched++;
+                installed++;
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -389,11 +416,65 @@ public sealed class XvfFirmwareInstaller
             return XvfFirmwareInstallResult.WriteFailed;
         }
 
-        return fetched == 0 ? XvfFirmwareInstallResult.AlreadyInstalled : XvfFirmwareInstallResult.Installed;
+        return installed == 0 ? XvfFirmwareInstallResult.AlreadyInstalled : XvfFirmwareInstallResult.Installed;
     }
 
     /// <summary>How the pin reads in one line, for an observed or expected string.</summary>
     public string Describe() => string.Create(
         CultureInfo.InvariantCulture,
-        $"{Pin.Images.Count} pinned images under {TargetDirectory}, target firmware {Pin.Target.Version} ({Pin.Target.Sha256[..12]})");
+        $"{Pin.Images.Count} pinned images under {TargetDirectory} ({XvfVendoredFirmware.Describe(Pin)}), target firmware {Pin.Target.Version} ({Pin.Target.Sha256[..12]})");
+
+    /// <summary>Puts one image on the card, from this binary if it carries it and over the
+    /// network otherwise.</summary>
+    /// <remarks>
+    /// <b>An embedded copy that fails the digest falls through to the network rather than
+    /// stopping.</b> That can only mean this executable's own resource region is damaged — the
+    /// suite hashes the decompressed resource against the pin at build time, so neither a wrong
+    /// file nor a compressor that disagrees with the decompressor can ship — and the honest
+    /// response to a damaged binary on a frame that does have a network is to fetch the image and
+    /// let the loud refusal <see cref="VerifiedFetch"/> already wrote stand in the journal.
+    /// Refusing outright would turn one corrupt read into a frame that cannot flash at all, which
+    /// is strictly worse and equally silent.
+    /// </remarks>
+    private async Task<VerifiedFetchResult> PlaceAsync(
+        XvfFirmwareImage image,
+        string path,
+        CancellationToken cancellationToken)
+    {
+        var embedded = XvfVendoredFirmware.Open(image);
+
+        if (embedded is not null)
+        {
+            var placed = await VerifiedFetch
+                .FromAsync(
+                    _files,
+                    _log,
+                    embedded,
+                    XvfVendoredFirmware.Origin,
+                    path,
+                    image.Sha256,
+                    image.SizeBytes,
+                    ImageMode,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (placed == VerifiedFetchResult.Installed)
+            {
+                return placed;
+            }
+        }
+
+        return await VerifiedFetch
+            .IntoAsync(
+                _files,
+                _download,
+                _log,
+                Pin.UrlOf(image),
+                path,
+                image.Sha256,
+                image.SizeBytes,
+                ImageMode,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
 }

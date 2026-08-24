@@ -264,7 +264,7 @@ public enum VerifiedFetchResult
 }
 
 /// <summary>
-/// <b>Fetch → verify length and SHA-256 → fsync → atomic rename.</b> One implementation, because
+/// <b>Read → verify length and SHA-256 → fsync → atomic rename.</b> One implementation, because
 /// two would eventually disagree.
 /// </summary>
 /// <remarks>
@@ -276,6 +276,16 @@ public enum VerifiedFetchResult
 /// of this loop with one of those properties quietly missing is exactly the failure the whole pin
 /// exists to prevent, and the copy that would have gone missing is the firmware one — the file that
 /// gets written to a device that has no second chance.
+/// </para>
+/// <para>
+/// <b>The source is a stream and a sentence, never a URL.</b> <see cref="IntoAsync"/> opens an
+/// upstream URL and hands it here; <c>XvfFirmwareInstaller</c> opens
+/// <see cref="Firmware.XvfVendoredFirmware"/>'s copy out of this executable and hands that here.
+/// Both then pass through the same length bound, the same digest comparison and the same fsync and
+/// rename — so \"the bytes on the card are the pinned bytes\" means one thing on this frame, and it
+/// means it whether or not the frame has ever had a network. Keeping the embedded path out of
+/// <see cref="IXvfHostDownload"/> is deliberate: a seam named <i>download</i> that answered from the
+/// binary would make every URL in a log line a guess.
 /// </para>
 /// <para>
 /// The two promises the tail keeps are deliberately different things. <c>rename(2)</c> is atomic
@@ -301,12 +311,8 @@ public static class VerifiedFetch
         UnixFileMode mode,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(download);
-        ArgumentNullException.ThrowIfNull(log);
         ArgumentNullException.ThrowIfNull(url);
-        ArgumentException.ThrowIfNullOrWhiteSpace(path);
-        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
 
         var payload = await download.OpenAsync(url, cancellationToken).ConfigureAwait(false);
 
@@ -315,12 +321,48 @@ public static class VerifiedFetch
             return VerifiedFetchResult.Unreachable;
         }
 
+        return await FromAsync(files, log, payload, url.ToString(), path, sha256, sizeBytes, mode, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Stages <paramref name="payload"/> into <paramref name="path"/> if it is exactly the pinned
+    /// bytes, or refuses. Takes ownership of the stream.
+    /// </summary>
+    /// <param name="files">The filesystem to write through.</param>
+    /// <param name="log">Where a refusal is announced.</param>
+    /// <param name="payload">The bytes, from wherever they came; disposed here either way.</param>
+    /// <param name="origin">Where they came from, as a person would read it in the journal.</param>
+    /// <param name="path">Where they go if they are what the pin says.</param>
+    /// <param name="sha256">What they must hash to.</param>
+    /// <param name="sizeBytes">What they must be the length of, which also bounds the read.</param>
+    /// <param name="mode">The POSIX mode the installed file gets.</param>
+    /// <param name="cancellationToken">Cancels the copy.</param>
+    public static async Task<VerifiedFetchResult> FromAsync(
+        ISystemFiles files,
+        IAgentLog log,
+        Stream payload,
+        string origin,
+        string path,
+        string sha256,
+        long sizeBytes,
+        UnixFileMode mode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(log);
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentException.ThrowIfNullOrWhiteSpace(origin);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sha256);
+
         var name = path[(path.LastIndexOf('/') + 1)..];
         var staging = path + StagingSuffix;
         var resolved = files.Resolve(staging);
 
         long written;
         string digest;
+        string? unreadable = null;
 
         await using (payload.ConfigureAwait(false))
         using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
@@ -329,24 +371,39 @@ public static class VerifiedFetch
             var buffer = new byte[64 * 1024];
             written = 0;
 
-            while (true)
+            try
             {
-                var read = await payload.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
-                if (read == 0)
+                while (true)
                 {
-                    break;
-                }
+                    var read = await payload.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
 
-                written += read;
-                if (written > sizeBytes)
-                {
-                    // A server that keeps sending is not serving the file the pin names, and
-                    // /var/lib/fl-agent is on the card this frame boots from.
-                    break;
-                }
+                    written += read;
+                    if (written > sizeBytes)
+                    {
+                        // A server that keeps sending is not serving the file the pin names, and
+                        // /var/lib/fl-agent is on the card this frame boots from. The embedded
+                        // source needs this bound just as much and for a different reason: those
+                        // bytes arrive through a gzip decoder, and a damaged blob can expand to any
+                        // size at all. This is the ceiling on that.
+                        break;
+                    }
 
-                hash.AppendData(buffer.AsSpan(0, read));
-                await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    hash.AppendData(buffer.AsSpan(0, read));
+                    await target.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (InvalidDataException exception)
+            {
+                // Only a compressed source can raise this, and only by being damaged. It is a
+                // refusal and not a fault: the caller has a network to fall back on, and letting it
+                // out would take down a whole reconcile pass over an image the frame could still
+                // have fetched. Recorded rather than acted on here, so the staging file is deleted
+                // after this block has closed it and not while it is still open.
+                unreadable = exception.Message;
             }
 
             // flushToDisk, not Flush(). The rename below is atomic for a reader; it says nothing
@@ -355,17 +412,23 @@ public static class VerifiedFetch
             digest = Convert.ToHexStringLower(hash.GetHashAndReset());
         }
 
+        if (unreadable is not null)
+        {
+            log.Fail($"{name} rejected: {origin} could not be read — {unreadable}");
+            return Discard(files, staging, VerifiedFetchResult.ChecksumMismatch);
+        }
+
         if (written != sizeBytes)
         {
             log.Fail(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{name} rejected: {written} bytes fetched from {url}, {sizeBytes} expected."));
+                $"{name} rejected: {written} bytes read from {origin}, {sizeBytes} expected."));
             return Discard(files, staging, VerifiedFetchResult.SizeMismatch);
         }
 
         if (!string.Equals(digest, sha256, StringComparison.OrdinalIgnoreCase))
         {
-            log.Fail($"{name} rejected: {url} does not match the pinned digest.");
+            log.Fail($"{name} rejected: {origin} does not match the pinned digest.");
             return Discard(files, staging, VerifiedFetchResult.ChecksumMismatch);
         }
 
@@ -377,7 +440,7 @@ public static class VerifiedFetch
         File.Move(resolved, files.Resolve(path), overwrite: true);
         files.SetMode(path, mode);
 
-        log.Info($"{name} installed at {path} from {url}.");
+        log.Info($"{name} installed at {path} from {origin}.");
         return VerifiedFetchResult.Installed;
     }
 

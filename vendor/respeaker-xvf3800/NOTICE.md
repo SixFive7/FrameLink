@@ -39,12 +39,18 @@ evidence is in [the board-revision reference](../../reference/xvf3800-board-revi
 
 Three reasons, in the order they matter.
 
-**A frame must be able to flash with no network.** The intent is that these bytes are compiled into
-the agent binary as an embedded resource, so a frame that has an agent has the firmware — no GitHub,
-no Fleet Manager, no route to anywhere. The one operation on a frame that cannot be undone remotely
-should depend on nothing outside the executable performing it. **That embedding is not built yet**;
-see the table below for what exists today. Until it does, this directory is a verified copy in the
-repository and nothing more.
+**A frame must be able to flash with no network.** These bytes are compiled into the agent binary as
+an embedded resource, so a frame that has an agent has the firmware — no GitHub, no Fleet Manager, no
+route to anywhere. The one operation on a frame that cannot be undone remotely should depend on
+nothing outside the executable performing it. The agent puts this image on the card from inside
+itself, and only reaches for the network for the two images that are **not** here.
+
+That last sentence is the whole of the caveat, and it is worth stating plainly: **flashing offline
+is not yet possible, because the flash refuses to run without a way back.** The pre-flight in
+`ArrayFirmwareFlash.cs` requires the v2.0.6 fallback and the `4mb_all_ff.bin` erase image on the card
+before it will write anything, and neither is vendored. So today an offline frame reliably *has* the
+target image and still cannot *use* it. Vendoring the other two would close that, and whether to is
+the open question at the end of this notice.
 
 **Upstream has already republished one filename with different contents.**
 `respeaker_xvf3800_usb_dfu_firmware_v2.0.10.bin` exists as two different binaries under one name,
@@ -80,9 +86,10 @@ Both were run on 2026-08-24 and both did.
 
 ## Where this file is used
 
-Two of these exist today and two do not. The table says which, because a notice that describes a
-finished design while half of it is unwritten is worse than no notice — it is the exact fault this
-repository spent a session correcting elsewhere.
+All of these exist. The table stays because it is what made the gap legible while two of the rows
+read **not written**, and a notice that describes a finished design while half of it is unwritten is
+worse than no notice — the exact fault this repository spent a session correcting elsewhere. One row
+is still honest about a limit rather than a gap: the bench flash reads its own copy, not this one.
 
 | Concern | Where it lives | Built? |
 | --- | --- | --- |
@@ -91,14 +98,72 @@ repository spent a session correcting elsewhere.
 | The interlocked write that is allowed to use it | `src/FrameLink.Agent/Firmware/ArrayFirmwareFlash.cs` | yes |
 | The bench flash | `tools/harness/flh/flash.py` | yes, but it does not read this directory yet |
 | The ledger entry a bump goes through | `upstream-review.json` | yes |
-| The embedded copy and how it is opened | `src/FrameLink.Agent/Firmware/XvfVendoredFirmware.cs` | **not written** |
-| The `<EmbeddedResource>` that compiles it into the agent | `src/FrameLink.Agent/FrameLink.Agent.csproj` | **not added** |
+| The embedded copy and how it is opened | `src/FrameLink.Agent/Firmware/XvfVendoredFirmware.cs` | yes |
+| The `<EmbeddedResource>` that compiles it into the agent | `src/FrameLink.Agent/FrameLink.Agent.csproj` | yes |
+| The build-time proof that the embedded bytes are the pinned bytes | `tests/FrameLink.Tests/AgentVendoredFirmwareTests.cs` | yes |
 
-The csproj already embeds `app/**/*.*` with a `LogicalName` transform that collapses path separators,
-because a build on Windows and a build in the arm64 container would otherwise embed different resource
-names. Whatever adds this file will need the same treatment, and that existing block is the pattern to
-copy rather than a second mechanism to invent.
+The csproj embeds this file the same way it embeds `app/**/*.*`: a `LogicalName` transform that
+collapses path separators, because a build on Windows and a build in the arm64 container would
+otherwise embed different resource names and the difference would surface only at runtime, on a
+frame. The glob is `vendor/respeaker-xvf3800/**/*.bin`, so a second image joining this directory
+needs no edit to the csproj and no edit to the accessor.
+
+**What is embedded is gzipped, and the file in this directory is not.** A managed resource is stored
+verbatim, so an earlier build of this same change embedded the image raw and put all 933,888 of its
+bytes contiguously into the linux-arm64 ELF — measured, at offset 7,139,897, hashing to the digest
+above. Every frame in the fleet pulls the agent binary over the hourly update feed on every release,
+so that is close to a megabyte of fleet bandwidth per release for a file that gzip takes to 300,074.
+The build compresses into `obj/`, the resource is named
+`firmware/respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin.gz`, and `XvfVendoredFirmware` decompresses
+on the way to the card. **The bytes in this directory stay exactly what upstream served**, because
+that is the entire claim this notice makes and the only thing the `curl | sha256sum` above can check;
+a committed `.gz` would be a second artifact nobody could verify against upstream without first
+trusting this project's compressor.
+
+Brotli-11 would reach 234,707 — 65,821 better, about 0.6% of the binary. It is not reachable from an
+MSBuild inline task, whose compiler sees a netstandard2.0 reference set with no `BrotliStream` in it,
+and every way around that either cannot resolve the type or breaks the factory's own reference set.
+Buying those bytes means a real task assembly or a compressor added to the build image, which is a
+standing cost in every build on both platforms and an operator's call rather than something to slip
+in.
+
+The whole cost, measured on 2026-08-24 by building the same tree three ways for `linux-arm64`
+Native AOT with one version string, and verified by finding the payload in each ELF rather than by
+trusting the arithmetic:
+
+| Agent binary | Bytes | Delta | Payload in the ELF |
+| --- | ---: | ---: | --- |
+| Without this image | 10,795,360 | — | absent |
+| Image embedded raw | 11,778,808 | +983,448 | 933,888 bytes verbatim at offset 7,139,897 |
+| Image embedded gzipped | **11,123,456** | **+328,096** | 300,074 bytes verbatim at offset 7,140,761 |
+
+The gzip blob was extracted from the shipped ELF, decompressed and hashed: 933,888 bytes,
+`60fee566…`, the digest at the top of this notice. The compressor is deterministic across
+platforms — the Windows build and the arm64 container produced byte-identical `.gz` output — so the
+resource does not depend on where the binary was built any more than its name does.
+
+Both deltas exceed their payload, by 49,560 raw and 28,022 gzipped. That difference is the accessor,
+the install path it feeds and the resource-table entry, not the image; a resource itself is stored
+verbatim, which is what the two "verbatim at offset" readings above establish directly.
 
 Two other images are pinned by this project and are **not** vendored here: the v2.0.6 fallback and
 the `4mb_all_ff.bin` erase image, both still fetched from upstream at their own pinned commits.
-Whether they join this directory is an open question and not an oversight.
+Whether they join this directory is an open question and not an oversight — and, as noted above, it
+is the question that decides whether a frame can flash with no network, because the flash refuses
+without both of them on the card.
+
+Nothing in the code names a file. The csproj globs, `XvfVendoredFirmware` keys on the name the pin
+already carries, and an image that is not embedded falls to the download path it uses today. If the
+answer is yes, the change is: the two files, two rows in the table above, an expectation flipped in
+`AgentVendoredFirmwareTests.cs`, and the three `upstream-review.json` notes. No line of the csproj
+and no line of the accessor.
+
+**Compression makes that decision much cheaper than it looks.** Raw, the two absent images are
+5,128,192 bytes — half again the size of the whole agent. Gzipped, `4mb_all_ff.bin` is **4,098
+bytes**: it is 4,194,304 bytes of repeated `0xFF`, so it very nearly is not there at all. (That
+figure is computed here from the all-`0xFF` content the ledger records having measured byte by byte,
+not from the file, which is not in this repository.) The v2.0.6 fallback is a firmware image of the
+same 933,888 bytes and would land near the target's 300,074, though nobody has measured it because
+its bytes are not here either. So the honest shape of the trade is roughly 300 KB more on every
+agent download, not five megabytes — and it is that 300 KB, not the erase image, that is worth
+weighing.

@@ -68,6 +68,151 @@
     </EmbeddedResource>
   </ItemGroup>
 
+  <!--
+    Decision 91's other half: "a frame that has an agent has the firmware". The DFU images
+    vendored under vendor/respeaker-xvf3800/ travel inside this binary, so the one operation
+    on a frame that cannot be undone depends on nothing outside the executable performing it.
+    vendor/respeaker-xvf3800/NOTICE.md records where the bytes came from and what they hash to.
+
+    Same LogicalName transform as app/** above, for the same reason and not a second mechanism:
+    without it the SDK manufactures `fl-agent.vendor.respeaker-xvf3800.<file>.bin`, and
+    %(RecursiveDir) carries the *host's* separator, so a build on the workstation and a build in
+    the arm64 container would embed different resource names — a difference that would surface
+    only at runtime, on a frame, at the moment somebody wanted to flash. XvfVendoredFirmware
+    normalises again on read, so neither form can reach a lookup.
+
+    A glob rather than one named file, deliberately: the v2.0.6 fallback and the 4mb_all_ff
+    erase image are pinned but NOT vendored, and whether they join this directory is an open
+    question. If they do, they are a `git add` and a ledger entry — not an edit here. Everything
+    below is written per-item so that adding a file changes no line of this project.
+
+    Only *.bin. NOTICE.md sits beside them and is documentation, not payload.
+
+    COMPRESSED, AND BY THE BUILD RATHER THAN IN THE REPOSITORY. A managed resource is stored
+    verbatim: measured 2026-08-24, embedding this image raw put all 933,888 of its bytes contiguously
+    into the linux-arm64 ELF at offset 7,139,897, byte for byte, and the binary grew 983,448. That is
+    the better part of a megabyte every frame in the fleet pulls over §2.8's hourly update feed on
+    every release, for a file that gzip -9 takes to 300,528. So a .gz is what is embedded, and the
+    decompression happens on the way to the card.
+
+    Compressed HERE and not committed compressed, which is the load-bearing half: the file in
+    vendor/ has to stay the bytes upstream served, because that is the entire claim NOTICE.md makes
+    and the only thing a reader can re-derive with curl and sha256sum. A committed .gz would be a
+    second artifact nobody can check against upstream without first trusting this project's
+    compressor. The .gz is therefore intermediate output, regenerated from the vendored bytes by
+    the target below, and never committed.
+
+    GZIP AND NOT BROTLI, WHICH IS A BUILD-TOOLING LIMIT AND NOT A PREFERENCE. Brotli-11 takes the
+    same image to 234,707 — 65,821 better, 0.6% of the binary. It is not reachable from an inline
+    task: RoslynCodeTaskFactory compiles the fragment below against a netstandard2.0 reference set,
+    which has System.IO.Compression but no BrotliStream (.NET Core 2.1+). Naming the shared-framework
+    assembly gets BrotliStream and then dies on CS0012 for `Stream`, because its base type forwards
+    to System.Private.CoreLib, which cannot be referenced; naming the reference assemblies instead
+    replaces System.Runtime under the factory's own reference set and loses `System.Void`. Both were
+    tried. Buying those 65,821 bytes therefore means a real task assembly or a compressor in the
+    build image — a standing cost in every build, on both platforms, and the operator's call rather
+    than a thing to slip in. GZipStream needs nothing at all and delivers 67.8% of the saving.
+
+    Nothing about verification moves. XvfVendoredFirmware hands VerifiedFetch a decompressing
+    stream, and VerifiedFetch checks the same length and the same SHA-256 against the same pin it
+    checks a download against. Compression makes both checks stricter rather than weaker: the digest
+    is now computed over bytes that were *reconstructed* rather than merely copied, and the length
+    bound is the ceiling on a decompression bomb.
+
+    An inline task rather than an `Exec` on a `gzip` binary: the arm64 build image carries clang,
+    zlib and binutils, the test suite builds this same project on Windows where there is no gzip at
+    all, and a build that compresses on one platform and not the other is the class of difference
+    that only shows up at run time. The task runs inside MSBuild, which is the same .NET that
+    compiles this project, everywhere.
+  -->
+  <UsingTask TaskName="GzipCompressFile"
+             TaskFactory="RoslynCodeTaskFactory"
+             AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Using Namespace="System.IO" />
+      <Using Namespace="System.IO.Compression" />
+      <Code Type="Fragment" Language="cs">
+        <![CDATA[
+          // (CompressionLevel)3 is SmallestSize, which GZipStream maps to zlib level 9 and which is
+          // what the 933,888 -> 300,528 above was measured at. Written as a cast rather than by name
+          // because this fragment compiles against netstandard2.0, whose CompressionLevel stops at
+          // Fastest; the value is what reaches the real enum at run time. Optimal would NOT do — it
+          // is zlib level 6 and gives up about 5% of the saving for build time nobody is short of.
+          Directory.CreateDirectory(Path.GetDirectoryName(Destination));
+          using (var source = File.OpenRead(Source))
+          using (var destination = File.Create(Destination))
+          using (var gzip = new GZipStream(destination, (CompressionLevel)3, false))
+          {
+              source.CopyTo(gzip);
+          }
+        ]]>
+      </Code>
+    </Task>
+  </UsingTask>
+
+  <ItemGroup>
+    <VendoredFirmware Include="..\..\vendor\respeaker-xvf3800\**\*.bin">
+      <!-- The host's separator is right here: this is a real path on the machine building. -->
+      <Compressed>$(IntermediateOutputPath)vendored-firmware\%(RecursiveDir)%(Filename)%(Extension).gz</Compressed>
+      <!-- And normalised here, because this one becomes a lookup key inside the binary. The `.gz`
+           is part of the name on purpose: the stored bytes are not a DFU image, and a resource whose
+           name says otherwise is how the next reader gets hurt. -->
+      <LogicalName>firmware/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension).gz</LogicalName>
+      <!--
+        WithCulture=false, and this one is not defensive: without it the build silently produces a
+        binary with no firmware in it. SplitResourcesByCulture runs AssignCulture over every
+        EmbeddedResource, which reads the second-to-last extension as a culture name — and in
+        `respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin.gz` that is `bin`. MSBuild says so in its own
+        words at detailed verbosity: `Culture of "bin" was assigned`. The item is then routed down
+        the satellite-assembly path, LogicalName is discarded, the resource is renamed to
+        `FrameLink.Agent.obj.Release.net10._0.vendored_firmware.…` and never reaches the main
+        assembly. Nothing warns. The build succeeds, -getItem:EmbeddedResource shows the item
+        present and correct, and the only symptom is a frame that cannot find its own firmware.
+
+        The app/** block above is exposed to exactly the same trap and escapes it only by luck of
+        naming — `lit-all.min.js` survives because `min` is not a culture. A file added there as
+        `something.de.js` would vanish the same way.
+      -->
+      <WithCulture>false</WithCulture>
+    </VendoredFirmware>
+  </ItemGroup>
+
+  <!--
+    Two targets rather than one, and the EmbeddedResource added HERE rather than in the ItemGroup
+    above, which is not a style choice: Microsoft.NET.Sdk.DefaultItems.targets is imported at the
+    BOTTOM of this project and ends with `<EmbeddedResource Remove="$(BaseIntermediateOutputPath)/**">`.
+    An item declared at evaluation time that points into obj/ is therefore silently removed after
+    this file has been read — the item dumps fine under -getItem:EmbeddedResource, the .gz is written
+    where it should be, the build succeeds, and the resource is simply absent from the assembly.
+    Adding it from a target puts it in after every Remove has already run.
+
+    BeforeTargets=AssignTargetPaths because that is the first link in PrepareResourceNamesDependsOn:
+    by PrepareResources the manifest names are already assigned, and BeforeTargets on any later
+    target in that chain runs after its own DependsOnTargets and so arrives too late.
+
+    Inputs/Outputs on the compression half only. It is what makes an incremental build skip
+    re-compressing a megabyte; the item still has to be added on every build, which is why the two
+    halves cannot be one target.
+  -->
+  <Target Name="_CompressVendoredFirmware"
+          Inputs="@(VendoredFirmware)"
+          Outputs="@(VendoredFirmware->'%(Compressed)')">
+    <GzipCompressFile Source="%(VendoredFirmware.FullPath)" Destination="%(VendoredFirmware.Compressed)" />
+  </Target>
+
+  <Target Name="EmbedVendoredFirmware"
+          BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="_CompressVendoredFirmware">
+    <!-- Metadata travels through an item transform, so Compressed and LogicalName arrive with it. -->
+    <ItemGroup>
+      <EmbeddedResource Include="@(VendoredFirmware->'%(Compressed)')" />
+    </ItemGroup>
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\FrameLink.Protocol\FrameLink.Protocol.csproj" />
   </ItemGroup>

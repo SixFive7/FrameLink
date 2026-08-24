@@ -137,13 +137,21 @@ repository root at head holds `README.md`, `doc/`, `host_control/`, `python_cont
 `xmos_firmwares/` and nothing else, and the README is 302 bytes and mentions no licence terms.
 
 **Consequences, and this is a legal question rather than a technical one.** There is no grant, so
-redistribution of any file from this repository is unlicensed. That is why this project **fetches
-and verifies rather than vendoring**: `xvf_host` and its five sidecar files, and the three DFU
-images, are downloaded onto a frame at a pinned commit and hash-checked, and not one byte of them is
-committed here. The prebuilt tool additionally appears to be built under XMOS terms that forbid
-making the software available on a standalone basis while expressly permitting shipping it installed
-on devices, which points the same way. Any future proposal to vendor these files is a question for a
-lawyer, not a convenience.
+redistribution of any file from this repository is unlicensed. `xvf_host` and its five sidecar files
+are therefore **fetched and verified rather than vendored**: downloaded onto a frame at a pinned
+commit and hash-checked, with not one byte of them committed here. The prebuilt tool additionally
+appears to be built under XMOS terms that forbid making the software available on a standalone basis
+while expressly permitting shipping it installed on devices, which points the same way.
+
+**One file is now an exception, and the exception is a decision rather than a finding.** On
+2026-08-24 the operator instructed that `respeaker_xvf3800_usb_dfu_firmware_v2.1.0.bin` be committed
+to this repository and compiled into the agent binary, so that a frame can put the image on its own
+card with no network at all — the reasoning being that the one operation on a frame which cannot be
+undone should not depend on a route to GitHub. The bytes are at `vendor/respeaker-xvf3800/` with a
+provenance notice beside them. **Nothing above is retracted by that.** The licence position is
+unchanged and unresolved: there is still no grant, and a proposal to vendor the remaining two DFU
+images — the v2.0.6 fallback and `4mb_all_ff.bin`, both still fetch-only — remains a question for a
+lawyer rather than a convenience.
 
 ## 5. The firmware's own source repository does not exist in public
 
@@ -386,9 +394,12 @@ somewhere in this repository.
 4. **Never assume an unsuffixed filename is the default.** Corroborate from at least the vendor
    documentation, the changelog, and a byte comparison against the suffixed siblings before flashing
    anything. A wrong choice here changes audio topology silently.
-5. **Fetch and verify; never vendor.** No licence exists, so redistribution is unlicensed. Files are
-   downloaded at a pinned commit, hashed against the pin, and re-hashed in the instant before use.
-   Nothing from this upstream is committed to this repository.
+5. **Fetch and verify; vendor only on an explicit instruction.** No licence exists, so
+   redistribution is unlicensed. Files are downloaded at a pinned commit, hashed against the pin,
+   and re-hashed in the instant before use. One exception exists, taken by the operator on
+   2026-08-24 and recorded in section 4: the v2.1.0 DFU image is committed here and embedded in the
+   agent, so an offline frame can hold it. Everything else from this upstream — the control tool,
+   the v2.0.6 fallback and `4mb_all_ff.bin` — is still fetched and nothing else is committed.
 6. **Send no configuration-persisting command.** `SAVE_CONFIGURATION` writes to the array's flash,
    survives reboots, survives re-imaging the card, and is invisible to both the ALSA mixer and
    WirePlumber. Two of the three worst upstream reports follow one. The agent sends it nowhere, and

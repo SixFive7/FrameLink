@@ -1,3 +1,4 @@
+using System.Globalization;
 using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Reconcile;
 using FrameLink.Agent.Hosting;
@@ -11,11 +12,21 @@ namespace FrameLink.Agent.Resources;
 /// <para>
 /// <b>This is a resource; the flash is not</b> (decision 91). What converges here is entirely on
 /// the card: three files exist, each is exactly the pinned bytes, and the Act that repairs that is
-/// a download this frame can always perform when it has a network. It has a real Act that can
-/// succeed, which is the test decision 63 set and decision 90 applied — and unlike a firmware
-/// <i>version</i>, nothing about it depends on hardware anybody has to touch. A frame with a 2.0.6
-/// array and a frame with a 2.1.0 array both reach <see cref="ResourceStatusKind.InSync"/> here,
-/// because the claim is about the images and not about the array.
+/// something this frame can perform. It has a real Act that can succeed, which is the test decision
+/// 63 set and decision 90 applied — and unlike a firmware <i>version</i>, nothing about it depends
+/// on hardware anybody has to touch. A frame with a 2.0.6 array and a frame with a 2.1.0 array both
+/// reach <see cref="ResourceStatusKind.InSync"/> here, because the claim is about the images and
+/// not about the array.
+/// </para>
+/// <para>
+/// <b>The target image needs no network at all; the recovery pair still does.</b> The bytes of the
+/// one image anything may write are compiled into this binary (see
+/// <see cref="XvfVendoredFirmware"/>), so on a frame with no route the Act still puts the target on
+/// the card, verified, and then reports honestly that it could not fetch the other two. That is a
+/// real asymmetry rather than a rounding error: the flash's pre-flight refuses without the recovery
+/// pair, so <i>flashing</i> offline needs those two vendored as well, and whether they join the
+/// target is an open question the operator has not answered. What is settled is that the image is
+/// on the card before anybody wants it, and that getting it there costs no network.
 /// </para>
 /// <para>
 /// <b>It is the prerequisite for every safe flash, which is why it is in the graph and comes
@@ -99,14 +110,21 @@ public sealed class XvfFirmwareImageResource : IResource
         var pin = _installer.Pin;
         var result = await _installer.InstallAsync(cancellationToken).ConfigureAwait(false);
 
-        var change =
-            $"fetch {pin.Images.Count} pinned DFU images from raw.githubusercontent.com/{pin.Owner}/{pin.Repository}, "
-            + $"verify sha256, install into {XvfFirmwareInstaller.TargetDirectory}";
+        var carried = pin.Images.Count(XvfVendoredFirmware.Carries);
+
+        // One sentence with both counts in it rather than a branch per case: the ratio is the
+        // thing a reader wants, it stays true if the other two images are ever vendored too, and
+        // an operator reading an event should not have to know which arrangement this build has.
+        var change = string.Create(
+            CultureInfo.InvariantCulture,
+            $"put {pin.Images.Count} pinned DFU images into {XvfFirmwareInstaller.TargetDirectory} — "
+            + $"{carried} out of this agent's own binary, {pin.Images.Count - carried} fetched from "
+            + $"raw.githubusercontent.com/{pin.Owner}/{pin.Repository} — verifying sha256 on every byte");
 
         return new ResourceAction(
             result is XvfFirmwareInstallResult.Installed or XvfFirmwareInstallResult.AlreadyInstalled
                 ? change
                 : $"{change} (refused: {result})",
-            "Downloading the microphone unit's own software and the files needed to undo a bad update, and checking every byte arrived intact.");
+            "Putting the microphone unit's own software and the files needed to undo a bad update onto this frame, taking what the agent already carries inside itself and downloading the rest, and checking every byte arrived intact.");
     }
 }
