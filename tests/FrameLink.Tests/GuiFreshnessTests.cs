@@ -22,6 +22,9 @@ namespace FrameLink.Tests;
 /// a warning rather than a build break. So the build cannot be the gate. This can: it re-hashes
 /// every path named in <c>gui-build.stamp</c> and needs nothing but the repository, which means
 /// it gives the same verdict on a fresh clone, in CI, and on a machine with no npm at all.
+/// It hashes normalised content rather than raw bytes (see <see cref="Sha256OfContent"/>), so
+/// that verdict is the same whether the checkout landed CRLF or LF — which it was not, until
+/// the three tests below were written to hold it there.
 /// </para>
 /// <para>
 /// If this test is red, run <c>dotnet build src/FrameLink.Control</c> (or <c>npm run build</c>
@@ -32,6 +35,9 @@ public sealed class GuiFreshnessTests
 {
     /// <summary>Where a stamp line's hash ends and its path begins: 64 hex digits, two spaces.</summary>
     private const int PathOffset = 66;
+
+    /// <summary>How many leading bytes decide "is this text?" — git's own binary heuristic.</summary>
+    private const int BinarySniffLength = 8000;
 
     [Fact]
     public void The_committed_bundle_is_the_output_of_the_committed_sources()
@@ -116,6 +122,42 @@ public sealed class GuiFreshnessTests
             "The GUI bundle reaches outside the container:\n" + string.Join('\n', offenders));
     }
 
+    [Fact]
+    public void A_text_file_hashes_the_same_whether_the_checkout_is_CRLF_or_LF()
+    {
+        // The whole point. Hashing raw bytes made the stamp a fact about one person's disk: a
+        // GUI source was committed with a CRLF hash, so the check was green on the machine that
+        // built the bundle and red everywhere else, for a bundle that was perfectly current.
+        var lf = Encoding.UTF8.GetBytes("<script>\n\tlet ready = false;\n</script>\n");
+        var crlf = Encoding.UTF8.GetBytes("<script>\r\n\tlet ready = false;\r\n</script>\r\n");
+
+        Assert.NotEqual(lf.Length, crlf.Length);
+        Assert.Equal(Sha256OfContent(lf), Sha256OfContent(crlf));
+    }
+
+    [Fact]
+    public void A_lone_carriage_return_is_content_and_survives()
+    {
+        // git strips CR only where it precedes LF. Matching that exactly is what makes the bytes
+        // hashed here the bytes git stores, rather than merely close to them.
+        var loneCarriageReturn = Encoding.UTF8.GetBytes("one\rtwo\n");
+        var collapsed = Encoding.UTF8.GetBytes("onetwo\n");
+
+        Assert.NotEqual(Sha256OfContent(loneCarriageReturn), Sha256OfContent(collapsed));
+    }
+
+    [Fact]
+    public void A_binary_file_is_hashed_byte_for_byte()
+    {
+        // Not hypothetical: wwwroot/_app/immutable/assets/inter-latin-ext-wght-normal.DO1Apj_S.woff2
+        // contains the byte pair CR LF. Normalising a font would throw away a difference the stamp
+        // exists to see, so the NUL sniff that keeps binaries raw is load-bearing.
+        byte[] carriageReturnInside = [0x77, 0x4f, 0x46, 0x32, 0x00, 0x0d, 0x0a, 0x01];
+        byte[] withoutIt = [0x77, 0x4f, 0x46, 0x32, 0x00, 0x0a, 0x01];
+
+        Assert.NotEqual(Sha256OfContent(carriageReturnInside), Sha256OfContent(withoutIt));
+    }
+
     /// <summary>Hosts a self-hosted console must never need.</summary>
     private static readonly string[] KnownContentDelivery =
     [
@@ -172,10 +214,39 @@ public sealed class GuiFreshnessTests
     private static string Relative(string project, string file) =>
         Path.GetRelativePath(project, file).Replace('\\', '/');
 
-    private static string Sha256Of(string path)
+    private static string Sha256Of(string path) => Sha256OfContent(File.ReadAllBytes(path));
+
+    /// <summary>
+    /// SHA-256 of a file's <em>content</em>, with the checkout's line-ending convention divided
+    /// out of it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This used to hash the raw bytes, which quietly made the check ask a different question on
+    /// every machine. A working tree holding CRLF — which is what any tool writing "native" line
+    /// endings leaves behind, whatever <c>.gitattributes</c> asked for — hashes differently from
+    /// the same file checked out LF, so <c>gui-build.stamp</c> was only ever valid for the one
+    /// working tree that generated it. It passed for whoever ran the build and failed for
+    /// everybody else, naming files they had never touched. That is indistinguishable from the
+    /// stale bundle this test exists to catch, so hashing raw bytes was worse than merely noisy:
+    /// it spent the check's credibility on an answer about the reader's disk.
+    /// </para>
+    /// <para>
+    /// Stripping CR only where it precedes LF is not an approximation of git's rule, it is git's
+    /// rule. So the bytes hashed here are the bytes git stores in the object database, and the
+    /// stamp is a statement about the committed content rather than about one checkout.
+    /// </para>
+    /// <para>
+    /// Binary files are hashed byte for byte, decided by git's own heuristic: a NUL in the first
+    /// <see cref="BinarySniffLength"/> bytes. That guard is load-bearing rather than decorative —
+    /// one of the three woff2 fonts in <c>wwwroot</c> really does contain the byte pair CR LF, and
+    /// normalising a font would discard a difference the stamp exists to see.
+    /// </para>
+    /// </remarks>
+    internal static string Sha256OfContent(ReadOnlySpan<byte> raw)
     {
-        using var stream = File.OpenRead(path);
-        var hash = SHA256.HashData(stream);
+        ReadOnlySpan<byte> content = LooksBinary(raw) ? raw : WithoutCarriageReturns(raw);
+        var hash = SHA256.HashData(content);
 
         var hex = new StringBuilder(hash.Length * 2);
         foreach (var b in hash)
@@ -184,6 +255,29 @@ public sealed class GuiFreshnessTests
         }
 
         return hex.ToString();
+    }
+
+    /// <summary>git's binary test: a NUL byte anywhere in the leading sniff window.</summary>
+    private static bool LooksBinary(ReadOnlySpan<byte> bytes) =>
+        bytes[..Math.Min(bytes.Length, BinarySniffLength)].IndexOf((byte)0) >= 0;
+
+    /// <summary>CRLF to LF, leaving a lone CR alone — exactly what git's <c>text</c> filter does.</summary>
+    private static byte[] WithoutCarriageReturns(ReadOnlySpan<byte> bytes)
+    {
+        var kept = new byte[bytes.Length];
+        var length = 0;
+
+        for (var i = 0; i < bytes.Length; i++)
+        {
+            if (bytes[i] == (byte)'\r' && i + 1 < bytes.Length && bytes[i + 1] == (byte)'\n')
+            {
+                continue;
+            }
+
+            kept[length++] = bytes[i];
+        }
+
+        return kept[..length];
     }
 
     /// <summary>Walks up from the test binary to the directory holding the solution.</summary>

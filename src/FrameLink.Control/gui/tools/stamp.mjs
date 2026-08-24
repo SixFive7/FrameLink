@@ -22,9 +22,29 @@
  * this file names exactly which GUI files a commit touched, which is the review question
  * anyway.
  *
- * Raw bytes are hashed with no line-ending normalisation, which is safe because
- * `.gitattributes` pins `* text=auto eol=lf`: the working tree is LF on every OS, so the bytes
- * on disk are the bytes in history.
+ * What is hashed is CONTENT, not the bytes on disk. This file used to hash raw bytes on the
+ * reasoning that `.gitattributes` pins `* text=auto eol=lf`, so a working tree is LF on every
+ * OS and the bytes on disk are the bytes in history. The premise is false in practice: git
+ * only controls what it writes at checkout, and any tool that later rewrites a file with
+ * "native" line endings — an editor, a formatter, a script calling Python's `write_text` —
+ * leaves CRLF behind, with `git status` still clean because the CRLF still cleans to the same
+ * LF blob. The stamp then described one person's disk: it was green for whoever ran the build
+ * and red for everyone else, naming GUI files they had never touched. That is precisely the
+ * shape of the stale-bundle failure this whole mechanism exists to make visible, so the check
+ * was spending its credibility on an answer about the reader's checkout.
+ *
+ * So each file is hashed with CRLF collapsed to LF first, and a lone CR left alone — which is
+ * not an approximation of git's `text` filter, it is that filter's rule. The bytes hashed are
+ * therefore the bytes in the object database, and the stamp is a claim about the committed
+ * content rather than about a working tree.
+ *
+ * Binary files are hashed byte for byte, decided by git's own heuristic: a NUL byte in the
+ * first BINARY_SNIFF_LENGTH bytes. That guard earns its place — one of the three woff2 fonts
+ * in `wwwroot` really does contain the byte pair CR LF, and normalising a font would throw
+ * away a difference the stamp exists to see.
+ *
+ * `GuiFreshnessTests.Sha256OfContent` is the same two rules in C#. They have to stay the same
+ * two rules: this writes the manifest, that verifies it, and neither can read the other.
  */
 
 import { createHash } from 'node:crypto';
@@ -67,9 +87,28 @@ async function walk(directory) {
 	return found;
 }
 
+/** How many leading bytes decide "is this text?" — git's own binary heuristic. */
+const BINARY_SNIFF_LENGTH = 8000;
+
+/**
+ * The bytes to hash: a text file's content with CRLF collapsed to LF, a binary file's bytes
+ * untouched. Mirrors `GuiFreshnessTests.Sha256OfContent` byte for byte.
+ */
+function contentOf(bytes) {
+	if (bytes.subarray(0, BINARY_SNIFF_LENGTH).includes(0)) return bytes;
+
+	const kept = Buffer.allocUnsafe(bytes.length);
+	let length = 0;
+	for (let i = 0; i < bytes.length; i++) {
+		if (bytes[i] === 0x0d && bytes[i + 1] === 0x0a) continue;
+		kept[length++] = bytes[i];
+	}
+	return kept.subarray(0, length);
+}
+
 async function hashOf(path) {
 	return createHash('sha256')
-		.update(await readFile(path))
+		.update(contentOf(await readFile(path)))
 		.digest('hex');
 }
 
