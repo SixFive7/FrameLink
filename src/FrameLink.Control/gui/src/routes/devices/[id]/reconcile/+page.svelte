@@ -57,6 +57,7 @@
 	import BlockedTree from '$lib/components/BlockedTree.svelte';
 	import Card from '$lib/components/Card.svelte';
 	import Chip from '$lib/components/Chip.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import Icon from '$lib/components/Icon.svelte';
 	import ResourceRow from '$lib/components/ResourceRow.svelte';
@@ -168,6 +169,47 @@
 		}
 	}
 
+	/**
+	 * The off switch — the one action on this screen that no action on this screen can undo.
+	 *
+	 * Unlike the restart it is *not* gated on the frame having stopped. A restart offered against a
+	 * working frame is a minute of somebody's photographs taken away for nothing, so that one waits
+	 * for a fault; an off switch that only worked on broken frames would be no off switch at all.
+	 *
+	 * It is disabled rather than hidden while the frame is offline, and the disabled state says the
+	 * thing the server cannot resolve either: a frame with no socket is already off or has lost its
+	 * network, and from here those are the same picture. A button that silently did nothing here
+	 * would leave an operator believing a frame in somebody's living room had been switched off.
+	 *
+	 * The acknowledgement is mandatory rather than a second click, for the same reason the
+	 * unattended firmware write's is: accepting the consequence *is* the decision, and a dialog
+	 * dismissable with one click makes the most consequential action on the page the cheapest one.
+	 */
+	let shutdownSaid = $state<string | undefined>(undefined);
+	let shuttingDown = $state(false);
+	let confirmShutdown = $state(false);
+	let shutdownAccepted = $state(false);
+
+	async function shutdown() {
+		if (shuttingDown) return;
+		shuttingDown = true;
+		try {
+			const answer = await api.shutdown(deviceId);
+			shutdownSaid = answer.detail;
+		} catch (error) {
+			// The server's own sentence, including the 409 that means the frame was never reached and
+			// is therefore still on. That is a real answer rather than a failure to hide: the button is
+			// disabled while the frame is offline, so reaching this means the socket died between the
+			// render and the click, and the operator has to be told which of the two happened.
+			shutdownSaid =
+				error instanceof ApiError ? error.message : 'That did not reach the Fleet Manager.';
+		} finally {
+			shuttingDown = false;
+			confirmShutdown = false;
+			shutdownAccepted = false;
+		}
+	}
+
 	async function retry(resource: string) {
 		if (pressing) return;
 		pressing = resource;
@@ -204,6 +246,77 @@
 		if (Object.keys(pressed).length > 0 && !pressing) pressed = {};
 	});
 </script>
+
+<!-- Restart and shut down, defined once and rendered in one of two places. On a frame that has
+     stopped it belongs at the top, because the fault is the headline and these are what an operator
+     does about it. On a frame with nothing wrong the restart half is not drawn at all and the off
+     switch goes to the foot: it is still always available, but a healthy frame's reconcile screen
+     should not open on its own off switch. -->
+{#snippet powerCard()}
+	<section class="restart" in:rise={{ y: 8 }}>
+		<Card tone={stopped ? 'danger' : 'plain'}>
+			{#if stopped}
+				<h3>This frame has stopped and is waiting for a person</h3>
+				<p class="note">
+					It is showing the same two buttons on its own screen, and both of them are here too.
+					Restarting gives every setting that gave up its attempts back and restarts the frame, so
+					it starts again from the top.
+				</p>
+				<div class="fault-action">
+					<button class="retry" disabled={restarting || !reconcile.online} onclick={restart}>
+						<Icon name="refresh" size={15} />
+						{restarting ? 'Asking…' : 'Restart and try again'}
+					</button>
+					{#if !reconcile.online}
+						<p class="retry-note">
+							Unavailable while this frame is offline. Nothing queues a restart, so it has to be
+							asked while the frame is connected — or pressed on the frame itself.
+						</p>
+					{:else if restartSaid}
+						<p class="retry-said" in:collapse>{restartSaid}</p>
+					{:else}
+						<p class="retry-note">
+							The frame goes down as soon as it is asked and comes back in about a minute.
+						</p>
+					{/if}
+				</div>
+			{/if}
+
+			<h3 class:second={stopped}>Switch this frame off</h3>
+			<p class="note">
+				This is the only thing on this page that nothing on this page can undo. A frame that is off
+				holds no connection, so it disappears from this Fleet Manager and no remote action reaches
+				it — not this button, not a restart, not an update. Somebody has to be in the room with it
+				and unplug it and plug it in again.
+			</p>
+			<div class="fault-action">
+				<button
+					class="retry danger"
+					disabled={shuttingDown || !reconcile.online}
+					onclick={() => (confirmShutdown = true)}
+				>
+					<Icon name="power" size={15} />
+					{shuttingDown ? 'Asking…' : 'Shut down'}
+				</button>
+				{#if !reconcile.online}
+					<p class="retry-note">
+						This frame is not connected, so it cannot be asked. It is either already off or it has
+						lost its network, and nothing here can tell which — somebody at the frame is the only
+						way to find out.
+					</p>
+				{:else if shutdownSaid}
+					<p class="retry-said" in:collapse>{shutdownSaid}</p>
+				{:else}
+					<p class="retry-note">
+						Offered whether or not anything is wrong. It goes down as soon as it is asked, unless
+						its microphone unit is having firmware written to it — a frame refuses both power
+						actions during a write, because losing mains in the middle of one destroys that unit.
+					</p>
+				{/if}
+			</div>
+		</Card>
+	</section>
+{/snippet}
 
 <div class="page">
 	<a class="back" href="/devices/{encodeURIComponent(deviceId)}">
@@ -247,37 +360,7 @@
 		{/if}
 	</header>
 
-	{#if stopped}
-		<section class="restart" in:rise={{ y: 8 }}>
-			<Card tone="danger">
-				<h3>This frame has stopped and is waiting for a person</h3>
-				<p class="note">
-					It is showing the same two buttons on its own screen. This is the one of them you can
-					press from here: it gives every setting that gave up its attempts back and restarts the
-					frame, so it starts again from the top. Shutting it down is deliberately not offered
-					here — switching a frame off is a decision for somebody in the room with it.
-				</p>
-				<div class="fault-action">
-					<button class="retry" disabled={restarting || !reconcile.online} onclick={restart}>
-						<Icon name="refresh" size={15} />
-						{restarting ? 'Asking…' : 'Restart and try again'}
-					</button>
-					{#if !reconcile.online}
-						<p class="retry-note">
-							Unavailable while this frame is offline. Nothing queues a restart, so it has to be
-							asked while the frame is connected — or pressed on the frame itself.
-						</p>
-					{:else if restartSaid}
-						<p class="retry-said" in:collapse>{restartSaid}</p>
-					{:else}
-						<p class="retry-note">
-							The frame goes down as soon as it is asked and comes back in about a minute.
-						</p>
-					{/if}
-				</div>
-			</Card>
-		</section>
-	{/if}
+	{#if stopped}{@render powerCard()}{/if}
 
 	{#if reconcile.problem}
 		<div class="banner" role="status" in:rise={{ y: 8 }}>
@@ -557,7 +640,63 @@
 			</Card>
 		</section>
 	{/if}
+
+	{#if !stopped}{@render powerCard()}{/if}
 </div>
+
+<ConfirmDialog
+	bind:open={confirmShutdown}
+	title="Switch this frame off?"
+	confirmLabel="I accept this — switch it off"
+	cancelLabel="No, leave it running"
+	tone="danger"
+	wide
+	busy={shuttingDown}
+	confirmDisabled={!shutdownAccepted}
+	onconfirm={() => void shutdown()}
+	oncancel={() => {
+		confirmShutdown = false;
+		shutdownAccepted = false;
+	}}
+>
+	<!-- The consequence stated as a cost, in the order it lands on somebody: the frame stops, it
+	     leaves this Fleet Manager, nothing here brings it back, a person has to go to it. The
+	     firmware refusal is fourth rather than a footnote, because it is the one case where pressing
+	     the button leaves the frame exactly as it was. -->
+	<ul class="warning">
+		<li>
+			<b>The frame stops.</b> Its photographs, its screen and its calls stop with it, and anyone
+			in the household who was about to use it will find it dark.
+		</li>
+		<li>
+			<b>It disappears from this Fleet Manager and stays gone.</b> A frame that is off holds no
+			connection, so there is nothing here to press, nothing to watch and nothing to report.
+		</li>
+		<li>
+			<b>No remote action brings it back — not this page, not a restart, not an update.</b>
+			Somebody has to be in the room with it, unplug it and plug it in again. If nobody can get to
+			it, it stays off.
+		</li>
+		<li>
+			<b>It may refuse, and that is deliberate.</b> A frame writing firmware to its microphone
+			unit turns both power actions down until the write finishes, because losing mains in the
+			middle of one destroys that unit. If that happens the frame stays on and says what to wait
+			for on its own screen.
+		</li>
+	</ul>
+
+	<p class="scope">
+		It applies to <b>{device?.name ?? deviceId}</b> and to no other frame.
+	</p>
+
+	<label class="accept">
+		<input type="checkbox" bind:checked={shutdownAccepted} />
+		<span>
+			I understand that this frame will go off, that nothing here can bring it back, and that
+			somebody has to be there in person.
+		</span>
+	</label>
+</ConfirmDialog>
 
 <style>
 	.page {
@@ -756,6 +895,53 @@
 		gap: var(--space-2);
 		justify-items: start;
 		margin-top: var(--space-5);
+	}
+
+	.restart h3.second {
+		margin-top: var(--space-6);
+		padding-top: var(--space-5);
+		border-top: 1px solid var(--line);
+	}
+
+	/* The one destructive button on this screen, and the only one that reads as destructive before
+	   it is hovered. Everything else here is a neutral affordance because everything else here is
+	   recoverable. */
+	.retry.danger {
+		border-color: var(--danger-line, var(--line));
+		color: var(--danger-ink, var(--text-1));
+	}
+
+	.retry.danger:hover:not(:disabled) {
+		border-color: var(--danger-ink, var(--accent));
+		color: var(--danger-ink, var(--accent));
+	}
+
+	.warning {
+		margin: 0;
+		padding-left: var(--space-5);
+		display: grid;
+		gap: var(--space-3);
+	}
+
+	.warning b {
+		color: var(--text-1);
+	}
+
+	.scope {
+		margin: var(--space-4) 0 0;
+	}
+
+	.accept {
+		display: flex;
+		align-items: flex-start;
+		gap: var(--space-3);
+		margin-top: var(--space-4);
+		cursor: pointer;
+	}
+
+	.accept input {
+		margin-top: 2px;
+		flex: none;
 	}
 
 	.restart h3 {

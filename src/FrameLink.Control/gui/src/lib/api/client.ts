@@ -226,6 +226,28 @@ export const api = {
 		}),
 
 	/**
+	 * `POST /api/devices/{id}/shutdown` — the frame's off switch, pressed from here.
+	 *
+	 * The one action in this client that no other action can undo. It resets nothing and is offered
+	 * whether or not anything is wrong, because an off switch that only worked on broken frames
+	 * would be no off switch at all.
+	 *
+	 * 409 `offline` is the outcome that matters most anywhere in this file. A frame with no socket
+	 * is either already off or has lost its network and the server cannot tell which, so the answer
+	 * has to reach the operator as the server wrote it — a 200 they read as "it is off now", for a
+	 * frame that is still running in somebody's living room, is the worst thing this endpoint could
+	 * do.
+	 *
+	 * A 200 means the bytes left down a live socket, and not that the frame complied: a firmware
+	 * write in flight refuses both power verbs, because losing mains in the middle of one destroys
+	 * the microphone unit.
+	 */
+	shutdown: (deviceId: string) =>
+		request<RetryResponse>(`/api/devices/${encodeURIComponent(deviceId)}/shutdown`, {
+			method: 'POST'
+		}),
+
+	/**
 	 * `GET /api/packages` — the fleet-wide package comparison.
 	 *
 	 * Answers with *differences*, never with the sets. Ten frames carrying ~930 packages each

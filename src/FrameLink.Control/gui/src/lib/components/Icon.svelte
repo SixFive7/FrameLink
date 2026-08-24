@@ -25,6 +25,12 @@
 		arrowLeft: 'M19 12H5M11 18l-6-6 6-6',
 		chevronRight: 'M9 6l6 6-6 6',
 		refresh: 'M21 12a9 9 0 1 1-2.6-6.4 M21 4v5h-5',
+
+		// IEC 5009, drawn on the same grid as the rest: the broken ring with the vertical stroke
+		// through the gap. It earns a glyph of its own because the one action it labels is the one
+		// nothing in this application can undo, and a slashed circle borrowed from Block would have
+		// it read as "stop this frame talking to us" rather than "switch this frame off".
+		power: 'M7.8 6.3a7 7 0 1 0 8.4 0 M12 3v8',
 		trash: 'M4 7h16M10 11v6M14 11v6 M6 7l1 13h10l1-13 M9 7V4h6v3',
 		alert: 'M12 3 2 20h20L12 3Z M12 9v5M12 17.5v.5',
 		info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18Z M12 11v5M12 8v.5',
