@@ -60,10 +60,20 @@
     config.example.json is excluded on purpose. The five values it templates are now
     Fleet-Manager-supplied and served from /config.json (LocalOrigin); shipping the
     example beside them would give the app a second, stale place to find them.
+
+    WithCulture="false" is not decoration. MSBuild's AssignCulture target reads the segment
+    before the final extension as a culture name, so a file added here as `panel.de.js` would be
+    taken for German, routed to the satellite-assembly path, have its LogicalName discarded and
+    be renamed - and the build would succeed, warn about nothing, and still list the item as
+    present and correct under -getItem:EmbeddedResource. The frame would simply not have the
+    file. This was measured on the vendored firmware block below, where a `.bin.gz` name was
+    eaten exactly that way; this block escaped only because no filename here has yet had a
+    segment that parses as a culture. Naming luck is not a guard, so the guard is written down.
   -->
   <ItemGroup>
     <EmbeddedResource Include="..\..\app\**\*.*"
-                      Exclude="..\..\app\config.example.json;..\..\app\config.json;..\..\app\.gitignore">
+                      Exclude="..\..\app\config.example.json;..\..\app\config.json;..\..\app\.gitignore"
+                      WithCulture="false">
       <LogicalName>app/$([System.String]::Copy('%(RecursiveDir)').Replace('\','/'))%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
   </ItemGroup>
