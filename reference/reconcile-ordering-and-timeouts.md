@@ -634,3 +634,86 @@ legitimate early return, `ScreenHandover` on a machine with no virtual terminals
 cancellation instead of returning, so the rule has no exceptions rather than one.
 
 `IProcessRunner` still has no deadline. That is untouched and remains the largest gap.
+
+---
+
+## Third correction, 2026-08-24 — a dead loop reboots the frame, and what bounds that
+
+**#1, `AttemptBudget` = 3, now bounds a reboot as well as counting one.** A supervised loop that
+ends no longer stands the agent down for `Restart=always` to bring back; attempts one and two
+**reboot the machine**, through the same `IRebootBoundary` chain a resource's reboot crosses
+(`AgentLoopFailures.RestartOrStopAsync`, called from `AgentHost.cs`). So a firmware write in flight
+refuses it (decision 91) and decision 79's floor counts it, with no new vocabulary at the boundary.
+The third attempt is unchanged: no automatic reboot, the stopped screen, no timer.
+
+**The inventory stays at 86 numeric constants.** The new backstop's size is `AttemptBudget` itself
+rather than a number of its own, deliberately: two mechanisms that both decide how many times a
+frame may restart itself must not be able to disagree, and the one that disagreed downwards would
+be the one that mattered.
+
+### Four layers under a restarting frame, and which of them is redundant
+
+| Layer | Where | Bounds | Survives a reboot | Survives an unreadable journal | Survives an unwritable card |
+| --- | --- | --- | :---: | :---: | :---: |
+| `StartLimitBurst=10` / `StartLimitIntervalSec=5min` | the unit, `[Unit]` | process starts | **no** | n/a | n/a |
+| §2.5 attempt ladder | `ReconcileLoop`, `AgentLoopFailures.Record` | failures per resource, 3 | yes | yes, since `ReconcileJournal.Unreadable` | **no** |
+| decision 79 reboot floor | `RebootFloor` | every reboot, 120 in 6 h | yes | yes, refuses while `Unreadable` | **no** |
+| restart allowance | `RebootAllowance` | a frame restarting itself over its own loops, 3 | yes | yes, reads nothing parseable | **yes**, refuses |
+
+**None of the four is redundant, and the reason is that each covers a case the one above it
+structurally cannot.**
+
+1. The **start limit** is the only layer that needs no durable state at all, and it is the only one
+   that bounds a process which dies *before* the agent can record anything — a crash in start-up,
+   an unhandled exception outside the supervised set, a binary that will not run. Nothing inside the
+   agent can bound that, because nothing inside the agent runs. It is also the layer this change
+   costs: its counter lives in the running `systemd`, so a reboot resets it, and moving the
+   loop-death path from a process restart to a machine restart takes it out of that path entirely.
+2. The **ladder** is the diagnosis. It is per-resource, it distinguishes a fault from a fault that
+   has already been repaired, and it is what puts a name and a delta on the screen. It cannot bound
+   a livelock made of successes (decision 79's own argument) and it cannot bound anything at all
+   when its counters will not persist.
+3. The **floor** is device-level and dumb, which is exactly what the ladder is not, and it is the
+   only layer that bounds the *provisioning* reboots — 81 of them on a bare frame — because it is
+   the only one sized for them.
+4. The **allowance** is the only layer that does not read the journal. Two ways a ledger comes back
+   empty are left after `Unreadable`, and neither is a fault its reader can see: **genuinely
+   absent**, which is correctly read as a first boot and is what a wiped state directory, a
+   re-flashed card and a script tidying `/var/lib` all look like; and **readable but unwritable**,
+   where every counter stays honestly at its old value for ever and no read ever throws. The
+   allowance refuses in both, because absence of its own file means *spent* rather than *fresh*, and
+   because a spend it cannot read back afterwards is a spend that did not happen.
+
+**What the allowance is.** `/var/lib/fl-agent/reboot-allowance`, one `#` per remaining automatic
+restart, counted by scanning for that byte and never parsed. Truncated, fewer restarts; garbled,
+fewer, because a byte that is no longer the token stops counting; absent, none; unreadable, none.
+Every corruption of it can only cost the frame restarts, never grant them — so it needs no schema,
+no version field and no upgrade seam, and it is correct whether or not the write that produced it
+was atomic. It is refilled by a process that ran for `ConflictHold` before its loop ended, which is
+the identical test the ladder forgives on, or by a person pressing retry.
+
+**A refused restart ends the ladder where it stands.** Whichever layer refuses, nothing is
+scheduled and the process is parked, so the ledger is written as an ordinary give-up
+(`AgentLoopFailures.Refused`) and every surface downstream behaves as it does on the third attempt.
+The delta carries both halves: which loop stopped, and why the frame did not restart over it.
+
+**The one reset in the agent now clears all three durable layers.** `RebootFloor.Forget()` had no
+caller at all, so decision 79's promise that "a retry grants a fresh window" was not implemented and
+a frame that had reached the floor could not be recovered by the button built for it. The retry path
+in `AgentHost` now calls it, refills the allowance, and then clears the budgets.
+
+### Still unbounded
+
+**A loop that dies just after `ConflictHold`, for ever.** Both the ladder and the allowance forgive
+a process that ran longer than the hold, so a loop that reliably survives five minutes and then dies
+restarts the frame about ten times an hour indefinitely. The floor does not catch it either: 60
+reboots in six hours is under its 120. This is a property of decision 78's forgiveness rule rather
+than of anything added here, and closing it means either a longer hold for this one subject or a
+second, slower window on the allowance — an operator decision, not an implementation detail.
+
+**A loop that never survives the hold gets no automatic restart at all.** The cost of "absence means
+exhausted": a frame whose loop has never once run for five minutes has no allowance to spend, so it
+holds the stopped screen on the first death instead of power-cycling itself three times first. That
+is the right way round — a loop that dies in two seconds every time is not fixed by a reboot — but
+it is a real difference from the three the operator's model describes, and seeding the file at
+install time is the alternative if that matters.

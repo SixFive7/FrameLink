@@ -54,6 +54,17 @@ After=network-online.target
 # It then sits in `failed` with "start request repeated too quickly" in the journal, which is 2.5's
 # "the loop must be willing to give up" and is a far better diagnosis than a silent loop.
 #
+# WHAT IT DOES NOT COVER, which matters more than it used to. This counter lives in the running
+# systemd, so a reboot resets it: these two values bound a process that keeps dying, never a frame
+# that keeps restarting. Every automatic reboot the agent takes is therefore outside them, and a
+# supervised loop that ends is now one of those - attempts one and two reboot the machine rather
+# than standing the process down, so the one protection on that path that needed no durable state
+# is exactly the one this file provides and it no longer applies. What bounds it instead is three
+# layers inside the agent: 2.5's attempt ladder, decision 79's device-level reboot floor, and the
+# restart allowance at /var/lib/fl-agent/reboot-allowance, which is the only one of the three that
+# reads nothing it has to parse. Raising these two numbers cannot substitute for any of them, and
+# lowering them cannot bound what they do not see.
+#
 # Note that StartLimitIntervalSec=0 is not a synonym for "leave it at the default" - it disables
 # rate limiting outright. Relocating that value to [Unit] unchanged would have replaced an
 # accidentally absent brake with a deliberately absent one.
@@ -71,7 +82,8 @@ User=root
 
 # Reconnect discipline is the agent's own job - capped exponential backoff, retry forever (4.1).
 # systemd's restart exists for the process dying, not for the socket dropping, so RestartSec stays
-# short and the start limit above is what stops a dying process from looping.
+# short and the start limit above is what stops a dying process from looping - a dying process and
+# not a rebooting frame, for the reason recorded with those two values.
 Restart=always
 RestartSec=5s
 TimeoutStopSec=15s
