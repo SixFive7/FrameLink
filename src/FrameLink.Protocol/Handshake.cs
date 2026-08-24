@@ -124,4 +124,27 @@ public static class HandshakeStatus
 
     /// <summary>The proof did not verify against the claimed public key.</summary>
     public const string BadSignature = "bad-signature";
+
+    /// <summary>
+    /// The device proved who it is and has spent its own handshake budget for now (§3.3).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A new <i>value</i>, not a new shape. <see cref="HandshakeResult"/> and every other type
+    /// in the frozen set are untouched — §4.2 grows by new kinds and new payload values, and
+    /// these statuses are strings rather than an enum precisely so that one a peer has never
+    /// heard of is reportable instead of fatal.
+    /// </para>
+    /// <para>
+    /// <b>It is the one status that says nothing about the device's state</b>, and that is why
+    /// it exists as its own word instead of being folded into an existing one. Pending, blocked,
+    /// not-configured and version-mismatch are all answers about what the frame <i>is</i>; this
+    /// one is backpressure about what the server is willing to do this minute, and the frame it
+    /// is sent to may well be a perfectly healthy adopted one. An agent must therefore let it
+    /// feed the reconnect backoff and must not let it overwrite what it was last authoritatively
+    /// told — a green frame that is asked to slow down is still a green frame, and §2.6 forbids
+    /// blanking it.
+    /// </para>
+    /// </remarks>
+    public const string RateLimited = "rate-limited";
 }

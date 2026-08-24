@@ -25,12 +25,20 @@ public static class AgentEndpoints
         app.MapGet("/agent/binary/{runtimeIdentifier}", GetBinary);
     }
 
-    /// <summary>The address the rate limiter and the device row are attributed to.</summary>
+    /// <summary>The address unidentified attempts and the device row are attributed to.</summary>
     /// <remarks>
+    /// <para>
     /// Deliberately just the connection's peer. <c>X-Forwarded-For</c> reaches this only when
     /// the operator has named a trusted proxy, in which case <c>UseForwardedHeaders</c> has
     /// already rewritten the connection address — so the header is never read here directly
     /// and can never be used to mint a fresh source address per request.
+    /// </para>
+    /// <para>
+    /// It is not what a frame's handshake budget is charged to. Behind a household NAT, or a
+    /// container's published port, every frame the operator owns arrives as one address, so the
+    /// budget is keyed on the proven keypair instead and this value only bounds traffic that has
+    /// proved nothing (decision 92, <see cref="RegistrationRateLimiter"/>).
+    /// </para>
     /// </remarks>
     public static string? ClientAddress(HttpContext context)
     {
@@ -60,9 +68,12 @@ public static class AgentEndpoints
 
         var address = ClientAddress(context);
 
-        // The budget is spent before the upgrade, so a refused attempt costs one HTTP
-        // response and never reaches the crypto, the database or a socket allocation.
-        if (!limiter.TryAcquire(address))
+        // Nothing has been proved yet, so this is the unidentified budget: spent before the
+        // upgrade, which is what makes a refused attempt cost one HTTP response and never
+        // reach the crypto, the database or a socket allocation. It is provisional — a
+        // handshake that goes on to prove a known device gives it straight back, so a fleet
+        // sharing one NAT does not consume it.
+        if (!limiter.TryAdmitUnidentified(address))
         {
             logger.RateLimited(address);
             return Results.Json(

@@ -60,11 +60,22 @@ public sealed record ControlOptions
     /// Proxy addresses whose <c>X-Forwarded-For</c> is believed.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Empty by default, and that default is a security decision rather than laziness: the
-    /// per-IP rate limiter of §3.3 is the only thing standing between an internet-exposed
-    /// registration path and unbounded noise, and trusting an unauthenticated header would
-    /// let one attacker present a fresh source address per request. Behind Traefik (§3.8)
-    /// the operator names the proxy explicitly.
+    /// address window of §3.3 is what stands between an internet-exposed registration path and
+    /// unbounded anonymous noise, and trusting an unauthenticated header would let one attacker
+    /// present a fresh source address per request. Behind Traefik (§3.8) the operator names the
+    /// proxy explicitly.
+    /// </para>
+    /// <para>
+    /// It is <b>not</b> the answer to a fleet sharing one budget, and reaching for it there was
+    /// the mistake decision 87 records. The agent opens a bare <c>ClientWebSocket</c> and sets
+    /// no forwarded header, so on a container's NAT'd published port there is no header to
+    /// recover an address from and naming the gateway would only let every client on the LAN
+    /// declare its own. That fault is fixed where it belongs, in
+    /// <see cref="Agent.RegistrationRateLimiter"/>, by charging a proven device rather than an
+    /// address.
+    /// </para>
     /// </remarks>
     public IReadOnlyList<string> TrustedProxies { get; init; } = [];
 
@@ -115,10 +126,36 @@ public sealed record ControlOptions
     /// </remarks>
     public TimeSpan TelemetryRetention { get; init; } = TimeSpan.FromDays(31);
 
-    /// <summary>Handshake attempts allowed from one address per <see cref="RateLimitWindow"/>.</summary>
+    /// <summary>
+    /// <i>Unidentified</i> handshake attempts allowed from one address per
+    /// <see cref="RateLimitWindow"/>.
+    /// </summary>
+    /// <remarks>
+    /// This is the budget for traffic that has proved nothing: an anonymous flood, a forged
+    /// proof, and a keypair this Fleet Manager has never met or has not yet adopted. An attempt
+    /// that goes on to prove an identity the operator has acted on is released from this window
+    /// and charged to <see cref="DeviceRateLimitAttempts"/> instead, so a household of healthy
+    /// frames behind one NAT does not spend it (decision 87).
+    /// </remarks>
     public int RateLimitAttempts { get; init; } = 20;
 
-    /// <summary>Width of the per-address rate limiting window (§3.3).</summary>
+    /// <summary>
+    /// Handshake attempts allowed from one <i>device</i> per <see cref="RateLimitWindow"/>.
+    /// </summary>
+    /// <remarks>
+    /// Keyed on the public-key fingerprint, which §3.3 already makes the immutable identity, and
+    /// charged only after the proof verifies — so it is the frame's own budget and no other
+    /// frame can spend it. Generous against §4.1's capped exponential backoff, under which a
+    /// legitimate frame makes a handful of attempts a minute even with a server down; a frame
+    /// that exceeds it is one restarting in a loop, and it is told so rather than dropped.
+    /// </remarks>
+    public int DeviceRateLimitAttempts { get; init; } = 20;
+
+    /// <summary>Width of both rate limiting windows (§3.3).</summary>
+    /// <remarks>
+    /// One width for both, deliberately. Two would mean an operator reading a refusal in the log
+    /// had to work out which clock it was against before knowing when it clears.
+    /// </remarks>
     public TimeSpan RateLimitWindow { get; init; } = TimeSpan.FromMinutes(1);
 
     /// <summary>
@@ -128,6 +165,16 @@ public sealed record ControlOptions
     /// Without it the limiter is itself the memory-exhaustion vector it exists to prevent.
     /// </remarks>
     public int MaxTrackedAddresses { get; init; } = 20_000;
+
+    /// <summary>
+    /// Cap on how many devices the limiter tracks at once.
+    /// </summary>
+    /// <remarks>
+    /// The same ceiling for the same reason, but reaching it means something other than an
+    /// attack: only an identity the operator has adopted or blocked ever enters this dictionary,
+    /// so its size is bounded by the fleet rather than by anything a stranger can send.
+    /// </remarks>
+    public int MaxTrackedDevices { get; init; } = 20_000;
 
     /// <summary>Lifetime of an operator's browser session.</summary>
     public TimeSpan SessionLifetime { get; init; } = TimeSpan.FromHours(12);
@@ -149,6 +196,9 @@ public sealed record ControlOptions
             PendingDeviceCap = ReadInt("FRAMELINK_PENDING_CAP", defaults.PendingDeviceCap),
             PendingDeviceTtl = ReadDays("FRAMELINK_PENDING_TTL_DAYS", defaults.PendingDeviceTtl),
             RateLimitAttempts = ReadInt("FRAMELINK_RATE_LIMIT_ATTEMPTS", defaults.RateLimitAttempts),
+            DeviceRateLimitAttempts = ReadInt(
+                "FRAMELINK_DEVICE_RATE_LIMIT_ATTEMPTS",
+                defaults.DeviceRateLimitAttempts),
         };
 
         static string? Read(string name)

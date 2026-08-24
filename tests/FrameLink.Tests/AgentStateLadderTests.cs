@@ -15,7 +15,17 @@ namespace FrameLink.Tests;
 /// </remarks>
 public sealed class AgentStateLadderTests
 {
-    /// <summary>Every outcome the frozen handshake defines (<c>HandshakeStatus</c>).</summary>
+    /// <summary>
+    /// Every <c>HandshakeStatus</c> that is a verdict about the frame.
+    /// </summary>
+    /// <remarks>
+    /// <c>rate-limited</c> is deliberately absent and its absence is the design, not an oversight
+    /// waiting to be tidied up. §3.3's per-device budget answers a frame "not this minute", which
+    /// is a fact about the server rather than a rung this frame is standing on — so
+    /// <c>HandshakeExchange</c> turns it into a failed exchange and it never reaches the ladder at
+    /// all. Adding it below would break these tests correctly: it has no rung, it is not
+    /// authoritative, and it must not stop the product.
+    /// </remarks>
     private static readonly string[] AllStatuses =
     [
         HandshakeStatus.Ok,

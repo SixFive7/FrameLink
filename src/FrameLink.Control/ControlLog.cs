@@ -48,8 +48,15 @@ internal static partial class ControlLog
     [LoggerMessage(
         EventId = 1102,
         Level = LogLevel.Warning,
-        Message = "Rate limited a device connection from {Address}.")]
+        Message = "Rate limited an unidentified connection from {Address}.")]
     public static partial void RateLimited(this ILogger logger, string? address);
+
+    [LoggerMessage(
+        EventId = 1103,
+        Level = LogLevel.Warning,
+        Message = "Device {DeviceId} from {Address} has spent its own handshake budget for this "
+            + "window. It is being answered 'rate-limited'; no other frame is affected.")]
+    public static partial void DeviceRateLimited(this ILogger logger, string deviceId, string? address);
 
     [LoggerMessage(
         EventId = 1200,

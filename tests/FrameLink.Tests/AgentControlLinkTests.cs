@@ -134,6 +134,58 @@ public sealed class AgentControlLinkTests
     }
 
     [Fact]
+    public async Task A_throttled_frame_keeps_its_photos_and_the_answer_it_was_last_given()
+    {
+        // §3.3's per-device budget, from the frame's side. Being asked to knock less often is not
+        // being told anything about adoption, so a green frame stays green — and stays green
+        // through the outage after it, which is the failure this would otherwise cause: a throttle
+        // recorded as the last authoritative answer makes §2.6's "was it fully green" compute
+        // false, and the photos go off because a server asked for a pause.
+        var green = new RecordingServer(AgentServerScript.Ok());
+        var (hub, _) = await RunAsync(green, attempts: 1);
+        Assert.True(hub.Current.ProductRuns);
+
+        var throttling = new RecordingServer(AgentServerScript.RateLimited());
+        var afterThrottle = await ContinueAsync(throttling, hub, attempts: 3);
+
+        Assert.Equal(HandshakeStatus.Ok, afterThrottle.Current.LastAuthoritative!.Cause);
+        Assert.Equal(DeviceState.NoContact, afterThrottle.Current.Condition.State);
+        Assert.True(afterThrottle.Current.ProductRuns);
+    }
+
+    [Fact]
+    public async Task A_throttle_is_repeated_to_the_reader_in_the_servers_own_words()
+    {
+        // Legible rather than silent: the frame did get an answer, and the sentence the server
+        // chose is the one on the screen. What it is not is a rung of the ladder — §1.2.3 wants
+        // every abnormal state named, and "the server is busy" is not a state this frame is in.
+        var throttling = new RecordingServer(AgentServerScript.RateLimited());
+
+        var (hub, _) = await RunAsync(throttling, attempts: 2);
+
+        Assert.Contains(
+            "reconnected too often",
+            hub.Current.Condition.ServerMessage ?? string.Empty,
+            StringComparison.Ordinal);
+        Assert.Equal(DeviceStateLadder.SilenceCause, hub.Current.Condition.Cause);
+        Assert.Null(hub.Current.LastAuthoritative);
+    }
+
+    [Fact]
+    public async Task A_throttle_pushed_down_a_live_session_is_ignored_rather_than_believed()
+    {
+        // The other door a result can come through. Nothing sends one here today, but a build that
+        // believed it would let a message about knocking replace a message about adoption, and the
+        // frame would go dark mid-session with the socket still open.
+        var server = new RecordingServer(AgentServerScript.Ok("Hallway"), AgentServerScript.RateLimited());
+
+        var (hub, _) = await RunAsync(server, attempts: 1);
+
+        Assert.Equal(HandshakeStatus.Ok, hub.Current.LastAuthoritative!.Cause);
+        Assert.True(hub.Current.ProductRuns);
+    }
+
+    [Fact]
     public async Task A_frame_that_was_never_adopted_shows_nothing_when_the_server_goes_quiet()
     {
         var server = new RecordingServer(AgentServerScript.Pending());

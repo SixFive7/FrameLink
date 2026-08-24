@@ -419,6 +419,16 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                     continue;
                 }
 
+                if (HandshakeExchange.IsThrottle(updated))
+                {
+                    // The same rule as at the handshake, at the other place a verdict can arrive.
+                    // A throttle is not a statement about this frame, so it must not replace one:
+                    // the server has no reason to send it mid-session, and a build that let it
+                    // through here would have a green frame lose its green to a message that was
+                    // only ever about how often it may knock.
+                    continue;
+                }
+
                 current = updated;
                 Publish(context, updated, connected: true);
             }

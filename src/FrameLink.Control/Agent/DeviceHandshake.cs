@@ -17,6 +17,10 @@ namespace FrameLink.Control.Agent;
 /// <param name="devices">The device table.</param>
 /// <param name="credential">The operator password, which decides the outermost rung of §2.6.</param>
 /// <param name="releases">The served agent build, carried on every answer.</param>
+/// <param name="limiter">
+/// §3.3's handshake budget. Consulted here rather than at the endpoint because this is the
+/// first line at which the thing being budgeted — the device — is known at all (decision 92).
+/// </param>
 /// <param name="options">Paths and budgets.</param>
 /// <param name="events">
 /// Told whenever a proven contact touches a row. This is the moment §3.3 is designed around —
@@ -29,6 +33,7 @@ public sealed class DeviceHandshake(
     IDeviceStore devices,
     OperatorCredential credential,
     AgentReleaseCatalog releases,
+    RegistrationRateLimiter limiter,
     ControlOptions options,
     FleetEvents events,
     ILogger<DeviceHandshake> logger)
@@ -82,6 +87,40 @@ public sealed class DeviceHandshake(
         }
 
         var release = releases.TryGetDefault();
+
+        // The budget, at the first line where the thing it is meant to bound actually exists
+        // (§3.3, decision 92). Charged to the proven fingerprint, never to the claimed one and
+        // never to the address the packets arrived from: a household NAT and a container's
+        // published port both collapse a whole fleet onto one address, so an address budget is
+        // one budget for six frames and the loudest of them spends the other five's share.
+        //
+        // Only a device the operator has already acted on is charged here, and that restriction
+        // is load-bearing in two directions. It keeps a stranger — no row, or a row still in the
+        // adoption queue — on the unidentified address budget, which is the strict bound and the
+        // one an attacker meets. And because nothing an attacker can send creates an entry, the
+        // device window's dictionary is bounded by the operator's own fleet, so flooding this
+        // route can never fill it and lock a real frame out of its own allowance.
+        var known = await devices.FindAsync(hello.DeviceId, cancellationToken).ConfigureAwait(false);
+
+        if (known is { State: not DeviceState.Pending }
+            && !limiter.TryAdmitDevice(known.DeviceId, remoteAddress))
+        {
+            logger.DeviceRateLimited(known.DeviceId, remoteAddress);
+
+            // Answered, and nothing is written. Skipping the row update is the point: this is
+            // the branch that has to be cheap, and last-seen was stamped moments ago by the
+            // attempt that spent the budget in the first place.
+            return new HandshakeDecision
+            {
+                Result = Answer(
+                    HandshakeStatus.RateLimited,
+                    release,
+                    "This frame has reconnected too often. It will be let back in shortly, and "
+                    + "nothing about its adoption has changed."),
+                KeepOpen = false,
+                Device = known,
+            };
+        }
 
         // The server has no operator, so it can adopt nothing. This is the outermost rung of
         // the device state ladder in §2.6 and therefore outranks every answer below it: the

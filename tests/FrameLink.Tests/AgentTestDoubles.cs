@@ -329,6 +329,14 @@ internal static class AgentServerScript
         DeviceName = deviceName,
         ServedAgentVersion = servedVersion,
     };
+
+    /// <summary>§3.3's backpressure: "not this minute", said to a frame that is otherwise fine.</summary>
+    public static HandshakeResult RateLimited() => new()
+    {
+        Status = HandshakeStatus.RateLimited,
+        ProtocolVersion = ProtocolConstants.Version,
+        Message = "This frame has reconnected too often in the last minute.",
+    };
 }
 
 /// <summary>A terminal that keeps every frame it was asked to paint.</summary>
