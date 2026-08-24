@@ -356,6 +356,15 @@ public sealed class AgentHost
         Action? retryFromFrame = null;
         channel.RetryRequested += () => retryFromFrame?.Invoke();
 
+        // The operator's two buttons, which need the loop and the init system and therefore cannot
+        // be built until both exist. Declared here so every local-channel handler is in one place
+        // and none of them is wired from somewhere a reader would not think to look.
+        FrameRecovery? recovery = null;
+        channel.RestartRequested += () =>
+            _ = recovery?.RestartAsync("Somebody at the frame", CancellationToken.None);
+        channel.ShutdownRequested += () =>
+            _ = recovery?.ShutdownAsync("Somebody at the frame", CancellationToken.None);
+
         // Decision 91's browser half. The same method the console's hold calls, so "yes, go ahead"
         // and "OK, put this away" mean what the screen says they mean whichever surface the panel
         // happens to be showing — and a press can never approve a write the page was no longer
@@ -499,6 +508,22 @@ public sealed class AgentHost
                 : "Somebody at the frame asked it to try again; nothing had given up.");
         };
 
+        // §2.5 rung 5's two buttons, and the Fleet Manager's remote half of the second one. One
+        // object with three callers — the page, the panel hold, and an inbound retry carrying
+        // Reboot — so a press at the frame and a press two hundred kilometres away cannot come to
+        // mean different things (decision 72's rule, applied to the verb that grew.)
+        recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = loop.ResetExhaustedBudgets,
+            SystemControl = new SystemdControl(),
+            Log = _log,
+
+            // Decision 91, the same delegate RebootHold is built with above. A firmware write in
+            // flight refuses both verbs: a reboot leaves the microphone unit unbootable, and a
+            // power-off leaves it that way with no process left to finish the write.
+            Held = () => flashWindow.Reason,
+        });
+
         // §2.7 item 9 on the console stage (decision 77). The browser stage's retry is a button on
         // a page and arrives over the local channel; this one is the same reset reached by holding
         // the panel, for the hour of a frame's life when there is no browser to put a button in.
@@ -511,7 +536,13 @@ public sealed class AgentHost
             Clock = _clock,
             Log = _log,
             Offered = () => ReconcileVoice.HasStopped(hub.Current),
-            Retry = () => retryFromFrame(),
+
+            // The console stage has one gesture and the browser stage has two buttons, so the hold
+            // is the *restart*: it is the recovery, and the frame's own screen says so in
+            // ReconcileVoice.RetryLine. A console-only frame therefore cannot be switched off from
+            // the panel — a second hold length would be an invented gesture, and the honest answer
+            // is that the off switch lives on the browser screen and in the Fleet Manager.
+            Retry = () => _ = recovery.RestartAsync("Somebody holding the panel", CancellationToken.None),
 
             // Decision 91, through the reader that already exists rather than through a second one.
             // A firmware screen outranks the retry whenever one is up, brings its own five-second
@@ -575,6 +606,22 @@ public sealed class AgentHost
                     // is worth asserting: the cost of being wrong is an unrelated frame rebooting
                     // five more times for a setting nobody asked it to retry.
                     _log.Warn($"Ignoring a retry addressed to {request.DeviceId}; this frame is {identity.DeviceId}.");
+                    return;
+                }
+
+                if (request.Reboot)
+                {
+                    // The operator's "the reboot can also be triggered from the fleet manager given
+                    // the agent is connected". Being here at all *is* the connection: this runs on
+                    // the receive loop of a live socket, and a frame that is not holding one was
+                    // answered 409 before anything was sent. A named resource is reset first so the
+                    // remote form and the local one differ in nothing but their reach.
+                    if (!string.IsNullOrWhiteSpace(request.Resource))
+                    {
+                        loop.ResetBudget(request.Resource);
+                    }
+
+                    _ = recovery.RestartAsync("The Fleet Manager", CancellationToken.None);
                     return;
                 }
 
@@ -671,7 +718,7 @@ public sealed class AgentHost
 
         _log.Info($"FrameLink Agent {AgentBuild.Version} ({AgentBuild.RuntimeIdentifier}) starting as {identity.DeviceId}.");
 
-        // Twelve loops now, and none is gated on another finishing. §1.2.2: a frame must provision
+        // Fifteen loops, and none is gated on another finishing. §1.2.2: a frame must provision
         // and self-heal with the server unreachable, so the reconciler runs from the first second
         // whether or not anything ever answers. What adoption gates is the resources that need
         // issued values, and it gates them through the DAG (§2.2) rather than by not running.
@@ -680,40 +727,46 @@ public sealed class AgentHost
         // exactly when no help is coming — and the inventory buffers on disk like everything else
         // on that channel (§4.1). The button in particular has to work with nothing reachable,
         // because pressing it is how somebody in this room starts a call.
-        var running = new List<Task>(13)
+        //
+        // <b>Named, and the count is checked by a test rather than by this comment.</b> It said
+        // twelve while the list held fourteen and was constructed with capacity thirteen, through
+        // two commits — which is how a fifteenth came to be missing from it without anybody
+        // noticing. The names are not decoration: a loop that ends is reported by name and its
+        // purpose becomes the "expected" half of the delta on the frame's own screen.
+        var running = new List<AgentLoop>(15)
         {
-            stage.RunAsync(shutdown.Token),
-            link.RunAsync(shutdown.Token),
+            new("console-stage", "paint this frame's own screen for as long as the agent runs", stage.RunAsync(shutdown.Token)),
+            new("control-link", "keep this frame's connection to the Fleet Manager", link.RunAsync(shutdown.Token)),
 
             // The other half of the hello's self-report. §4.2 puts a handshake on every connect
             // and a converged frame never reconnects, so without this the Fleet Manager's row
             // would keep whatever the loop was doing in the seconds after the last reboot for the
             // whole of a frame's uptime. It sends nothing while nothing changes.
-            reporter.RunAsync(shutdown.Token),
-            updates.RunAsync(shutdown.Token),
-            loop.RunAsync(shutdown.Token),
-            supervisor.RunAsync(shutdown.Token),
-            BrowserStageLoopAsync(browser, shutdown.Token),
+            new("status-reporter", "keep the Fleet Manager's picture of this frame current", reporter.RunAsync(shutdown.Token)),
+            new("self-update", "check hourly for the version this fleet serves", updates.RunAsync(shutdown.Token)),
+            new("reconcile", "keep every setting on this frame as it should be", loop.RunAsync(shutdown.Token)),
+            new("supervision", "keep the product running once it is up", supervisor.RunAsync(shutdown.Token)),
+            new("browser-stage", "make sure the panel is never blank", BrowserStageLoopAsync(browser, shutdown.Token)),
 
             // §2.7's two stages now sit on two terminals, so which one the panel shows is state
             // that has to be reconciled like everything else (§2.2) rather than set once and
             // trusted. It returns on its own the moment it learns this machine has no consoles to
             // switch between, which is every run off a frame.
-            screen.RunAsync(shutdown.Token),
-            packages.RunAsync(shutdown.Token),
-            arrayFirmware.RunAsync(shutdown.Token),
+            new("screen-handover", "keep the panel showing whichever of the two stages should own it", screen.RunAsync(shutdown.Token)),
+            new("package-inventory", "tell the Fleet Manager what is installed on this frame", packages.RunAsync(shutdown.Token)),
+            new("array-firmware-report", "tell the Fleet Manager which firmware the microphone unit runs", arrayFirmware.RunAsync(shutdown.Token)),
 
             // Decision 91's other half. It reads one setting a minute and returns; it writes
             // firmware only when a person has authorised that exact image on this exact frame, and
             // it spends the authorisation before it starts, so nothing here can ever run twice.
-            arrayFlash.RunAsync(shutdown.Token),
-            button.RunAsync(shutdown.Token),
+            new("array-firmware-flash", "carry out a firmware write once a person has authorised one", arrayFlash.RunAsync(shutdown.Token)),
+            new("call-button", "turn a press of the button on this frame into a call", button.RunAsync(shutdown.Token)),
 
             // §2.7 item 9's console half. It polls a character device twenty times a second and
             // does nothing else, and it keeps running through an outage for the same reason the
             // button does: holding the screen is how somebody standing in front of a stopped frame
             // asks it to try again, and that is exactly the moment no help is coming.
-            touch.RunAsync(shutdown.Token),
+            new("panel-touch", "let somebody standing here restart this frame by holding the screen", touch.RunAsync(shutdown.Token)),
 
             // Guide 9's `restart: always`, without Docker underneath it. It is not one of §2.10's
             // behaviours and deliberately not another one: the agent is this child's *parent*, so
@@ -721,87 +774,289 @@ public sealed class AgentHost
             // infer. What it shares with §2.10 is the interlock, because the collision is identical
             // — a reconcile pass landing between an exit and the relaunch would otherwise read a
             // blink as drift and reboot the frame for it.
-            kiosk.RunAsync(shutdown.Token),
+            new("immich-kiosk", "keep the slideshow child running", kiosk.RunAsync(shutdown.Token)),
+
+            // <b>The fifteenth, which nothing watched at all.</b> Its accept loop is started by
+            // origin.Start() above on a fire-and-forget task against the origin's own token, and
+            // the only thing that ever awaited it was DisposeAsync — so an accept that failed took
+            // the frame's local HTTP server away permanently and silently, leaving the product app
+            // and the repair screen with nothing to fetch or check in to. It is the same shape as
+            // every other loop now: it runs until the agent stops, and if it ends first that is a
+            // failure a person hears about.
+            new("local-origin", "serve the product app and the repair screen to this frame's browser", origin.RunAsync(shutdown.Token)),
         };
+
+        var startedUtc = _clock.UtcNow;
+        AgentLoop? ended;
 
         try
         {
-            await WhenAllOrFirstFaultAsync(running, shutdown).ConfigureAwait(false);
+            ended = await FirstToEndAsync(running, shutdown.Token).ConfigureAwait(false);
+
+            if (ended is null)
+            {
+                // The ordinary path: the agent was asked to stop and every loop is unwinding.
+                await Task.WhenAll(running.Select(item => item.Task)).ConfigureAwait(false);
+                return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+            }
         }
         catch (OperationCanceledException)
         {
             // Asked to stop, or standing aside for a new binary.
+            return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+        }
+
+        // A loop ended while the agent was still running. <b>Returning counts, not only
+        // throwing.</b> A loop that exits cleanly — a swallowed cancellation, a break on an
+        // unexpected state, a task that completed because its input closed — used to disappear with
+        // nothing said anywhere, which made the watched fourteen almost as unwatched as the
+        // fifteenth was.
+        var why = DescribeEnd(ended);
+        _log.Fail($"The '{ended.Name}' loop ended while the agent was still running: {why}");
+
+        var verdict = AgentLoopFailures.Record(
+            journal,
+            reconcileOptions,
+            ended.Name,
+            ended.Purpose,
+            why,
+            _clock.UtcNow - startedUtc,
+            notified: false);
+
+        // The same screen with the same information, through the same ledger every resource uses:
+        // ReconcileLoop.HasStopped now reads this entry, decision 68 stops the pass around it, and
+        // the row is rendered from the ledger by the walk's own orphan path. Published here as well
+        // as journalled, because the loop that ended may be the one that would have published it.
+        hub.Publish(status => status with
+        {
+            Resources = WithRow(status.Resources, verdict.Row),
+            Drifted = true,
+            Reconcile = status.Reconcile with
+            {
+                LoopState = verdict.Stopped ? LoopStateNames.Escalated : LoopStateNames.Reconciling,
+                Resource = verdict.Resource,
+                Phase = null,
+                Attempt = verdict.Attempts,
+                AttemptBudget = verdict.Budget,
+                Countdown = null,
+                Escalations = verdict.Row.Escalations,
+                AdminNotified = false,
+            },
+        });
+
+        try
+        {
+            await outbox.EventAsync(
+                new DeviceEvent
+                {
+                    DeviceId = identity.DeviceId,
+                    Kind = verdict.Stopped ? DeviceEventKinds.Escalation : DeviceEventKinds.Drift,
+                    OccurredUtc = _clock.UtcNow,
+                    Resource = verdict.Resource,
+                    Summary = $"{AgentLoopFailures.Detected} {AgentLoopFailures.WhyItMatters}",
+                    Delta = verdict.Row.Delta,
+                    Attempts = verdict.Attempts,
+                },
+                CancellationToken.None).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
         {
-            // One of the three loops died. The unit's Restart=always brings the agent straight
-            // back, so the only thing that must not happen is the reason going unrecorded (§1.2.3).
-            _log.Fail($"The agent stopped unexpectedly: {exception}");
+            // The buffer this writes to is on the same card the journal is on, and the failure
+            // being reported may well be the reason it cannot be written. A second exception raised
+            // here would replace the reason in the log with a consequence of it, which is exactly
+            // how the original twenty-nine-minute stall stayed unexplained.
+            _log.Fail($"The failure of '{ended.Name}' could not be reported to the Fleet Manager: {exception.Message}");
+        }
+
+        if (!verdict.Stopped)
+        {
+            // Attempts one and two: stand down and let the unit's Restart=always bring the agent
+            // straight back. That is this failure's version of "the system reboots and tries
+            // again" — the thing that failed is a piece of this process, and a fresh process is the
+            // cheapest honest retry. The only thing that must not happen is the reason going
+            // unrecorded (§1.2.3), and it is now in the ledger as well as in the log.
+            _log.Fail(
+                $"Standing down so the agent restarts: attempt {verdict.Attempts} of {verdict.Budget} on '{ended.Name}'.");
+
             await shutdown.CancelAsync().ConfigureAwait(false);
+            await SettleAsync(running).ConfigureAwait(false);
             return ExitCodes.Unrecoverable;
         }
 
-        return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+        // Attempt three. <b>It does not restart again</b> — that is the operator's rule for every
+        // other failure and this is not a special case. The surviving loops keep running so the
+        // screen says what happened and the two buttons on it still work, and the frame waits for
+        // a person exactly as it does for a resource that has given up.
+        _log.Fail(
+            $"'{ended.Name}' has ended {verdict.Attempts} times. This frame has stopped and is waiting for a person: "
+            + "restart it or shut it down from its own screen, or restart it from the Fleet Manager.");
+
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, shutdown.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // Somebody pressed a button, systemd stopped the unit, or an update is standing this
+            // process aside.
+        }
+
+        return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Unrecoverable;
     }
 
     /// <summary>
-    /// Awaits every loop, but stops waiting the moment one of them <i>throws</i>.
+    /// One supervised loop: what it is called, what it is for, and the task running it.
     /// </summary>
+    /// <param name="Name">
+    /// A stable id, used as the ledger key <c>agent.loop.&lt;name&gt;</c> and shown in the technical
+    /// block on the frame's screen.
+    /// </param>
+    /// <param name="Purpose">
+    /// What this loop is expected to be doing, written for somebody with no computer experience. It
+    /// becomes the <i>expected</i> half of the delta when the loop ends — "expected keep every
+    /// setting on this frame as it should be, observed: it returned while the agent was still
+    /// running" — which is the same shape §2.5 rung 2 records for every other failure.
+    /// </param>
+    /// <param name="Task">The running loop.</param>
+    public sealed record AgentLoop(string Name, string Purpose, Task Task);
+
+    /// <summary>
+    /// Waits for the first loop to end, and says whether that ending was a failure.
+    /// </summary>
+    /// <returns>
+    /// The loop that ended while the agent was still running, or <see langword="null"/> when the
+    /// agent's own shutdown was requested first.
+    /// </returns>
     /// <remarks>
     /// <para>
     /// <b>A plain <see cref="Task.WhenAll(IEnumerable{Task})"/> here is a silence, and it cost a
     /// frame twenty-nine minutes.</b> Measured 2026-08-16: the reconcile loop threw on its first
     /// reboot request after an upgrade, its task went to Faulted — and <c>WhenAll</c> does not
-    /// surface an exception until <i>every</i> task has finished. The other nine loops run for the
-    /// life of the frame, so the exception sat inside a completed task with nothing waiting to read
-    /// it. The process stayed up, the uplink stayed connected, the Fleet Manager went on reporting
-    /// the device online, the console stage went on painting, and the one loop that converges
-    /// anything was gone. The exception was finally printed thirty minutes later, by the shutdown
-    /// that a person triggered by hand.
+    /// surface an exception until <i>every</i> task has finished. The other loops run for the life
+    /// of the frame, so the exception sat inside a completed task with nothing waiting to read it.
+    /// The process stayed up, the uplink stayed connected, the Fleet Manager went on reporting the
+    /// device online, the console stage went on painting, and the one loop that converges anything
+    /// was gone.
     /// </para>
     /// <para>
-    /// <b>Ending is not faulting, which is why this cannot simply be
-    /// <see cref="Task.WhenAny(IEnumerable{Task})"/>.</b> <c>screen</c> returns by design the moment
-    /// it learns this machine has no consoles to switch between, which is every run off a frame, and
-    /// a first-completion wait would read that as a crash and take the agent down on every boot. So
-    /// the trigger is a fault and only a fault: a loop that returns is left alone, a loop that
-    /// throws cancels the other nine so they unwind, and the original exception is then rethrown by
-    /// the <c>WhenAll</c> it was always going to come out of.
+    /// <b>Ending is now a failure too, and that is the change.</b> The previous shape triggered on a
+    /// fault and only a fault, on the reasoning that a loop which returns has finished its work.
+    /// That reasoning is wrong for every loop here: each of them is supposed to run until the frame
+    /// is switched off, so a return means a swallowed cancellation, a <c>break</c> on an unexpected
+    /// state, or a task that completed because its input closed — a whole responsibility gone, with
+    /// nothing said. It made the watched loops almost as unwatched as the accept loop nobody was
+    /// watching at all.
     /// </para>
     /// <para>
-    /// Cancelling rather than abandoning matters: the caller's next act is
-    /// <see cref="ExitCodes.Unrecoverable"/> and a systemd restart, and the loops each own something
-    /// — a browser session, a child process, a socket — that should be given its ordinary shutdown
-    /// path rather than being left to process death.
+    /// <b>The one legitimate ending is shutdown, and it is distinguished explicitly rather than by
+    /// timing.</b> Every loop returns when the agent is stopping, so the question this asks after
+    /// the first one ends is whether the agent's own shutdown token has been signalled — a fact,
+    /// not a race. The other case that used to end a loop legitimately was
+    /// <c>ScreenHandover</c> returning on a machine with no virtual terminals, which is every run
+    /// off a frame; it now waits for cancellation instead of returning, so there is exactly one
+    /// rule and no exceptions to it.
+    /// </para>
+    /// <para>
+    /// It does not cancel anything. The caller decides what an ending means — stand down and let
+    /// systemd bring the agent back, or hold the screen because the budget is gone — and cancelling
+    /// here would take the surviving loops down before that decision could be made, including the
+    /// ones that paint the screen the decision has to appear on.
     /// </para>
     /// </remarks>
-    public static async Task WhenAllOrFirstFaultAsync(IReadOnlyList<Task> running, CancellationTokenSource shutdown)
+    public static async Task<AgentLoop?> FirstToEndAsync(IReadOnlyList<AgentLoop> running, CancellationToken shutdown)
     {
         ArgumentNullException.ThrowIfNull(running);
-        ArgumentNullException.ThrowIfNull(shutdown);
 
-        foreach (var task in running)
+        if (running.Count == 0)
         {
-            _ = task.ContinueWith(
-                static (_, state) =>
-                {
-                    try
-                    {
-                        ((CancellationTokenSource)state!).Cancel();
-                    }
-                    catch (ObjectDisposedException)
-                    {
-                        // The wait already finished and the source is gone; there is nothing left
-                        // to stop, and a fault racing the shutdown must not become a second fault.
-                    }
-                },
-                shutdown,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.DenyChildAttach,
-                TaskScheduler.Default);
+            return null;
         }
 
-        await Task.WhenAll(running).ConfigureAwait(false);
+        var tasks = new List<Task>(running.Count);
+        foreach (var loop in running)
+        {
+            tasks.Add(loop.Task);
+        }
+
+        var first = await Task.WhenAny(tasks).ConfigureAwait(false);
+
+        if (shutdown.IsCancellationRequested)
+        {
+            return null;
+        }
+
+        return running[tasks.IndexOf(first)];
+    }
+
+    /// <summary>How a loop ended, in one sentence a person can read.</summary>
+    /// <remarks>
+    /// Reading <see cref="Task.Exception"/> is also what marks a faulted task observed, which
+    /// matters here: the alternative is an <c>UnobservedTaskException</c> raised by a finaliser
+    /// minutes later, attached to nothing.
+    /// </remarks>
+    public static string DescribeEnd(AgentLoop loop)
+    {
+        ArgumentNullException.ThrowIfNull(loop);
+
+        if (loop.Task.Exception?.InnerException is { } fault)
+        {
+            return $"{fault.GetType().Name}: {fault.Message}";
+        }
+
+        return loop.Task.IsCanceled
+            ? "it was cancelled while the agent was still running"
+            : "it returned while the agent was still running";
+    }
+
+    /// <summary>The list with <paramref name="row"/> in it, replacing any row of the same name.</summary>
+    private static List<ResourceStatus> WithRow(IReadOnlyList<ResourceStatus> rows, ResourceStatus row)
+    {
+        var next = new List<ResourceStatus>(rows.Count + 1);
+        var replaced = false;
+
+        foreach (var existing in rows)
+        {
+            if (string.Equals(existing.Name, row.Name, StringComparison.Ordinal))
+            {
+                next.Add(row);
+                replaced = true;
+            }
+            else
+            {
+                next.Add(existing);
+            }
+        }
+
+        if (!replaced)
+        {
+            next.Add(row);
+        }
+
+        return next;
+    }
+
+    /// <summary>
+    /// Gives the surviving loops their ordinary shutdown path before the process goes.
+    /// </summary>
+    /// <remarks>
+    /// Each of them owns something — a browser session, a child process, a socket, a GPIO claim —
+    /// that should be released rather than left to process death. Faults are swallowed: the agent
+    /// is already standing down over a different failure, and a second one raised on the way out
+    /// would replace the reason in the log with a consequence of it.
+    /// </remarks>
+    private static async Task SettleAsync(IReadOnlyList<AgentLoop> running)
+    {
+        foreach (var loop in running)
+        {
+            try
+            {
+                await loop.Task.ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+            {
+                // Recorded by whoever raised it; this is the unwind, not the diagnosis.
+            }
+        }
     }
 
     /// <summary>

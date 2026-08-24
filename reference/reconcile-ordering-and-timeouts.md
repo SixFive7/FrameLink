@@ -608,3 +608,29 @@ amendments rather than as they stand:
 - The **fourteen loops are fifteen concurrent things**. The local origin's accept loop and its
   per-connection tasks are not in the host's supervised list at all, so nothing notices if they
   stop. See `reference/outside-the-dag.md`, which inventories all 41 items outside the graph.
+
+
+---
+
+## Second correction, 2026-08-24 — three of these bounds have moved
+
+**#19, backoff jitter = 0.2, is gone.** Both call sites now build `Backoff` with no jitter and no
+fraction seam, on the operator's decision (`reference/reconcile-determinism.md` §7.4 direction 5).
+The inventory is therefore **86 numeric constants**, and the agent binary contains no call to a
+random source of any kind.
+
+**#1, `AttemptBudget` = 3, now counts one more thing.** A supervised loop that ends while the agent
+is still running is recorded in the same ledger as `agent.loop.<name>`, against the same budget,
+and forgiven by #4's `ConflictHold` when the process that ended it had already run longer than
+that. Three consecutive short-lived runs stop the frame exactly as three failed repairs do, and the
+same retry clears both. It is not a new bound; it is an existing one with a second kind of
+subject.
+
+**§2.12's unbounded list loses one entry and §8's disagreements lose none.** The accept loop of the
+local origin is now the fifteenth supervised loop rather than the one thing in no list at all, and
+`AgentHost` treats a loop that *returns* as a failure and not only one that throws — so the
+fourteen that were watched for a fault are now watched for both ways a loop can die. The one
+legitimate early return, `ScreenHandover` on a machine with no virtual terminals, waits for
+cancellation instead of returning, so the rule has no exceptions rather than one.
+
+`IProcessRunner` still has no deadline. That is untouched and remains the largest gap.

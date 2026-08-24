@@ -285,4 +285,46 @@ public sealed class AgentLocalOriginTests : IAsyncLifetime
 
         Assert.True(condition(), "the condition never became true");
     }
+
+    [Fact]
+    public async Task The_accept_loop_is_a_supervised_loop_and_ending_is_the_thing_it_reports()
+    {
+        // <b>The fifteenth concurrent thing, which was in no list at all.</b> Start() puts the
+        // accept loop on a fire-and-forget task against the origin's own token, and until now the
+        // only thing that ever awaited it was DisposeAsync — so an accept that failed took the
+        // frame's local HTTP server away permanently, the page had nothing to check in to, §2.7's
+        // fallback rule tore the browser session down, and the repair screen it fell back to was
+        // served by the same dead listener. Nothing anywhere said a word.
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(None);
+        var watching = _origin.RunAsync(stopping.Token);
+
+        // It does not return while the origin is serving.
+        Assert.False(watching.IsCompleted);
+
+        // And it returns quietly when the agent is stopping, which must never read as a failure.
+        await stopping.CancelAsync();
+        await watching;
+
+        Assert.DoesNotContain(_log.Lines, line => line.Contains("stopped accepting", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task An_origin_that_was_never_started_says_so_rather_than_watching_nothing()
+    {
+        // The other way the local server can be absent, and the one a resource repairs: the port is
+        // held by something else, Start() returned false, and there is no accept loop at all. The
+        // watch reports it as the failure it is instead of returning as though it had watched
+        // something.
+        var log = new RecordingLog();
+        await using var origin = new LocalOrigin(
+            _channel,
+            _clock,
+            log,
+            () => AppConfigCatalog.Issued(_store.Store),
+            port: 0);
+
+        await origin.RunAsync(None);
+
+        Assert.Contains(log.Lines, line => line.Contains("was never started", StringComparison.Ordinal));
+    }
 }

@@ -244,10 +244,25 @@ public sealed class ScreenHandover : IDisposable
         {
             if (!Switchable)
             {
-                // Nothing left to reconcile. Returning frees the loop rather than waking every
-                // couple of seconds to re-ask a question whose answer cannot change — and, since
-                // every tick is a pgrep, to fork a process for it. The console stage does exactly
-                // this once its terminal stops taking bytes.
+                // <b>Nothing left to reconcile, so it stops working — and waits rather than
+                // returning.</b> The cost this avoids is unchanged: no more ticks, and therefore no
+                // more pgrep forked every couple of seconds to re-ask a question whose answer
+                // cannot change. What it no longer does is <i>end</i>, because the host now treats
+                // a loop that ends while the agent is running as a failure, and this loop ending is
+                // the one legitimate case that rule would otherwise trip over — on every machine
+                // with no virtual terminals, which is every run off a frame.
+                //
+                // Parking is the honest shape of it in any case: this is not a loop whose work is
+                // done, it is a loop with nothing to do until it is stopped.
+                try
+                {
+                    await _clock.DelayAsync(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // Asked to stop.
+                }
+
                 return;
             }
 

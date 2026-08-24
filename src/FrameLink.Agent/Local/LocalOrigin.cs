@@ -162,6 +162,51 @@ public sealed class LocalOrigin : IAsyncDisposable
         return true;
     }
 
+    /// <summary>
+    /// Runs until the agent stops — the fifteenth loop, and the one nothing was watching.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The accept loop was outside the host's supervised list entirely.</b> It is started by
+    /// <see cref="Start"/> on a fire-and-forget <c>Task.Run</c> against this object's own token, and
+    /// the only thing that ever awaited it was <see cref="DisposeAsync"/> — so if it ended, the
+    /// frame's local HTTP server was gone, the product app and the repair screen had nothing to
+    /// fetch or check in to, and no surface anywhere said a word. Fourteen loops were watched for a
+    /// fault; this one was watched for nothing.
+    /// </para>
+    /// <para>
+    /// It returns when the accept loop returns, which under the host's rule is a failure whenever
+    /// the agent is not already stopping. It does not restart the listener itself: that is
+    /// <c>origin.local.listening</c>'s job as a resource, on the ladder, with a person at the end of
+    /// it — this is the watch, not a second recovery path.
+    /// </para>
+    /// </remarks>
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        if (_accepting is not { } accepting)
+        {
+            _log.Fail(
+                "The local origin was never started, so nothing is serving the product app or the repair screen "
+                + "on this frame.");
+            return;
+        }
+
+        try
+        {
+            await accepting.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            // The agent is stopping. DisposeAsync owns the listener and the accept task from here.
+            return;
+        }
+
+        _log.Fail(
+            $"The local origin stopped accepting connections on 127.0.0.1:{Port}"
+            + (LastFailure is { Length: > 0 } failure ? $" — {failure}" : " and did not say why")
+            + ". The product app and the repair screen have nothing to connect to.");
+    }
+
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
     {
@@ -232,6 +277,7 @@ public sealed class LocalOrigin : IAsyncDisposable
 
             if (listener is null)
             {
+                // Only reachable through DisposeAsync, which takes the listener away deliberately.
                 return;
             }
 
@@ -246,6 +292,14 @@ public sealed class LocalOrigin : IAsyncDisposable
             }
             catch (Exception exception) when (exception is SocketException or ObjectDisposedException)
             {
+                // <b>This return used to be silent, and it is the whole reason the accept loop had
+                // to become a supervised loop.</b> An accept that fails takes the frame's local
+                // server away permanently — the page cannot check in, so §2.7's fallback rule tears
+                // the browser session down, and the repair screen it falls back to is served by the
+                // same dead listener. Recorded here so the reason exists, and reported by RunAsync,
+                // which the host now treats as a failure.
+                LastFailure = exception.Message;
+                _log.Fail($"The local origin's accept loop stopped: {exception.Message}");
                 return;
             }
 
