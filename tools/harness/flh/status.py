@@ -5,7 +5,8 @@ Two halves, deliberately separate:
 * **Recorded state** - read back from ``tools/harness/progress.json``. This is history: what
   has been proven, by which command, when.
 * **Live probe** - re-checked now: is Docker up, is FL_PW present, does the mule answer, is
-  there a Home Assistant token. This is capability: what this particular session can do.
+  there a Home Assistant token, and **what agent version is the Fleet Manager serving**. This
+  is capability: what this particular session can do.
 
 Keeping them apart is the point. "The deploy path was proven yesterday" and "this session
 cannot deploy because FL_PW is unset" are both true at once, and a resuming session needs
@@ -32,7 +33,7 @@ import subprocess
 from typing import Any
 
 from . import build as build_mod
-from . import progress, ssh, ui
+from . import feed, progress, ssh, ui
 from .config import (
     HA_ENTITY,
     HA_URL,
@@ -40,8 +41,10 @@ from .config import (
     MULE_USER,
     PROGRESS_FILE,
     REPO_ROOT,
+    RID,
     AGENT_PROJECT,
     TEST_PROJECT,
+    HarnessError,
 )
 from .progress import CONTROL_URL
 
@@ -96,6 +99,52 @@ def _control_answers() -> bool:
         return False
 
 
+def _served_agent(control_answering: bool) -> tuple[dict[str, Any] | None, str]:
+    """What the Fleet Manager serves for the runtime the fleet runs, or why that is unknown.
+
+    This is the number that decides whether a deploy sticks. ``build/out`` says what this
+    workstation last compiled; section 2.8 says the frame runs whatever its Fleet Manager
+    serves, upgrade or downgrade, at the next handshake and hourly after. A status report
+    that shows only the first is showing the half that stops being true first - the same
+    shape of half-answer :mod:`flh.deploy` was fixed for.
+
+    It goes through :mod:`flh.feed` rather than opening its own connection, deliberately:
+    one client, one route, one set of failure messages, so what ``status`` reports and what
+    ``deploy`` gates on can never drift apart.
+
+    Returns ``(release, reason)``. Exactly one is filled. **A feed that could not be read
+    yields no release and a reason**, never an empty agreement - an unread feed and a feed
+    that agrees are the two answers this function most has to keep apart.
+    """
+    if not control_answering:
+        # Skipped rather than attempted, so a silent server costs one timeout in this report
+        # instead of two. The reason names what was actually observed.
+        return None, f"UNCHECKED - nothing is answering at {CONTROL_URL}"
+    try:
+        return feed.served_release(RID, timeout=5.0), ""
+    except HarnessError as exc:
+        # Including the 404 that means "this Fleet Manager was built from a checkout with no
+        # agent in it", which is a real state rather than a fault - and still not agreement.
+        return None, f"UNCHECKED - {exc}"
+
+
+def _served_agent_fact(
+    release: dict[str, Any] | None, served: dict[str, Any] | None, reason: str
+) -> str:
+    """One line for the probe block: what is served, and whether it is what was built."""
+    if served is None:
+        return reason
+    summary = f"{served['version']} {served.get('runtimeIdentifier', RID)} sha256 {str(served.get('sha256', ''))[:12]}..."
+    if release is None:
+        return f"{summary} - nothing in build/out to compare it against"
+    try:
+        local_sha, _ = build_mod.hash_file(build_mod.BINARY_PATH)
+    except OSError as exc:
+        return f"{summary} - build/out/{build_mod.BINARY_PATH.name} could not be hashed ({exc.__class__.__name__})"
+    agrees, why = feed.compare(release, local_sha, served)
+    return f"{summary} - " + ("agrees with build/out" if agrees else f"DIFFERS from build/out: {why}")
+
+
 def probe() -> dict[str, Any]:
     """Re-check everything the harness depends on, right now."""
     facts: dict[str, Any] = {}
@@ -147,9 +196,10 @@ def probe() -> dict[str, Any]:
         "answers on tcp/22" if ssh.is_alive(MULE_HOST) else "SILENT on tcp/22"
     )
     facts["home assistant"] = f"{HA_URL} entity {HA_ENTITY}"
+    control_answering = _control_answers()
     facts["fleet manager"] = f"{CONTROL_URL} " + (
         "answering (dev; the mule's agent is pointed here)"
-        if _control_answers()
+        if control_answering
         else "SILENT (dev; the mule's agent is pointed here and is retrying forever)"
     )
 
@@ -164,6 +214,28 @@ def probe() -> dict[str, Any]:
         f"sha256 {release['sha256'][:12]}..."
         if release
         else "nothing in build/out"
+    )
+
+    # Beside the built artifact rather than instead of it. These two being equal is the whole
+    # difference between a deploy that holds and one the fleet erases on its next tick.
+    served, reason = _served_agent(control_answering)
+    facts["served agent"] = _served_agent_fact(release, served, reason)
+
+    # Recorded as well as printed, because a session that reads progress.json instead of
+    # running this command needs the same half of the answer. It carries its own timestamp and
+    # its own `checked` flag, so it can never be read as a live reading or as agreement.
+    progress.set_artifact(
+        "servedAgent",
+        {
+            "feedUrl": feed.release_url(RID),
+            "runtimeIdentifier": RID,
+            "checked": served is not None,
+            "version": served.get("version") if served else None,
+            "sha256": served.get("sha256") if served else None,
+            "sizeBytes": served.get("sizeBytes") if served else None,
+            "reason": reason or None,
+            "checkedUtc": progress.utcnow(),
+        },
     )
     return facts
 
@@ -294,6 +366,29 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
             f"talking to. The mule's agent is pointed at {CONTROL_URL} and retries forever; "
             "its journal is a wall of connection warnings until this is up."
         )
+
+    # The served build, not the built one. A frame runs what its Fleet Manager serves, so this
+    # is the entry that decides whether the next deploy survives its own report.
+    served_fact = str(facts.get("served agent", ""))
+    if served_fact.startswith("UNCHECKED"):
+        actions.append(
+            "The served agent version is UNCHECKED and must not be read as agreement: "
+            f"{served_fact.removeprefix('UNCHECKED - ')} Nothing here knows what the fleet is "
+            f"converging on until {feed.release_url(RID)} answers. `fl.py deploy` says the same "
+            "and continues anyway; `fl.py deploy --allow-feed-drift` is only for a binary you "
+            "intend to watch."
+        )
+    elif "DIFFERS" in served_fact:
+        actions.append(
+            "The Fleet Manager serves a different agent than build/out holds, so a deploy of "
+            "the local binary would be undone within the hour (version2.md section 2.8; "
+            "measured at six seconds on 2026-08-23). The agent is baked into the image from "
+            "build/out, so serving this build means rebuilding the image: bash "
+            "deploy/fleet-manager/build-image.sh, then docker compose -p framelink -f "
+            "deploy/fleet-manager/framelink.dev.yml up -d. docs/15-local-fleet-manager.md "
+            "step 10 is the check."
+        )
+
     if not os.environ.get("FL_HA_TOKEN"):
         actions.append(
             f"Ask the user for FL_HA_TOKEN (a long-lived token from {HA_URL}) to unlock "
@@ -346,9 +441,10 @@ def _derive_next_actions(data: dict[str, Any], facts: dict[str, Any]) -> list[st
         "M2.5 is NOT done, and what is missing is the flash rather than the hardware: the "
         "generator is built and measured against the real base image, but its acceptance test "
         "is to flash a card and watch a row appear, and nothing generated has ever been written "
-        "to a card. A reader has been attached since 2026-08-23 and a blank card is on the "
-        "operator's desk - `fl.py cards list` is the register and says where each card is. "
-        "Flash the blank card, put it in Frame #2, and watch the adoption queue."
+        "to a card. A reader has been attached since 2026-08-23. Run `fl.py cards list` before "
+        "touching anything - it is the register, it says which card is blank, which is in a "
+        "frame and which must never be written, and it is maintained where this sentence is "
+        "not. Flash the blank one, boot it, and watch the adoption queue."
     )
     return actions
 

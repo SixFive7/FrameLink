@@ -116,6 +116,9 @@ def compare(local: dict[str, Any], local_sha: str, served: dict[str, Any]) -> tu
             f"built {local_sha[:12]}...). Section 2.8's updater matches version strings and "
             "never compares them, so a frame cannot converge out of this state on its own."
         )
+    # Phrased without a verb for what the caller is about to do with the local build, because
+    # it has two callers that would need different ones: `deploy` is about to install it, and
+    # `status` is not about to do anything at all.
     return False, (
-        f"the feed serves {served['version']}, this deploy installs {local['version']}"
+        f"the feed serves {served['version']}, build/out holds {local['version']}"
     )

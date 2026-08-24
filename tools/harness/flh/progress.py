@@ -77,7 +77,15 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 
-from .config import HA_ENTITY, HA_URL, MULE_HOST, MULE_USER, PROGRESS_FILE, REPO_ROOT
+from .config import (
+    CONTROL_URL,
+    HA_ENTITY,
+    HA_URL,
+    MULE_HOST,
+    MULE_USER,
+    PROGRESS_FILE,
+    REPO_ROOT,
+)
 
 SCHEMA = "framelink.harness.progress/1"
 
@@ -85,10 +93,14 @@ SCHEMA = "framelink.harness.progress/1"
 #: file stays readable and diffable.
 LOG_LIMIT = 200
 
-#: The dev Fleet Manager the mule is pointed at. Not in ``config.py`` because no harness
-#: subcommand talks to it - it is here because a resuming session cannot find it anywhere
-#: else, and the mule's journal is otherwise the only record that this address is the one.
-CONTROL_URL = "http://10.20.30.200:5199"
+# CONTROL_URL is imported above rather than defined here, and other modules still read it
+# from this one. It used to be a second literal, justified by a comment saying no harness
+# subcommand talks to the Fleet Manager. That stopped being true when flh/feed.py was written:
+# `fl.py deploy` reads GET /agent/release/<rid> off that server before it touches the mule, and
+# `fl.py status` reads the same route. Two literals meant the address this file *names* and the
+# address the feed is *read from* could differ the moment anybody set FL_CONTROL_URL - a record
+# describing one server while claiming to describe another, which is the defect this whole
+# module exists to prevent.
 
 _READ_ME_FIRST = [
     "This is the FrameLink v2 progress file. It is written continuously by "
@@ -203,27 +215,42 @@ _MILESTONES: list[dict[str, Any]] = [
         "evidence": {
             "how": "observed-on-hardware",
             "what": (
-                "The agent on the mule connected to the dev Fleet Manager, appeared in the "
-                "adoption queue as a pending device, was adopted from the GUI under the name "
-                "'Mule' (device T1RJ-6JCQ-9HN8-3920, hardware serial 19aa037e525b27b6), went "
-                "online, and streamed live reconcile telemetry that the GUI rendered."
+                "Two observations, both on the mule. (1) 2026-08-15: the agent connected to the "
+                "dev Fleet Manager, appeared in the adoption queue as a pending device, was "
+                "adopted from the GUI under the name 'Mule' (device T1RJ-6JCQ-9HN8-3920, "
+                "hardware serial 19aa037e525b27b6), went online, and streamed live reconcile "
+                "telemetry that the GUI rendered. (2) 2026-08-23: the self-update leg, which the "
+                "first observation did not cover. A deploy installed 0.0.0+ebc474a.dirty on a "
+                "frame whose Fleet Manager was serving 0.0.0+0384c01.dirty, and the frame put "
+                "itself back onto the served build in six seconds - its own journal narrating it "
+                "as `Converging from 0.0.0+ebc474a.dirty to the served version "
+                "0.0.0+0384c01.dirty`, which is UpdateService's own line. That is section 2.8's "
+                "mechanism doing the thing that makes it a mechanism: the agent MATCHED the "
+                "served version rather than taking the greater of the two, and the direction it "
+                "moved was DOWN."
             ),
-            "whenUtc": "2026-08-15",
+            "whenUtc": "2026-08-23",
             "where": (
-                f"mule {MULE_USER}@{MULE_HOST}, Fleet Manager running on the workstation at "
-                f"{CONTROL_URL}"
+                f"mule {MULE_USER}@{MULE_HOST}, Fleet Manager at {CONTROL_URL} - started by hand "
+                "from src/FrameLink.Control for the 2026-08-15 observation, and the container of "
+                "deploy/fleet-manager/framelink.dev.yml for the 2026-08-23 one"
             ),
             "recordedIn": (
-                "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI); the "
+                "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI, and "
+                "9dc0050 for the six-second convergence and the feed gate it produced); the "
+                "narration string is src/FrameLink.Agent/Update/UpdateService.cs and the "
+                "measurement is quoted in tools/harness/flh/feed.py's module docstring; the "
                 "device identity is visible in every journal capture under tools/harness/runs/ "
                 "(gitignored, local only); the adoption row itself lives in the Fleet Manager's "
                 "SQLite database outside this repository"
             ),
             "notWitnessed": (
-                "The self-update leg was not separately re-observed in that session. The update "
-                "path is wired and running - the mule's journal shows repeated update checks "
-                "against /agent/release/linux-arm64 - but they are failing right now because the "
-                "dev Fleet Manager is not up, so a successful binary swap has not been watched."
+                "No journal file holding the 2026-08-23 convergence survives under "
+                "tools/harness/runs/ - the line is quoted in commit 9dc0050 and in flh/feed.py "
+                "and nowhere else on disk, so that observation rests on a commit message rather "
+                "than on a retained capture. The previous text here said the update checks were "
+                "failing because the dev Fleet Manager was not up; that was true when written, "
+                "outlived its condition, and is what the 2026-08-23 observation replaced."
             ),
         },
     },
@@ -323,9 +350,15 @@ _MILESTONES: list[dict[str, Any]] = [
             ),
             "notWitnessed": (
                 "The milestone's own acceptance test - flash a card, watch a row appear - has not "
-                "happened and cannot yet: version2.md section 5.3 item 3 records that no SD card "
-                "reader is attached. Nothing generated has been written to a card, booted, or seen "
-                "in the adoption queue. This milestone is NOT done."
+                "happened. Nothing generated has been written to a card, booted, or seen in the "
+                "adoption queue, so this milestone is NOT done. What is missing is the flash "
+                "itself and not the hardware: an SD card reader has been attached since "
+                "2026-08-23 (version2.md sections 5.3 item 3 and 6.1), and the register at "
+                "tools/harness/cards.json - `fl.py cards list` - says which card is where, "
+                "including which one is blank and which one must never be written. This text "
+                "used to cite the missing reader as the reason it could not happen, and went on "
+                "citing it for a week after the reader arrived; the register is now the thing to "
+                "read, because it is maintained and this sentence is not."
             ),
         },
     },
@@ -1051,11 +1084,13 @@ _ORIENTATION: dict[str, str] = {
         "its reasoning."
     ),
     "resourceSpec": (
-        "reference/resource-catalog.md - the enumeration of all 80 device settings extracted "
+        "reference/resource-catalog.md - the enumeration of every device setting extracted "
         "from build guides 3-12 and the cross-guide section, one block per resource with its "
         "Observe, Act and Verify. This is what M3 migrated, and it is the spec each new "
-        "resource is written against. The count is the file's own Total row, which is what "
-        "the resources ledger below reads."
+        "resource is written against. Do not read a count from this sentence: it used to carry "
+        "one, and a number written into prose beside a number that is measured is the one that "
+        "goes wrong. The catalog total is the file's own Total row and is in the resources "
+        "ledger below, re-read on every write."
     ),
     "parityTarget": (
         "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, "
@@ -1073,9 +1108,13 @@ _ORIENTATION: dict[str, str] = {
     "cardRegister": (
         "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is "
         "on each one, when it last moved and what must not be disturbed. Read it before "
-        "touching a card: one of the three is the only surviving v1 system and "
-        "reference/v1-state-inventory.txt is a capture taken from the machine it ran, so "
-        "overwriting it destroys the parity target's origin permanently. "
+        "touching a card, and read it rather than trusting this sentence: one of the three "
+        "carries the only running v1 system, and reference/v1-state-inventory.txt was captured "
+        "from the machine that booted it. A full byte-for-byte image of that card was taken on "
+        "2026-08-23 and is recorded in the register as image 'v1-card-2026-08-23', so it is no "
+        "longer irrecoverable - but the register also records that the image exists in exactly "
+        "one place, which is a copy and not yet a backup. The register's own `handling` text is "
+        "the current answer and this one is not. "
         "`fl.py cards check` reads whatever is in the workstation's reader and compares it "
         "against what the register claims is in there - exit 2 means they disagree and the "
         "register is not to be trusted until someone finds out which of the two is wrong."
@@ -1221,15 +1260,33 @@ def _environment() -> dict[str, Any]:
         "fleetManager": {
             "address": CONTROL_URL,
             "what": (
-                "The dev Fleet Manager, run on the workstation from src/FrameLink.Control. The "
-                "mule's agent is pointed here and retries forever while it is down, which is why "
-                "a journal capture taken with the server stopped is a wall of connection "
-                "warnings rather than a fault."
+                "The dev Fleet Manager, run on the workstation as a Docker container from the "
+                "same image the server deployment uses. It restarts unless-stopped, so it is "
+                "normally already up. The mule's agent is pointed here and retries forever while "
+                "it is down, which is why a journal capture taken with the server stopped is a "
+                "wall of connection warnings rather than a fault. Do not assert its state from "
+                "this file - `fl.py status` probes it, and prints what it found."
             ),
             "startedBy": (
-                "dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199, with "
-                "FRAMELINK_OPERATOR_PASSWORD set and FRAMELINK_DATA_DIR pointing at the operator "
-                "data directory outside this repository."
+                "docker compose -p framelink -f deploy/fleet-manager/framelink.dev.yml up -d, "
+                "with FRAMELINK_OPERATOR_PASSWORD exported in that shell and FRAMELINK_IMAGE set "
+                "to a tag built by deploy/fleet-manager/build-image.sh. The data lives in the "
+                "external `framelink-data` volume; docs/15-local-fleet-manager.md is the "
+                "walkthrough. `dotnet run --project src/FrameLink.Control -- --urls "
+                "http://0.0.0.0:5199` still works for a one-off and is how this was started "
+                "before the container existed - but the two do not serve the same agent, which "
+                "is the difference `servesAgentFrom` below is about."
+            ),
+            "servesAgentFrom": (
+                "The container serves the agent binary baked into its image at build time, from "
+                "/app/agent/<rid>/fl-agent - so the image tag and the served agent are one fact, "
+                "and reverting the tag reverts the fleet within the hour (version2.md section "
+                "2.8). A `dotnet run` from this source tree instead serves build/out LIVE, "
+                "because ControlOptions.LocateReleaseDirectory walks up to it. Rebuilding the "
+                "agent therefore changes what a hand-started server serves immediately and "
+                "changes what the container serves not at all until the image is rebuilt. "
+                "artifacts.servedAgent records what was actually being served the last time "
+                "`fl.py status` asked."
             ),
             "agentPointedBy": "--control-url on `fl-agent install`, or the FL_CONTROL_URL variable",
         },
@@ -1348,6 +1405,10 @@ def _blank() -> dict[str, Any]:
         "artifacts": {
             "agentBinary": None,
             "deployed": None,
+            # What the Fleet Manager serves, written by `fl.py status` from flh/feed.py. It
+            # carries `checked` and `checkedUtc` of its own, because an unread feed and a feed
+            # that agrees must never be able to look the same in this file.
+            "servedAgent": None,
             "lastCollection": None,
         },
         "counters": {

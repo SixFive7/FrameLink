@@ -1039,7 +1039,10 @@ environment runs the Fleet Manager in development, so the server is not needed u
    is already assembled and already on a controllable smart plug — the harness is in place.
 2. **2–3 spare microSD cards**: one holding the v1 image (recovery), the others stock Raspberry
    Pi OS Lite with SSH enabled. Bare-metal provisioning gets tested many times, and a card swap
-   is the recovery path for a boot-breaking resource.
+   is the recovery path for a boot-breaking resource. **What actually exists is three cards and
+   the register is what says so** — `tools/harness/cards.json`, read with `fl.py cards list`.
+   Do not take an inventory from this paragraph: the requirement above is a requirement, the
+   register is the state, and the register is the one that is maintained.
 3. **An SD card reader** — attached since 2026-08-23 (§6.1). It reads and writes the cards the
    register in `tools/harness/cards.json` tracks. Note what it cannot do: nothing readable
    through it is unique to a card, so a card is identified by its MBR signature and by where
@@ -1057,7 +1060,12 @@ Supplied in-session, never written to any file (repo rule §1.2):
 2. **Home Assistant** at `http://10.20.30.250:8123` — port verified against the live instance
    2026-08-15 (§6.1) — plus the frame's plug entity and authorisation to switch it. ✅ available
 3. **Docker Desktop running** (ideally auto-starting) — unlocks both the build container and
-   the development Fleet Manager. ⚠ was not running; started manually
+   the development Fleet Manager. ✅ auto-starting, verified 2026-08-24: a `Docker Desktop`
+   entry in `HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run` and `AutoStart = True` in
+   Docker Desktop's own `settings-store.json`. The ⚠ that stood here — "was not running;
+   started manually" — was true on 2026-08-15 and had outlived its condition. The development
+   Fleet Manager is itself a `restart: unless-stopped` container now (§3.1, guide 15), so it
+   comes back with the daemon rather than being started by hand.
 4. **GitHub push access.** ✅ working
 5. **At Mn+2 only:** Portainer API, PortainerCompose stack authorisation, DNS + Traefik route
    for `framelink.huisman.io`.

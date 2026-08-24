@@ -1,6 +1,6 @@
 # Software Build Guide 15 — The Fleet Manager on Your Workstation
 
-Run the Fleet Manager on your own PC as a Docker container instead of starting it by hand with `dotnet run`, with the same bundled call server, the same database and the same address the frames already know. This is the guide in daily use; [guide 14](14-fleet-manager-deployment.md) is the same server on an always-on host behind a reverse proxy, and it is deferred until a release has been cut. Every step here runs on the Windows workstation — most of them in Git Bash from the repository root, and two of them in a PowerShell window opened with **Run as administrator**, which the step says so where it matters. Two things about Windows shape this guide more than anything else, and both were measured on this machine rather than reasoned about: Windows hands out the ports call media needs as temporary ports to other programs, and a database file shared between Windows and a Linux container is not safely shared at all. Steps 1 and 5 are what those two facts turn into. **About the captured output:** every EXPECTED OUTPUT block is real output from this workstation. Image digests, container ids, port counts, LiveKit node ids and timestamps will differ on yours. Where a block could not be captured — because the command needs an Administrator shell this session did not have, or because running it would have taken the port a live frame is using — LOOK FOR says so in those words rather than showing something invented.
+Run the Fleet Manager on your own PC as a Docker container instead of starting it by hand with `dotnet run`, with the same bundled call server, the same database and the same address the frames already know — and with the frame software itself inside the image, which is what makes one container tag decide what every frame in the house runs. This is the guide in daily use; [guide 14](14-fleet-manager-deployment.md) is the same server on an always-on host behind a reverse proxy, and it is deferred until a release has been cut. Every step here runs on the Windows workstation — most of them in Git Bash from the repository root, and two of them in a PowerShell window opened with **Run as administrator**, which the step says so where it matters. Two things about Windows shape this guide more than anything else, and both were measured on this machine rather than reasoned about: Windows hands out the ports call media needs as temporary ports to other programs, and a database file shared between Windows and a Linux container is not safely shared at all. Steps 1 and 5 are what those two facts turn into. **About the captured output:** every EXPECTED OUTPUT block is real output from this workstation. Image digests, container ids, port counts, LiveKit node ids and timestamps will differ on yours. Where a block could not be captured — because the command needs an Administrator shell this session did not have, or because running it would have taken the port a live frame is using — LOOK FOR says so in those words rather than showing something invented.
 
 ---
 
@@ -150,6 +150,10 @@ Run one script. It compiles the server, packs it into a container image, starts 
 `deploy/fleet-manager/build-image.sh` drives a two-stage build: the .NET SDK image plus the Native AOT toolchain publishes the server as one self-contained executable, and `debian:trixie-slim` plus four packages delivers it. There is no .NET runtime in the delivered image, which is why it comes out around 63 MB rather than several hundred. It is the same script and the same image [guide 14](14-fleet-manager-deployment.md) uses on a server; nothing about the image is development-specific, and that is deliberate — the thing you develop against should be the thing you eventually deploy.
 
 Three lines of its output are worth reading rather than skimming. **`agent payload`** names the agent binary baked into the image, which the Fleet Manager serves to every frame as its update feed; a checkout that has never run `python tools/harness/fl.py build` says `NONE`, which is a valid image that simply cannot update a fleet. **`version=0.0.0+<sha>.dirty`** means the working tree had uncommitted changes, so this artifact is not reproducible — printed as a warning rather than enforced, and entirely normal during development. **The tag substitutes `-` for `+`** because an OCI tag may not contain `+`; the label inside the image keeps the real string.
+
+The word *baked* in that first sentence is the whole of how updates work here, and it is worth being exact about. The container **is** the release feed: there is no bucket, no CDN and nothing for an operator to publish to, and the Dockerfile's build stage copies whatever `build/out/<runtime>/fl-agent` held at that moment into `/app/agent/` inside the image, alongside the `.version` file beside it. From then on the copy is frozen. Rebuilding the agent with `fl.py build` afterwards changes the workstation's `build/out` and changes nothing this image serves — the image only picks a new agent up when it is built again. So the two version strings printed above are independent by construction and routinely differ: `version=` is the server's own commit, `agent payload` is whichever agent build happened to be sitting in `build/out` when the image was made. Neither is wrong when they disagree. The copy is also a shell loop rather than a `COPY` line, so an image built from a checkout that never built an agent is a valid image that serves no agent, rather than a build failure.
+
+That is what makes an image tag mean something for the whole fleet rather than just for the server, and it is why step 9's rollback is one variable. A frame asks its Fleet Manager every hour what agent it should be running and then **matches** that answer — upgrading or downgrading, whichever direction it has to move — so the tag you start the stack with decides what every frame in the house is running within the hour. Step 10 is how you read the answer the frames are getting.
 
 The last line prints the tag. Keep it: step 6 needs it, and step 9's rollback is nothing more than starting the stack again with a previous one, which is a question a moving tag like `:latest` cannot answer.
 
@@ -400,7 +404,9 @@ Stop the hand-started one, copy its database into the volume, start the containe
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-Nothing on any frame changes, and the reason is worth understanding because it is what makes this cheap. When an agent is installed it is given the Fleet Manager's address, and it writes that address into its own `endpoints.json` and then never asks anything again — not a cache with a refresh, an early return. So a frame pointed at `http://10.20.30.200:5199` stays pointed there for as long as it exists, and the entire cutover is the question of who is listening on that port.
+Nothing has to be *done* to any frame, and the reason is worth understanding because it is what makes this cheap. When an agent is installed it is given the Fleet Manager's address, and it writes that address into its own `endpoints.json` and then never asks anything again — not a cache with a refresh, an early return. So a frame pointed at `http://10.20.30.200:5199` stays pointed there for as long as it exists, and the entire cutover is the question of who is listening on that port.
+
+**The frames do not come through it unchanged, though, and one of the two changes is the agent they are running.** A Fleet Manager started by hand with `dotnet run` from this repository serves `build/out` *live* — it walks up the source tree, finds that directory and reads it on every request, so whatever `fl.py build` last produced is what the fleet is being offered, and rebuilding the agent changes the answer immediately with no restart. The container cannot do that: it has no source tree, and it serves the frozen copy step 3 baked into the tag you are starting. So the moment the container takes port 5199, the fleet is being offered a possibly different agent, and each frame will match it — downgrading if that is the direction — at its next handshake, which is seconds away because it is reconnecting anyway. That is by design and it is what a tag is *for*, but it is not nothing, and the way to have it be a non-event is to check before you start: build the image from the same checkout you last ran `fl.py build` in, and read step 10 afterwards. The other change is the calling settings, which is what the reader will actually see, and LOOK FOR describes it.
 
 Every line is safe to run twice. Line 1 asks whether the hand-started instance is still up, and you want it to fail. Line 2 stops the container from step 6 and leaves the volume alone. Line 3 is the import, which refuses if the database is still open, refuses if the volume already holds one, and otherwise verifies the copy by hash. Lines 4 and 5 start the stack on 5199. If you get interrupted after line 3 and start again from the top, line 3 says `nothing to do` and lines 4 and 5 recreate a container that was already correct.
 
@@ -473,6 +479,8 @@ Stopping first is what makes the copy trustworthy. The database is SQLite in wri
 
 Rolling back to an older build is one edit and no restore, and the reason is a rule rather than luck: the database schema only ever grows. Tables and nullable columns are added; nothing is repurposed or removed. An older Fleet Manager started against a newer volume therefore finds every table and column it knows about exactly where it left them and never reads the ones added after it. That was exercised here — an image built ten commits earlier came up healthy against a database written by the current build, signed a session in, took three hundred writes without a failure and still listed the adopted frame under its own name — and it is a property to defend rather than assume, so a future change that renames or drops a column is a change that breaks rollback and must say so.
 
+**Naming an older tag rolls the frames back too, and that is the point of it rather than a side effect.** Step 3's `agent payload` is inside the image, so an older tag carries the agent that was in `build/out` when that image was built, and every frame in the house matches whatever its Fleet Manager serves — within the hour on its own timer, or within seconds if it reconnects. So one variable moves the server *and* the fleet, together, in both directions, which is the whole reason the agent is baked in rather than published somewhere separately: there is no way to end up with a server from one build talking to frames from another, because there is only ever one thing to choose. It also means a rollback aimed at a server bug will take the frames' agent with it, and an older tag built from a checkout that had no agent in `build/out` serves none at all — the frames keep running what they have and simply stop being offered anything, which is safe but is not the same as being rolled back. Step 10 is how you tell those apart in one command, and it is worth running immediately after any tag change.
+
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
 ```bash
@@ -499,7 +507,52 @@ Exactly one `framelink.db` in the listing, owned by `10001/10001`. **A `framelin
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-You hold a small, consistent, restorable copy of every adopted frame's identity, name, settings and call credential, and you can move the Fleet Manager forwards and backwards between builds with one variable.
+You hold a small, consistent, restorable copy of every adopted frame's identity, name, settings and call credential, and you can move the Fleet Manager — and, with it, the software running on every frame in the house — forwards and backwards between builds with one variable.
+
+<a id="10-read-which-agent-the-fleet-is-being-served"></a>
+<img src="https://img.shields.io/badge/STEP_10-Read_which_agent_the_fleet_is_being_served-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 10 — Read which agent the fleet is being served"/>
+
+![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
+
+The version on the outside of the container is the server's. The frames are running a different program with its own version, handed to them by that same container — and nothing you have run so far has shown you which one.
+
+![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
+
+Ask the running container three short questions: which build of the server it is, what frame software it is carrying, and what it hands out when a frame asks.
+
+![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
+
+Line 1 reads the label the build script stamped on the image, which is the server's own version and the thing your tag was named after. Line 2 lists the frame software carried inside the image at `/app/agent/linux-arm64` — the frozen copy step 3 baked in, with the timestamp on those two files being the moment the *image* was built rather than the moment the agent was. `MSYS_NO_PATHCONV=1` is there for the reason step 9 gives. Line 3 is the only one of the three that is the fleet's own view: it asks the exact web address a frame asks, over the network rather than through Docker, and gets back the exact answer a frame gets back. It needs no password because it is deliberately outside the sign-in — a frame too old to be adopted must still be able to repair itself — and it is read at this PC's LAN address rather than `127.0.0.1` on purpose, so that a reply also proves the path step 2 opened is still open.
+
+The three answers are three different facts and it is normal for the first to disagree with the other two. `linux-arm64` is in the address because that is the kind of computer a frame is; a Fleet Manager can carry software for more than one kind and hands each frame the one that matches it. The `\u002B` in the reply is simply how a plus sign is spelled inside this kind of message, so `0.0.0\u002Bebc474a.dirty` on the last line and `0.0.0+ebc474a.dirty` are the same version, written two ways.
+
+What the reply is *for* is the thing worth carrying away from this guide. Every frame asks this address once an hour and then makes itself match the answer, in whichever direction that requires, so this one line is what every frame in the house will be running shortly whether or not anybody intended it. It is also what makes installing frame software by hand pointless unless this agrees with it: a hand-installed build that this address does not name is undone the next time a frame asks, which was measured at six seconds. `python tools/harness/fl.py status` prints the same answer beside the locally built one and says whether they agree, and reports the feed as *unchecked* rather than as agreement when it cannot reach it.
+
+![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
+
+```bash
+docker inspect framelink-dev --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+MSYS_NO_PATHCONV=1 docker exec framelink-dev ls -l /app/agent/linux-arm64
+curl -fsS http://10.20.30.200:5199/agent/release/linux-arm64
+```
+
+![EXPECTED OUTPUT](https://img.shields.io/badge/🍓-EXPECTED_OUTPUT-0d9488?style=flat-square)
+
+```text
+0.0.0+9dc0050.dirty
+total 10420
+-rwxr-xr-x 1 root root 10662576 Aug 23 22:40 fl-agent
+-rw-r--r-- 1 root root       19 Aug 23 22:40 fl-agent.version
+{"version":"0.0.0\u002Bebc474a.dirty","runtimeIdentifier":"linux-arm64","sha256":"fce86f82a34eff5d5a5c6b668be59cb76c2d2fd0c3aa2ffab7ec45f280862dfe","sizeBytes":10662576,"url":"/agent/binary/linux-arm64"}
+```
+
+![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
+
+Three answers, and the last one is the one that matters: a `version` in it, and a `sha256` and `sizeBytes` that match the `fl-agent` line above — `10662576` in both, here. **The first line and the last line naming different versions is correct and is not a fault**: `0.0.0+9dc0050.dirty` is the server, `0.0.0+ebc474a.dirty` is the frame software it happened to be carrying, and they are stamped at different moments from different builds. The last line has no line break after it, so your prompt will appear on the end of it. `curl: (22) The requested URL returned error: 404` on line 3 means this image was built from a checkout with no frame software in it — the container is fine, the frames simply keep running what they already have; build it again after `python tools/harness/fl.py build`. Re-run that line without the `f` in `-fsS` to see the server say so in its own words, which is where the `no-release` wording lives. `curl: (7)` on line 3 while lines 1 and 2 answered means the container is running but nothing outside this PC can reach it, which is step 2 unfinished. `error: no such object: framelink-dev` on line 1 means the stack is not up; start it with step 6. If you have just changed `FRAMELINK_IMAGE` and rolled back, run this again straight away — the version on the last line is what the whole house converges onto, and reading it is cheaper than discovering it.
+
+![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
+
+You can see, in three short commands, exactly which frame software your Fleet Manager is handing out — which is what decides what every frame in the house ends up running, and the one thing a container tag alone never tells you.
 
 ---
 
@@ -507,4 +560,4 @@ You hold a small, consistent, restorable copy of every adopted frame's identity,
 
 ![CHECKPOINT](https://img.shields.io/badge/🚩-CHECKPOINT-228b22?style=for-the-badge)
 
-`docker ps` shows `framelink-dev` `Up ... (healthy)` running the immutable tag you built, `docker port framelink-dev | grep -c udp` reports the media range published, and `docker logs framelink-dev` shows the call server started as a child process. A frame that was adopted before the cutover reconnects on its own within a minute and appears in the console under its own name rather than in the adoption queue, with nothing changed on the frame itself. `docker compose ... down` followed by `docker volume ls` leaves `framelink-data` exactly where it was, and the folder the database was imported from is still sitting there untouched, so going back to `dotnet run` is always one minute away.
+`docker ps` shows `framelink-dev` `Up ... (healthy)` running the immutable tag you built, `docker port framelink-dev | grep -c udp` reports the media range published, and `docker logs framelink-dev` shows the call server started as a child process. A frame that was adopted before the cutover reconnects on its own within a minute and appears in the console under its own name rather than in the adoption queue, with nothing done to the frame itself. `curl -fsS http://10.20.30.200:5199/agent/release/linux-arm64` answers a line of JSON naming a `version`, a `sha256` and a `sizeBytes`, which is the frame software this Fleet Manager is handing out and therefore what the whole fleet converges onto — not the container tag, and routinely a different string from it. `docker compose ... down` followed by `docker volume ls` leaves `framelink-data` exactly where it was, and the folder the database was imported from is still sitting there untouched, so going back to `dotnet run` is always one minute away.

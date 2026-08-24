@@ -1,7 +1,7 @@
 {
   "schema": "framelink.harness.progress/1",
   "generatedBy": "tools/harness/fl.py",
-  "updatedUtc": "2026-08-23T23:37:31Z",
+  "updatedUtc": "2026-08-24T00:08:34Z",
   "readMeFirst": [
     "This is the FrameLink v2 progress file. It is written continuously by tools/harness/fl.py and is the authoritative answer to 'where does the build stand' for a session that remembers nothing. Read it top to bottom: nextActions and blockers are what to do, milestones is where the build is, capabilities is what this harness has been proven able to do, resources is the M3 ledger, findings holds the measured answers to questions the catalog was carrying open, orientation names the other durable artifacts, environment names the hosts and the credentials.",
     "Run `python tools/harness/fl.py status` first. It re-probes this session live (docker, dotnet, paramiko, the mule on tcp/22, which credentials are present) and rewrites blockers and nextActions from what it finds, so a stale obstacle cannot survive the one command a resuming session is told to run.",
@@ -16,15 +16,29 @@
     "Orient before touching anything: version2.md section 5.1 is the milestone ladder, reference/resource-catalog.md is the resource spec M3 is migrating, reference/v1-state-inventory.txt is the parity target, `git log --oneline -40` is the reasoning record. The 'orientation' block in this file says what each one is for.",
     "dotnet run --project tests/FrameLink.Tests  - the only gate between a change and a release (version2.md section 7.2: no red test ships). Not `dotnet test`, which discovers zero tests under xunit.v3 on this SDK. `fl.py test` wraps it with telemetry off and a deadline.",
     "Ask the user for FL_PW and supply it inline (FL_PW='...' python tools/harness/fl.py <cmd>) to unlock deploy / collect / any SSH to the mule. Never store it.",
+    "Ask the user for FRAMELINK_OPERATOR_PASSWORD - the Fleet Manager's single operator credential. Nothing can be adopted or watched reconciling without it.",
+    "Ask the user for FL_HA_TOKEN (a long-lived token from http://10.20.30.250:8123) to unlock `fl.py power` on switch.wall_plug_25. Relay operations are cumulative mechanical wear.",
     "THE FRONTIER (M3): the agent's graph carries 81 resources against the catalog's 80 (1 net beyond it; AgentResourceGraphTests names which), and 36 of 81 can still be shown to have been reboot-verified on hardware. That is a floor, not a census - the mule has reached full convergence, and what is thin is the evidence retained for each row, not the convergence. Re-establish it against a freshly flashed card, and watch it on the panel.",
-    "M2.5 is NOT done, and what is missing is the flash rather than the hardware: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and nothing generated has ever been written to a card. A reader has been attached since 2026-08-23 and a blank card is on the operator's desk - `fl.py cards list` is the register and says where each card is. Flash the blank card, put it in Frame #2, and watch the adoption queue."
+    "M2.5 is NOT done, and what is missing is the flash rather than the hardware: the generator is built and measured against the real base image, but its acceptance test is to flash a card and watch a row appear, and nothing generated has ever been written to a card. A reader has been attached since 2026-08-23. Run `fl.py cards list` before touching anything - it is the register, it says which card is blank, which is in a frame and which must never be written, and it is maintained where this sentence is not. Flash the blank one, boot it, and watch the adoption queue."
   ],
   "blockers": [
     {
       "id": "fl-pw-unset",
       "what": "FL_PW is not set, so no command can reach the mule.",
       "needs": "Supply the mule password inline for this session: FL_PW='...' python tools/harness/fl.py <cmd>",
-      "since": "2026-08-23T23:37:31Z"
+      "since": "2026-08-24T00:08:34Z"
+    },
+    {
+      "id": "ha-token-unset",
+      "what": "FL_HA_TOKEN is not set, so the smart plug cannot be switched.",
+      "needs": "Create a long-lived access token at http://10.20.30.250:8123 and pass it as FL_HA_TOKEN.",
+      "since": "2026-08-24T00:08:34Z"
+    },
+    {
+      "id": "operator-password-unset",
+      "what": "FRAMELINK_OPERATOR_PASSWORD is not set, so the Fleet Manager cannot be logged into.",
+      "needs": "Ask the user for it and supply it inline when starting src/FrameLink.Control. Without it the server still runs, but it serves the setup page and answers connecting frames 'not-configured' - so nothing can be adopted and no reconcile can be watched.",
+      "since": "2026-08-24T00:08:34Z"
     }
   ],
   "milestones": [
@@ -49,11 +63,11 @@
       "stateFrom": "witness",
       "evidence": {
         "how": "observed-on-hardware",
-        "what": "The agent on the mule connected to the dev Fleet Manager, appeared in the adoption queue as a pending device, was adopted from the GUI under the name 'Mule' (device T1RJ-6JCQ-9HN8-3920, hardware serial 19aa037e525b27b6), went online, and streamed live reconcile telemetry that the GUI rendered.",
-        "whenUtc": "2026-08-15",
-        "where": "mule framelink@10.20.30.53, Fleet Manager running on the workstation at http://10.20.30.200:5199",
-        "recordedIn": "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI); the device identity is visible in every journal capture under tools/harness/runs/ (gitignored, local only); the adoption row itself lives in the Fleet Manager's SQLite database outside this repository",
-        "notWitnessed": "The self-update leg was not separately re-observed in that session. The update path is wired and running - the mule's journal shows repeated update checks against /agent/release/linux-arm64 - but they are failing right now because the dev Fleet Manager is not up, so a successful binary swap has not been watched."
+        "what": "Two observations, both on the mule. (1) 2026-08-15: the agent connected to the dev Fleet Manager, appeared in the adoption queue as a pending device, was adopted from the GUI under the name 'Mule' (device T1RJ-6JCQ-9HN8-3920, hardware serial 19aa037e525b27b6), went online, and streamed live reconcile telemetry that the GUI rendered. (2) 2026-08-23: the self-update leg, which the first observation did not cover. A deploy installed 0.0.0+ebc474a.dirty on a frame whose Fleet Manager was serving 0.0.0+0384c01.dirty, and the frame put itself back onto the served build in six seconds - its own journal narrating it as `Converging from 0.0.0+ebc474a.dirty to the served version 0.0.0+0384c01.dirty`, which is UpdateService's own line. That is section 2.8's mechanism doing the thing that makes it a mechanism: the agent MATCHED the served version rather than taking the greater of the two, and the direction it moved was DOWN.",
+        "whenUtc": "2026-08-23",
+        "where": "mule framelink@10.20.30.53, Fleet Manager at http://10.20.30.200:5199 - started by hand from src/FrameLink.Control for the 2026-08-15 observation, and the container of deploy/fleet-manager/framelink.dev.yml for the 2026-08-23 one",
+        "recordedIn": "git log (commits 7e41cb2 control console, 43dfc51 protocol, 68ffbdf GUI, and 9dc0050 for the six-second convergence and the feed gate it produced); the narration string is src/FrameLink.Agent/Update/UpdateService.cs and the measurement is quoted in tools/harness/flh/feed.py's module docstring; the device identity is visible in every journal capture under tools/harness/runs/ (gitignored, local only); the adoption row itself lives in the Fleet Manager's SQLite database outside this repository",
+        "notWitnessed": "No journal file holding the 2026-08-23 convergence survives under tools/harness/runs/ - the line is quoted in commit 9dc0050 and in flh/feed.py and nowhere else on disk, so that observation rests on a commit message rather than on a retained capture. The previous text here said the update checks were failing because the dev Fleet Manager was not up; that was true when written, outlived its condition, and is what the 2026-08-23 observation replaced."
       }
     },
     {
@@ -85,7 +99,7 @@
         "whenUtc": "2026-08-15",
         "where": "workstation, debian:trixie-slim container",
         "recordedIn": "git log commit ba5a873 carries the full measurement and the debugfs-exits-0-on-failure finding; decision 52 supersedes 32 in version2.md Appendix A; the tests are tests/FrameLink.Tests/ControlImageGenerationTests.cs",
-        "notWitnessed": "The milestone's own acceptance test - flash a card, watch a row appear - has not happened and cannot yet: version2.md section 5.3 item 3 records that no SD card reader is attached. Nothing generated has been written to a card, booted, or seen in the adoption queue. This milestone is NOT done."
+        "notWitnessed": "The milestone's own acceptance test - flash a card, watch a row appear - has not happened. Nothing generated has been written to a card, booted, or seen in the adoption queue, so this milestone is NOT done. What is missing is the flash itself and not the hardware: an SD card reader has been attached since 2026-08-23 (version2.md sections 5.3 item 3 and 6.1), and the register at tools/harness/cards.json - `fl.py cards list` - says which card is where, including which one is blank and which one must never be written. This text used to cite the missing reader as the reason it could not happen, and went on citing it for a week after the reader arrived; the register is now the thing to read, because it is maintained and this sentence is not."
       }
     },
     {
@@ -319,10 +333,10 @@
   ],
   "orientation": {
     "specification": "version2.md - the build specification. Section 5.1 is the milestone ladder mirrored below, section 5.5 is why this file exists, Appendix A preserves every decision with its reasoning.",
-    "resourceSpec": "reference/resource-catalog.md - the enumeration of all 80 device settings extracted from build guides 3-12 and the cross-guide section, one block per resource with its Observe, Act and Verify. This is what M3 migrated, and it is the spec each new resource is written against. The count is the file's own Total row, which is what the resources ledger below reads.",
+    "resourceSpec": "reference/resource-catalog.md - the enumeration of every device setting extracted from build guides 3-12 and the cross-guide section, one block per resource with its Observe, Act and Verify. This is what M3 migrated, and it is the spec each new resource is written against. Do not read a count from this sentence: it used to carry one, and a number written into prose beside a number that is measured is the one that goes wrong. The catalog total is the file's own Total row and is in the resources ledger below, re-read on every write.",
     "parityTarget": "reference/v1-state-inventory.txt - the frozen v1 frame's state: packages, units, config contents and hashes, mixer values, firmware versions. This is what Mn+3 measures 'at parity' against, and the catalog's cross-check.",
     "parityHarness": "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes over SSH, then tools/FrameLink.Parity judges the result against the parity target, an expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be completed.",
-    "cardRegister": "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is on each one, when it last moved and what must not be disturbed. Read it before touching a card: one of the three is the only surviving v1 system and reference/v1-state-inventory.txt is a capture taken from the machine it ran, so overwriting it destroys the parity target's origin permanently. `fl.py cards check` reads whatever is in the workstation's reader and compares it against what the register claims is in there - exit 2 means they disagree and the register is not to be trusted until someone finds out which of the two is wrong.",
+    "cardRegister": "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is on each one, when it last moved and what must not be disturbed. Read it before touching a card, and read it rather than trusting this sentence: one of the three carries the only running v1 system, and reference/v1-state-inventory.txt was captured from the machine that booted it. A full byte-for-byte image of that card was taken on 2026-08-23 and is recorded in the register as image 'v1-card-2026-08-23', so it is no longer irrecoverable - but the register also records that the image exists in exactly one place, which is a copy and not yet a backup. The register's own `handling` text is the current answer and this one is not. `fl.py cards check` reads whatever is in the workstation's reader and compares it against what the register claims is in there - exit 2 means they disagree and the register is not to be trusted until someone finds out which of the two is wrong.",
     "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",
     "repoRules": "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
     "harness": "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does and what it refuses to do; flh/config.py holds every host, path and default in one place.",
@@ -337,8 +351,9 @@
     },
     "fleetManager": {
       "address": "http://10.20.30.200:5199",
-      "what": "The dev Fleet Manager, run on the workstation from src/FrameLink.Control. The mule's agent is pointed here and retries forever while it is down, which is why a journal capture taken with the server stopped is a wall of connection warnings rather than a fault.",
-      "startedBy": "dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199, with FRAMELINK_OPERATOR_PASSWORD set and FRAMELINK_DATA_DIR pointing at the operator data directory outside this repository.",
+      "what": "The dev Fleet Manager, run on the workstation as a Docker container from the same image the server deployment uses. It restarts unless-stopped, so it is normally already up. The mule's agent is pointed here and retries forever while it is down, which is why a journal capture taken with the server stopped is a wall of connection warnings rather than a fault. Do not assert its state from this file - `fl.py status` probes it, and prints what it found.",
+      "startedBy": "docker compose -p framelink -f deploy/fleet-manager/framelink.dev.yml up -d, with FRAMELINK_OPERATOR_PASSWORD exported in that shell and FRAMELINK_IMAGE set to a tag built by deploy/fleet-manager/build-image.sh. The data lives in the external `framelink-data` volume; docs/15-local-fleet-manager.md is the walkthrough. `dotnet run --project src/FrameLink.Control -- --urls http://0.0.0.0:5199` still works for a one-off and is how this was started before the container existed - but the two do not serve the same agent, which is the difference `servesAgentFrom` below is about.",
+      "servesAgentFrom": "The container serves the agent binary baked into its image at build time, from /app/agent/<rid>/fl-agent - so the image tag and the served agent are one fact, and reverting the tag reverts the fleet within the hour (version2.md section 2.8). A `dotnet run` from this source tree instead serves build/out LIVE, because ControlOptions.LocateReleaseDirectory walks up to it. Rebuilding the agent therefore changes what a hand-started server serves immediately and changes what the container serves not at all until the image is rebuilt. artifacts.servedAgent records what was actually being served the last time `fl.py status` asked.",
       "agentPointedBy": "--control-url on `fl-agent install`, or the FL_CONTROL_URL variable"
     },
     "homeAssistant": {
@@ -409,7 +424,17 @@
         "lines": 200
       }
     },
-    "lastParityRun": null
+    "lastParityRun": null,
+    "servedAgent": {
+      "feedUrl": "http://10.20.30.200:5199/agent/release/linux-arm64",
+      "runtimeIdentifier": "linux-arm64",
+      "checked": true,
+      "version": "0.0.0+ebc474a.dirty",
+      "sha256": "fce86f82a34eff5d5a5c6b668be59cb76c2d2fd0c3aa2ffab7ec45f280862dfe",
+      "sizeBytes": 10662576,
+      "reason": null,
+      "checkedUtc": "2026-08-24T00:08:34Z"
+    }
   },
   "counters": {
     "builds": 19,
