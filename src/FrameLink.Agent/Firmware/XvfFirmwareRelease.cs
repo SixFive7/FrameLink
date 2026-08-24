@@ -82,10 +82,18 @@ public readonly record struct XvfFirmwareImage(
 /// <c>ua-io16-6ch-sqr</c> profile, which is the six-channel one, against a base profile the array
 /// on Frame #1 reports as <c>BLD_MSG ua-io16-sqr</c>. The 2.1.0 filenames spell both departures out
 /// — <c>16k6ch</c> and <c>48k2ch</c> — leaving 16 kHz and two channels as the unsuffixed build.
-/// And byte-wise, <c>v2.1.0</c> and <c>v2.1.0_48k2ch</c> are the closest pair in the whole
-/// directory (30.03% of bytes differing, against 46.17% for <c>v2.1.0</c> versus
-/// <c>v2.1.0_16k6ch</c>), which is what two builds sharing a channel topology and differing in
-/// sample rate look like. The frame agrees from its own side: the v1 reference capture records the
+/// And the maintainer names a suffix's profile outright in upstream issue 19 — <i>"This v2.0.9_48k
+/// firmware is indeed built with the ua-io48-sqr configuration"</i> — which is the suffix-to-profile
+/// mapping stated by the person who builds them rather than inferred from a filename. A fifth
+/// corroboration stood here and is <b>withdrawn as falsified</b> (measured 2026-08-24): it argued
+/// that <c>v2.1.0</c> and <c>v2.1.0_48k2ch</c> differing by 30.03% of bytes, against 46.17% for
+/// <c>v2.1.0_16k6ch</c>, was what a sample-rate-only difference looks like. Recomputing all 45
+/// pairwise differences shows the metric does not discriminate: <c>v2.0.9</c> against
+/// <c>v2.0.9_48k</c>, the maintainer-confirmed rate-only pair, differs by 44.10%, while
+/// <c>v2.0.7</c> against <c>v2.0.9</c> — same profile, different version — differs by 28.31%, and
+/// every pair falls between 28% and 48%. version2.md decision 91 and
+/// reference/xvf3800-board-revisions.md both withdrew it; this comment was the last place still
+/// citing it. The frame agrees from its own side: the v1 reference capture records the
 /// array's ALSA <c>Capture Channel Map</c> with <c>count 2</c>, and PipeWire enumerating it as
 /// <i>Analog Stereo</i>. Flashing a six-channel or 48 kHz build would change the frame's audio
 /// topology under every mixer resource in the catalog.
