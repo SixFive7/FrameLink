@@ -371,7 +371,9 @@ public sealed class ArrayFlashProgressBox
 /// the beat is a plain timer. Nothing on this path reads or advances <see cref="IAgentClock"/>,
 /// which is what the write's re-enumeration deadline is measured against — so a reporting loop
 /// cannot spend the write's patience, which is the subtlest way this could have reached through and
-/// changed an outcome.
+/// changed an outcome. The stopwatch sits behind a delegate the suite can substitute
+/// (<see cref="Start"/>'s <c>elapsed</c>), and that seam is deliberately its own rather than the
+/// agent's clock, so making the second hand testable does not quietly undo this property.
 /// </para>
 /// <para>
 /// <b>4. No backpressure, ever.</b> There is no queue and nothing bounded to fill:
@@ -400,7 +402,7 @@ public sealed class ArrayFlashProgressPump : IDisposable
     private readonly ArrayFlashApproval _approval;
     private readonly ArrayFlashProgressBox _box;
     private readonly IAgentLog _log;
-    private readonly Stopwatch _elapsed = Stopwatch.StartNew();
+    private readonly Func<TimeSpan> _elapsed;
     private readonly CancellationTokenSource _stopping = new();
     private readonly long _epoch;
     private readonly TimeSpan _beat;
@@ -412,13 +414,29 @@ public sealed class ArrayFlashProgressPump : IDisposable
         ArrayFlashProgressBox box,
         IAgentLog log,
         long epoch,
-        TimeSpan beat)
+        TimeSpan beat,
+        Func<TimeSpan> elapsed)
     {
         _approval = approval;
         _box = box;
         _log = log;
         _epoch = epoch;
         _beat = beat;
+        _elapsed = elapsed;
+    }
+
+    /// <summary>A monotonic reading of how long this pump has been running, from a clock of its own.</summary>
+    /// <remarks>
+    /// <b>A <see cref="Stopwatch"/> behind a delegate, and deliberately not an <see cref="IAgentClock"/>.</b>
+    /// Property 3 above is that nothing on this path may read or advance the agent's clock, because
+    /// that is what the write's re-enumeration deadline is measured against — so the seam that makes
+    /// the elapsed seconds testable has to be a separate one, or it would undo the property it is
+    /// being introduced underneath.
+    /// </remarks>
+    private static Func<TimeSpan> StartElapsed()
+    {
+        var stopwatch = Stopwatch.StartNew();
+        return () => stopwatch.Elapsed;
     }
 
     /// <summary>How many frames this has actually put on the screen.</summary>
@@ -434,6 +452,9 @@ public sealed class ArrayFlashProgressPump : IDisposable
     /// <param name="attempt">
     /// Which of <see cref="ArrayFirmwareFlash.MaxAttempts"/> writes this is, counting from one.
     /// </param>
+    /// <param name="elapsed">
+    /// How long this write has been running, or null for a <see cref="Stopwatch"/> started here.
+    /// </param>
     /// <remarks>
     /// <para>
     /// <b>It takes the epoch here and publishes nothing here.</b> Claiming the screen is a lock and
@@ -448,19 +469,36 @@ public sealed class ArrayFlashProgressPump : IDisposable
     /// <see cref="ArrayFlashProgress"/> because the wire status is a frozen protocol contract and
     /// this is a sentence rather than a measurement.
     /// </para>
+    /// <para>
+    /// <b><paramref name="elapsed"/> exists because the second hand is part of what a frame is
+    /// worth repainting for.</b> <see cref="ArrayFlashProgress.Signature"/> carries the elapsed
+    /// whole second on purpose — it is what moves the screen through the manifest, which prints
+    /// nothing at all — so "this reading is worth publishing" is a question about wall-clock time
+    /// and a test of it cannot be written against a stopwatch it does not own. Production passes
+    /// nothing and gets the stopwatch; the suite passes a reading it holds still, which is what
+    /// makes the drop-what-has-not-changed rule assertable rather than a coin toss on whether a
+    /// second turned over mid-test.
+    /// </para>
     /// </remarks>
     public static ArrayFlashProgressPump Start(
         ArrayFlashApproval approval,
         ArrayFlashProgressBox box,
         IAgentLog log,
         TimeSpan? beat = null,
-        int attempt = 1)
+        int attempt = 1,
+        Func<TimeSpan>? elapsed = null)
     {
         ArgumentNullException.ThrowIfNull(approval);
         ArgumentNullException.ThrowIfNull(box);
         ArgumentNullException.ThrowIfNull(log);
 
-        var pump = new ArrayFlashProgressPump(approval, box, log, approval.BeginWriting(attempt), beat ?? DefaultBeat);
+        var pump = new ArrayFlashProgressPump(
+            approval,
+            box,
+            log,
+            approval.BeginWriting(attempt),
+            beat ?? DefaultBeat,
+            elapsed ?? StartElapsed());
 
         // Discarded on purpose. Nothing waits on this task — not the caller, not Dispose — because
         // anything that waited on it would be a way for the screen to reach the write.
@@ -477,7 +515,7 @@ public sealed class ArrayFlashProgressPump : IDisposable
     /// </remarks>
     public bool PublishOnce()
     {
-        var progress = _box.Current with { Elapsed = _elapsed.Elapsed };
+        var progress = _box.Current with { Elapsed = _elapsed() };
         var signature = progress.Signature;
 
         if (string.Equals(signature, _published, StringComparison.Ordinal))

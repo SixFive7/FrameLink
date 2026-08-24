@@ -547,9 +547,23 @@ public sealed class AgentArrayFlashProgressTests
         // that screen; it now takes an interlocked epoch and nothing else, and every frame is drawn
         // by a task it never waits for.
         //
-        // The subscriber below blocks for as long as the test lets it, which is the shape of every
-        // failure the operator named: a dead network, a hung socket, a Fleet Manager that stopped
-        // answering. The assertions are made while it is still blocked.
+        // <b>The screen is wedged before the write starts, and by a publish of the test's own.</b>
+        // That ordering is the whole point and it is what this test used to get wrong. It used to
+        // start the write first and then assert that *something* had blocked, which left the
+        // reporting path's first publish racing the write: on a busy machine the pump's task is
+        // scheduled late, the write runs to completion without a single frame being drawn, and the
+        // only thread that ever enters the subscriber is the write's own — inside
+        // ArrayFlashApproval.Finished, after dfu-util has returned and the unit has come back. Both
+        // of the old assertions were satisfied by that run: something had blocked, and the tick had
+        // not completed because the writer itself was the thing stuck in the screen. A green from
+        // that run said nothing about isolation, because no screen was ever asked to paint while
+        // the write was in flight.
+        //
+        // Wedging first removes the race in the only way that keeps the meaning: from the line
+        // below until the test lets go, every publish anybody makes — the pump's, the write's, a
+        // touchscreen watch's — enters a subscriber that does not return. The write then has to get
+        // from nothing to "the unit is back on the pinned firmware" through that, and the signals
+        // below are what say it did.
         using var fixture = new FlashFixture();
         await fixture.ReadyToFlashAsync();
         fixture.Authorise();
@@ -557,34 +571,62 @@ public sealed class AgentArrayFlashProgressTests
         fixture.Processes.Output.AddRange(Transcript(fixture.Pin.Target.SizeBytes));
 
         using var gate = new ManualResetEventSlim(false);
-        using var blocked = new ManualResetEventSlim(false);
+        using var wedged = new ManualResetEventSlim(false);
+        using var wrote = new ManualResetEventSlim(false);
 
         using var subscription = fixture.Hub.Subscribe(_ =>
         {
-            blocked.Set();
+            wedged.Set();
             gate.Wait(Patience);
         });
 
-        var flash = fixture.Flash();
         var token = TestContext.Current.CancellationToken;
+
+        // A repaint that never returns, of the test's own making, so that the screen is provably
+        // wedged before the write has done anything at all. It has to be on a task of its own
+        // because the hub calls subscribers on the publisher's thread — publishing from here would
+        // wedge the test rather than the screen.
+        var wedge = Task.Run(() => fixture.Hub.Publish(status => status), token);
+        Assert.True(wedged.Wait(Patience, token), "the screen should have wedged before the write began");
+
+        // Read on the writing thread, the moment dfu-util has returned and the unit has
+        // re-enumerated, rather than polled from here. Polling is what made the old assertions
+        // snapshots of whatever the scheduler had got round to; this is the write itself saying
+        // where it got to, and it can only say it once.
+        string? cameBackOn = null;
+        fixture.AfterWrite = () =>
+        {
+            cameBackOn = fixture.Running();
+            wrote.Set();
+        };
+
+        var flash = fixture.Flash();
         var tick = Task.Run(() => flash.TickAsync(token), token);
 
-        // The write ran and the unit came back on the pinned firmware — all of it while the one
-        // thread that draws screens is wedged inside a subscriber that has not returned.
-        await WaitForAsync(() => fixture.Processes.Commands.Any(Wrote), "dfu-util to have been started");
-        await WaitForAsync(() => string.Equals(fixture.Running(), fixture.Pin.Target.Version, StringComparison.Ordinal),
-            "the array to have come back on the pinned firmware");
+        Assert.True(
+            wrote.Wait(Patience, token),
+            "the write should have run to completion with the screen still wedged");
 
-        Assert.True(blocked.IsSet, "the reporting path should have been the thing that blocked");
-        Assert.False(tick.IsCompleted || gate.IsSet, "the write must not have needed the screen to finish");
+        // The screen was still wedged when that happened: nothing releases the gate but the line
+        // below, and the write reported itself finished before this test reached it. So the whole of
+        // the write — claiming the screen, dfu-util, the unit coming back — happened while a
+        // subscriber the hub had called had not returned.
+        Assert.False(gate.IsSet, "nothing had released the screen while the write was running");
+        Assert.Equal(fixture.Pin.Target.Version, cameBackOn);
 
         gate.Set();
+        await wedge;
 
         var outcome = await tick;
 
         Assert.True(outcome.Flashed);
         Assert.True(outcome.Succeeded);
         Assert.Equal(fixture.Authorisation, fixture.Consumed);
+
+        // Read after the write rather than during it, deliberately: Commands is an ordinary List and
+        // enumerating it from here while the writing thread appends to it is a data race of the
+        // test's own making, which is what the old polled version of this assertion was.
+        Assert.Contains(fixture.Processes.Commands, Wrote);
     }
 
     [Fact]
@@ -709,10 +751,25 @@ public sealed class AgentArrayFlashProgressTests
         // it: dfu-util rewrites its bar once per 4 KB transfer block, which is 228 redraws of a
         // 933 KB image. Publishing on each would repaint the console, re-render the page and put a
         // message on the wire eight times a second for the whole write.
+        //
+        // <b>The elapsed second is held still, and it has to be.</b> A frame is worth repainting
+        // when the stage, the percentage or the elapsed whole second has moved — the second is in
+        // there on purpose, because it is the only thing that moves through the manifest. So "a
+        // finer byte count does not cause a repaint" is only true *within one second*, and a test
+        // that let the pump's own stopwatch run was asserting that four statements execute inside
+        // the same second. On a loaded machine they do not: this test failed 4 times in 30 runs with
+        // the thread pool starved, every time on the assertion below, because a second had turned
+        // over rather than because anything about the reading had changed.
         var hub = new AgentStatusHub(AgentStatusFactory.Green());
         var approval = new ArrayFlashApproval(hub, new ManualClock(), new RecordingLog());
         var box = new ArrayFlashProgressBox(933_888);
-        var pump = ArrayFlashProgressPump.Start(approval, box, new RecordingLog(), TimeSpan.FromMinutes(5));
+        var elapsed = TimeSpan.FromSeconds(7);
+        var pump = ArrayFlashProgressPump.Start(
+            approval,
+            box,
+            new RecordingLog(),
+            TimeSpan.FromMinutes(5),
+            elapsed: () => elapsed);
 
         try
         {
@@ -731,6 +788,15 @@ public sealed class AgentArrayFlashProgressTests
 
             box.Read("Download\t[===========              ]  42%       392086 bytes");
             Assert.True(pump.PublishOnce());
+            Assert.Equal(392_086, hub.Current.ArrayFlash?.Progress?.BytesWritten);
+
+            // And the other half of the same rule, which the wall-clock version of this test could
+            // never state: with nothing at all arriving, the second hand moving on is by itself
+            // worth a frame. That is what keeps a still bar reading as a wait rather than a hang
+            // through the manifest, and the finer byte count above rides along on it.
+            elapsed = TimeSpan.FromSeconds(8);
+            Assert.True(pump.PublishOnce());
+            Assert.Equal(8, hub.Current.ArrayFlash?.Progress?.Elapsed.TotalSeconds);
             Assert.Equal(392_086, hub.Current.ArrayFlash?.Progress?.BytesWritten);
         }
         finally
@@ -762,11 +828,20 @@ public sealed class AgentArrayFlashProgressTests
 
         string? duringWrite = null;
 
+        // <b>Waited for by the whole of what is asserted below, not by a part of it.</b> The box
+        // reaches its last reading synchronously — the fixture hands the transcript over before it
+        // lets the tool return — but the *screen* is repainted by the pump, one frame per change,
+        // and there are four changes after the bar first reads 100%. Waiting on the percentage alone
+        // therefore accepted whichever of those five frames had landed, and on a loaded machine it
+        // caught an earlier one: this failed with "manifesting" where "resetting" was expected,
+        // once in 25 runs with the thread pool starved. The stage is part of the condition now,
+        // which is deterministic rather than tolerant — the box's last reading is fixed, and every
+        // change wakes the pump, so the frame being waited for is one the pump is bound to draw.
         fixture.Processes.Draining = async () =>
         {
             await WaitForAsync(
-                () => fixture.Screen?.Progress is { Percent: 100 },
-                "the frame's screen to show the finished download");
+                () => fixture.Screen?.Progress is { Percent: 100, Stage: ArrayFlashStages.Resetting },
+                "the frame's screen to show the write at the tool's last reading");
 
             duringWrite = reporter.Current;
         };
