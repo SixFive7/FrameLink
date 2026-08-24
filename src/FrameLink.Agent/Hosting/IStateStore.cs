@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace FrameLink.Agent.Hosting;
 
 /// <summary>
@@ -50,7 +52,25 @@ public interface IStateStore
     /// </remarks>
     void WriteSecretAtomic(string name, ReadOnlySpan<byte> content);
 
-    /// <summary>Writes <paramref name="content"/> as UTF-8 text, owner-writable (<c>0640</c>).</summary>
+    /// <summary>
+    /// Writes <paramref name="content"/> as UTF-8 text, owner-writable and group-readable
+    /// (<c>0640</c>), that a power cut cannot leave half-written.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Staged, flushed and renamed exactly as <see cref="WriteSecretAtomic"/> does it, and for the
+    /// same reason: everything reachable through this interface exists to be read <i>after</i> the
+    /// power cut. The only difference left between the two is the mode the result carries, so a
+    /// caller chooses between them on who may read the file and never on whether the write is safe.
+    /// </para>
+    /// <para>
+    /// <b>Why this is not just the journal's problem.</b> A plain overwrite interrupted mid-write
+    /// leaves a truncated file, and every reader of a truncated state file has to decide what to
+    /// do about it. The one that decided wrong — a journal read as empty, handing the frame a
+    /// fresh attempt budget and three more reboots — is fixed in its own right, but so is every
+    /// other file here, because the hole was in the write and not in the reader.
+    /// </para>
+    /// </remarks>
     void WriteText(string name, string content);
 
     /// <summary>Removes <paramref name="name"/> if present.</summary>
@@ -76,6 +96,20 @@ public sealed class FileStateStore : IStateStore
 
     private const UnixFileMode DataMode =
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead;
+
+    /// <summary>
+    /// What <see cref="File.WriteAllText(string, string?)"/> encodes with: UTF-8, no byte-order
+    /// mark, and a throw rather than a substitution for text that cannot be encoded.
+    /// </summary>
+    /// <remarks>
+    /// Spelled out here so that routing <see cref="WriteText"/> through the atomic path changed
+    /// where the bytes go and nothing whatever about what they are. A byte-order mark would break
+    /// every consumer that reads one of these files as a bare value, and the throwing fallback is
+    /// the behaviour the callers already had — a silent upgrade to replacement characters would
+    /// have been a second change hiding inside this one.
+    /// </remarks>
+    private static readonly UTF8Encoding StrictUtf8 =
+        new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
 
     private readonly IFilePermissions _permissions;
 
@@ -134,7 +168,38 @@ public sealed class FileStateStore : IStateStore
     }
 
     /// <inheritdoc/>
-    public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content)
+    public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) =>
+        WriteAtomic(name, content, SecretMode);
+
+    /// <inheritdoc/>
+    public void WriteText(string name, string content) =>
+        WriteAtomic(name, StrictUtf8.GetBytes(content), DataMode);
+
+    /// <summary>
+    /// Stages <paramref name="content"/> beside <paramref name="name"/>, flushes it to the card
+    /// and renames it into place, leaving the result at <paramref name="mode"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>One implementation, because there was only ever one correct way to do this.</b> The
+    /// secret write had the whole dance and the text write had none of it, which put a
+    /// truncatable file under every state name that was not a secret — and the mode is the only
+    /// thing that ever actually differed between them. Passing it in is what let the two collapse
+    /// into this, rather than a second copy of the staging-and-rename logic drifting beside the
+    /// first.
+    /// </para>
+    /// <para>
+    /// <b>The rename cannot cross a filesystem, by construction.</b> <see cref="PathOf"/> refuses
+    /// any name containing a separator or <c>..</c>, so the staging file is always a direct
+    /// sibling of its target inside <see cref="Root"/> — one directory, therefore one filesystem,
+    /// therefore a true <c>rename(2)</c> rather than the copy-and-delete <c>File.Move</c> falls
+    /// back to across a mount point. That matters on a frame specifically: <c>/boot/firmware</c>
+    /// is FAT32 while <see cref="DefaultRoot"/> is on the ext4 root, and a staging file written to
+    /// one and renamed onto the other would be neither atomic nor durable. Nothing here can
+    /// address <c>/boot/firmware</c> at all, which is why nothing here has to handle it.
+    /// </para>
+    /// </remarks>
+    private void WriteAtomic(string name, ReadOnlySpan<byte> content, UnixFileMode mode)
     {
         EnsureReady();
 
@@ -143,10 +208,12 @@ public sealed class FileStateStore : IStateStore
 
         using (var stream = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            // Locked down before the bytes exist, exactly as WriteSecret does it. The staging
-            // file holds the whole secret for as long as the write takes, so it is the file that
-            // has to be narrow — a 0600 target fed by a 0644 staging file is 0644 in practice.
-            _permissions.Restrict(staging, SecretMode);
+            // Locked down before the bytes exist, exactly as WriteSecret does it. The staging file
+            // holds the whole content for as long as the write takes, so it is the file that has to
+            // carry the mode — a 0600 target fed by a 0644 staging file is 0644 in practice. That
+            // is load-bearing for a secret and merely correct for ordinary state, which is the
+            // reason one implementation can serve both.
+            _permissions.Restrict(staging, mode);
             stream.Write(content);
 
             // flushToDisk, not Flush(). The rename below is atomic for a reader; it says nothing
@@ -158,21 +225,10 @@ public sealed class FileStateStore : IStateStore
 
         File.Move(staging, path, overwrite: true);
 
-        // The mode travels with the inode through rename(2), so on a frame the target is already
-        // 0600 the instant it appears. This restates it on the path the file actually has — which
-        // is what makes "root-only" assertable through IFilePermissions, and what covers the one
-        // case where File.Move is a copy rather than a rename (a target on another filesystem,
-        // impossible here only because the staging file is deliberately a sibling).
-        _permissions.Restrict(path, SecretMode);
-    }
-
-    /// <inheritdoc/>
-    public void WriteText(string name, string content)
-    {
-        EnsureReady();
-        var path = PathOf(name);
-        File.WriteAllText(path, content);
-        _permissions.Restrict(path, DataMode);
+        // The mode travels with the inode through rename(2), so on a frame the target already has
+        // it the instant it appears. This restates it on the path the file actually has, which is
+        // what makes the mode assertable through IFilePermissions.
+        _permissions.Restrict(path, mode);
     }
 
     /// <inheritdoc/>
