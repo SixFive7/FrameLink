@@ -52,6 +52,10 @@
          the whole verdict path — parsers, differ, ledger, coverage — inside the ordinary
          suite with no hardware anywhere near it. -->
     <ProjectReference Include="..\..\tools\FrameLink.Parity\FrameLink.Parity.csproj" />
+    <!-- §2.2's DAG diagram. Same split again: the tool renders reference/reconcile-dag.md from
+         the compiled catalog, and this reference is what lets the suite re-render it on every
+         run and fail when the committed picture no longer describes the graph. -->
+    <ProjectReference Include="..\..\tools\FrameLink.Diagram\FrameLink.Diagram.csproj" />
   </ItemGroup>
 
 </Project>

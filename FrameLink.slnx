@@ -10,5 +10,6 @@
   <Folder Name="/tools/">
     <Project Path="tools/FrameLink.Upstream/FrameLink.Upstream.csproj" />
     <Project Path="tools/FrameLink.Parity/FrameLink.Parity.csproj" />
+    <Project Path="tools/FrameLink.Diagram/FrameLink.Diagram.csproj" />
   </Folder>
 </Solution>

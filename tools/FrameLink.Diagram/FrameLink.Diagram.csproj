@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The reconcile DAG's diagram generator (version2.md §2.2).
+
+    A development tool, never shipped and never invoked by a build. It builds the real
+    catalog — the same DeviceCatalog.Build the agent runs — and renders
+    reference/reconcile-dag.md from it. A hand-drawn picture of 81 resources is wrong the
+    day after it is drawn; this one cannot be, because nothing in it is typed.
+
+    Split the same way tools/FrameLink.Upstream and tools/FrameLink.Parity are split, for
+    the same reason: the tool owns the writing, the suite owns the checking.
+    tests/FrameLink.Tests references this project and re-renders the document on every run,
+    so a committed diagram that no longer describes the catalog is a red test rather than a
+    picture somebody stops trusting.
+
+    It references FrameLink.Agent because the graph is the point. Reading the catalog out of
+    the C# source with a parser would be a second implementation of the thing being
+    documented, and a second implementation is exactly what drifts.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>FrameLink.Diagram</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\FrameLink.Agent\FrameLink.Agent.csproj" />
+  </ItemGroup>
+
+</Project>
