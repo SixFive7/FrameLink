@@ -72,6 +72,42 @@ public sealed class FrameRecovery
     /// <summary>What <c>systemctl</c> is asked to do for a shutdown.</summary>
     public const string ShutdownVerb = "poweroff";
 
+    /// <summary>
+    /// <b>Why a press did nothing, and what to wait for</b> — the whole of what a refused button
+    /// gets to say.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A refusal that only says no is the failure this screen exists to prevent, wearing a
+    /// different hat.</b> The hold or the click has already happened; something has to explain
+    /// itself, and "it was refused" explains nothing a person can act on. So the sentence carries
+    /// three things and in this order: what is happening instead (<paramref name="held"/>, which
+    /// arrives already worded from whoever is holding the power state), that nothing has been
+    /// queued, and the one thing to do next.
+    /// </para>
+    /// <para>
+    /// <b>"Nothing has been queued" is the load-bearing half.</b> Every other refusal in this
+    /// product is answered by pressing again later, and a person who assumes a refused shutdown is
+    /// waiting its turn will walk away from a frame that is still on — or, worse, reach for the
+    /// plug, which is the exact hazard the refusal was protecting the microphone unit from.
+    /// </para>
+    /// <para>
+    /// <b>It is composed here rather than at the hold, because both verbs and every caller share
+    /// it.</b> A hold on the panel, a click in the Fleet Manager and a button on the repair page
+    /// are refused by the same predicate for the same reason, so they are refused in the same
+    /// words.
+    /// </para>
+    /// </remarks>
+    /// <param name="held">Why the power state must not change, already worded as a clause.</param>
+    public static string RefusalLine(string held)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(held);
+
+        return $"Not now — {held}. Nothing has been queued and nothing is waiting its turn: "
+            + "wait until this frame's own screen says the microphone update has finished, then ask "
+            + "again. Do not unplug it in the meantime.";
+    }
+
     private readonly FrameRecoveryServices _services;
 
     /// <summary>Creates the pair of actions over <paramref name="services"/>.</summary>
@@ -152,9 +188,14 @@ public sealed class FrameRecovery
             return null;
         }
 
-        LastRefusal = held;
-        _services.Log.Warn($"{who} asked this frame to {verb} and it was refused: {held}");
-        return held;
+        // The composed sentence rather than the bare clause, because LastRefusal is what a surface
+        // shows and what a person reads. It is the return value too, so the caller's "was this
+        // refused" check and the words the refusal is explained in cannot drift apart.
+        var refusal = RefusalLine(held);
+
+        LastRefusal = refusal;
+        _services.Log.Warn($"{who} asked this frame to {verb} and it was refused. {refusal}");
+        return refusal;
     }
 
     private async Task<bool> RunAsync(string verb, string who, CancellationToken cancellationToken)

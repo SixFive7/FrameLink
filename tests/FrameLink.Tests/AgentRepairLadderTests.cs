@@ -491,7 +491,58 @@ public sealed class AgentRepairLadderTests
         Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
 
         Assert.Empty(systemControl.Commands);
-        Assert.Equal("a firmware write is running on the microphone unit", recovery.LastRefusal);
+
+        // A refusal that only says no explains nothing a person can act on, and the person it has
+        // to satisfy may be about to reach for the plug — which is the exact hazard the refusal is
+        // protecting the microphone unit from. So it says why, that nothing is queued, what to wait
+        // for, and not to unplug it.
+        Assert.Equal(
+            "Not now — a firmware write is running on the microphone unit. Nothing has been queued and "
+            + "nothing is waiting its turn: wait until this frame's own screen says the microphone update "
+            + "has finished, then ask again. Do not unplug it in the meantime.",
+            recovery.LastRefusal);
+
+        Assert.Equal(recovery.LastRefusal, FrameRecovery.RefusalLine("a firmware write is running on the microphone unit"));
+    }
+
+    [Fact]
+    public async Task The_refusal_names_the_write_the_frame_is_actually_doing()
+    {
+        // The clause comes from ArrayFlashWindow.Reason, which names the image being written, so the
+        // sentence a person reads is about this frame's own write rather than a generic one. Both
+        // verbs are refused in the same words, because they are refused by the same predicate for
+        // the same reason.
+        var systemControl = new RecordingSystemControl();
+        var log = new RecordingLog();
+
+        const string Held = "the microphone unit's firmware is being written right now, and interrupting that is "
+            + "the one thing on this frame that cannot be undone (writing 2.1.0)";
+
+        var recovery = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = systemControl,
+            Log = log,
+            Held = () => Held,
+        });
+
+        Assert.False(await recovery.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+
+        Assert.Contains("writing 2.1.0", recovery.LastRefusal!, StringComparison.Ordinal);
+        Assert.Contains("Do not unplug it in the meantime.", recovery.LastRefusal!, StringComparison.Ordinal);
+        Assert.Contains(log.Lines, line => line.Contains("Nothing has been queued", StringComparison.Ordinal));
+
+        // And it clears the moment the window shuts, so a stale sentence cannot outlive the write.
+        var free = new FrameRecovery(new FrameRecoveryServices
+        {
+            ResetBudgets = () => [],
+            SystemControl = systemControl,
+            Log = log,
+            Held = () => null,
+        });
+
+        Assert.True(await free.ShutdownAsync("The Fleet Manager", TestContext.Current.CancellationToken));
+        Assert.Null(free.LastRefusal);
     }
 
     [Fact]
