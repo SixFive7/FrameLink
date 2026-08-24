@@ -1553,8 +1553,13 @@ public static class ArrayHardwareGate
             "  unit:       " + (scan.Identity is { } unit ? unit.Describe() : "no single unit could be read"),
             "  bus:        " + DescribeAttached(scan.Devices),
             "  pin:        " + target.Name + ", firmware " + target.Version + ", sha256 " + target.Sha256,
+            // "no entry matched" would be true and misleading on any rung above the last one: the
+            // allowlist was never consulted, and a reader who saw it would conclude rung 10 fired.
             "  allowlist:  " + string.Join("; ", Allowlist.Select(profile => profile.Name))
-                + (matched is null ? " (no entry matched)" : " (matched: " + matched.Name + ")"),
+                + (matched is not null ? " (matched: " + matched.Name + ")"
+                    : rung < Rungs ? " (not reached — the ladder stopped at check "
+                        + rung.ToString(CultureInfo.InvariantCulture) + ")"
+                    : " (no entry matched)"),
             "  revision:   " + gate.Semantics,
             "  note:       " + RevisionNote + ".",
             "  unverified: AEC_MIC_ARRAY_TYPE and AEC_MIC_ARRAY_GEO have never been read on this project's hardware; "
