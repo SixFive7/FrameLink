@@ -675,6 +675,31 @@ public sealed class AgentHost
                     _log.Info($"The Fleet Manager asked this frame to try again: {string.Join(", ", reset)}.");
                 }
             },
+
+            // §2.5 rung 5's other button, pressed two hundred kilometres away (decision 92). Its own
+            // kind rather than a flag on the retry, because an agent that did not understand a flag
+            // would do the retry — clearing budgets and reconciling on a frame whose operator had
+            // just asked for it to be off — whereas an agent that does not understand a kind does
+            // nothing, which is the only safe way to misunderstand this message.
+            //
+            // No budget is touched: a frame that is switched off has not been told to try again, and
+            // clearing the ledger here would mean a household that decided to stop found the frame
+            // mid-provision the next time somebody switched it on. And it goes through the same
+            // FrameRecovery as the panel hold, so a firmware write in flight refuses it and says
+            // what to wait for rather than leaving the microphone unit to a power cut.
+            OnShutdown = request =>
+            {
+                if (!string.Equals(request.DeviceId, identity.DeviceId, StringComparison.Ordinal))
+                {
+                    // Impossible over a socket the server addresses by connection, and the most
+                    // expensive thing in this file to be wrong about: the cost is an unrelated frame
+                    // switching itself off in somebody's house, with nothing able to reach it again.
+                    _log.Warn($"Ignoring a shutdown addressed to {request.DeviceId}; this frame is {identity.DeviceId}.");
+                    return;
+                }
+
+                _ = recovery.ShutdownAsync("The Fleet Manager", CancellationToken.None);
+            },
             HardwareSerial = serial,
 
             // Free text with a vocabulary head, per AgentHealth. The head is what the Fleet

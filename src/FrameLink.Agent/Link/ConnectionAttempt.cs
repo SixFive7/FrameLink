@@ -73,6 +73,17 @@ public sealed record AttemptContext
     /// <summary>Invoked when the operator presses retry on this frame (§2.5 rung 3).</summary>
     public Action<RetryRequest>? OnRetry { get; init; }
 
+    /// <summary>
+    /// Invoked when the operator asks this frame to switch off (§2.5 rung 5, decision 92).
+    /// </summary>
+    /// <remarks>
+    /// Optional like every other hook here, and the one whose absence is safe: a build that does not
+    /// wire it leaves the kind unhandled, and an unhandled kind is skipped. That is the whole reason
+    /// this is a kind rather than a member on the retry -- doing nothing is the only safe way to
+    /// misunderstand a shutdown.
+    /// </remarks>
+    public Action<ShutdownRequest>? OnShutdown { get; init; }
+
     /// <summary>Invoked when the Fleet Manager pushes who to contact (§2.7 item 8).</summary>
     public Action<OperatorContact>? OnOperatorContact { get; init; }
 }
@@ -385,6 +396,19 @@ public sealed class ConnectionAttempt : IAsyncDisposable
                     if (envelope.PayloadAs(ProtocolJson.Default.OperatorContact) is { } contact)
                     {
                         context.OnOperatorContact?.Invoke(contact);
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(envelope.Kind, ControlWire.KindShutdown, StringComparison.Ordinal))
+                {
+                    // §2.5 rung 5's other button, decision 92. The only inbound message whose
+                    // success is a frame this socket can never reach again -- which is why it is
+                    // read here, on a live socket, and never queued anywhere for later.
+                    if (envelope.PayloadAs(ProtocolJson.Default.ShutdownRequest) is { } shutdown)
+                    {
+                        context.OnShutdown?.Invoke(shutdown);
                     }
 
                     continue;

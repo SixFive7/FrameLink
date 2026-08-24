@@ -76,6 +76,45 @@ public static class ControlWire
     public const string KindRetry = "retry";
 
     /// <summary>
+    /// Server to agent. <b>Switch this frame off</b> — §2.5 rung 5's other button, pressed from the
+    /// Fleet Manager (decision 92).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>A kind of its own rather than a flag on <see cref="RetryRequest"/>, and the reason is
+    /// what an older agent does with each.</b> <see cref="RetryRequest.Reboot"/> could be added as a
+    /// member because an agent that did not understand it still did the useful half: it cleared the
+    /// budget and tried again, simply without restarting first. A shutdown has no useful half. An
+    /// agent that ignored a <c>Shutdown</c> member would read the rest of the message and perform a
+    /// <i>retry</i> — clearing budgets and reconciling on a frame whose operator had just asked for
+    /// it to be off. Ignoring an unknown kind does nothing at all, and doing nothing is the only
+    /// safe way to misunderstand this message.
+    /// </para>
+    /// <para>
+    /// <b>It is also not a retry in any other sense.</b> No budget is touched: a frame that is
+    /// switched off has not been told to try again, and clearing the ledger here would mean a
+    /// household that decided to stop found the frame mid-provision when it was next switched on.
+    /// And it is not conditional on anything having gone wrong — the other three routes are offered
+    /// against a frame that has stopped, and an off switch that only worked on broken frames would
+    /// be no off switch at all.
+    /// </para>
+    /// <para>
+    /// <b>Only ever sent down a live socket, and never queued.</b> The Fleet Manager answers 409
+    /// when the frame is not holding one, for a sharper version of the retry's reason: a frame that
+    /// cannot be reached is either already off or has lost its network, nothing here can tell which,
+    /// and a shutdown delivered hours later would switch off a frame somebody had since started
+    /// using.
+    /// </para>
+    /// <para>
+    /// <b>The frame may refuse it, and that is deliberate.</b> A firmware write in flight turns it
+    /// down, because mains loss in the middle of one destroys the microphone unit and a remote
+    /// shutdown is that hazard arriving somewhere software can still block it. The refusal is
+    /// recorded on the frame with what to wait for; nothing is queued behind it.
+    /// </para>
+    /// </remarks>
+    public const string KindShutdown = "shutdown";
+
+    /// <summary>
     /// Server to agent. Who to contact when a frame has given up (§2.7 item 8, decision 71).
     /// </summary>
     /// <remarks>
@@ -305,6 +344,37 @@ public sealed record RetryRequest
     /// </para>
     /// </remarks>
     public bool Reboot { get; init; }
+}
+
+/// <summary>
+/// <b>Switch this frame off</b> — the payload of <see cref="ControlWire.KindShutdown"/>
+/// (decision 92). <b>Frozen once shipped.</b>
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Two fields, and neither of them is an option.</b> There is nothing to parameterise: a frame
+/// is off or it is not. Anything this record grew — a delay, a reason code, a "come back at" — would
+/// be a promise about a machine that by then has no software running on it to keep it.
+/// </para>
+/// <para>
+/// <b>The operator is named, and it travels rather than being inferred.</b> The frame writes who
+/// asked into its own journal, and that journal is the only record that survives on a machine
+/// nothing can reach afterwards. A shutdown attributed to nobody would be indistinguishable, on the
+/// next boot, from a household that pulled the plug.
+/// </para>
+/// </remarks>
+public sealed record ShutdownRequest
+{
+    /// <summary>Device the operator was looking at, so a misrouted frame ignores it.</summary>
+    /// <remarks>
+    /// Checked by the agent rather than trusted, for the same reason the retry checks it and with a
+    /// worse consequence if it is wrong: the cost of being mistaken here is an unrelated frame
+    /// switching itself off, in somebody's house, with nothing able to reach it afterwards.
+    /// </remarks>
+    public required string DeviceId { get; init; }
+
+    /// <summary>When the operator asked, for the agent's log.</summary>
+    public required DateTimeOffset RequestedUtc { get; init; }
 }
 
 /// <summary>

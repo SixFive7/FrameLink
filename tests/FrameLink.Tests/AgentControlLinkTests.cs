@@ -322,6 +322,77 @@ public sealed class AgentControlLinkTests
     }
 
     [Fact]
+    public async Task A_shutdown_pushed_down_a_live_socket_reaches_the_power_switch_and_not_the_retry()
+    {
+        // Decision 92, and the whole reason it is a kind of its own. A shutdown that arrived on the
+        // retry's path would clear budgets and reconcile a frame whose operator had asked for it to
+        // be off, so the dispatch is asserted from both sides: the shutdown hook is called, and the
+        // retry hook is not.
+        var server = new RecordingServer(AgentServerScript.Ok());
+        var shutdowns = new List<ShutdownRequest>();
+        var retries = new List<RetryRequest>();
+
+        server.PushAfterHandshake.Enqueue(WireMessage.Encode(
+            ControlWire.KindShutdown,
+            new ShutdownRequest
+            {
+                DeviceId = "AAAA-AAAA-AAAA-AAAA",
+                RequestedUtc = DateTimeOffset.UnixEpoch,
+            },
+            ProtocolJson.Default.ShutdownRequest,
+            ProtocolConstants.ChannelControl));
+
+        await RunAsync(server, attempts: 1, onRetry: retries.Add, onShutdown: shutdowns.Add);
+
+        var shutdown = Assert.Single(shutdowns);
+        Assert.Equal("AAAA-AAAA-AAAA-AAAA", shutdown.DeviceId);
+        Assert.Equal(DateTimeOffset.UnixEpoch, shutdown.RequestedUtc);
+        Assert.Empty(retries);
+    }
+
+    [Fact]
+    public async Task A_shutdown_nothing_is_listening_for_is_skipped_rather_than_guessed_at()
+    {
+        // The degradation this kind was chosen for, asserted rather than assumed: a build with no
+        // shutdown hook wired does nothing at all and keeps its socket. An agent that instead fell
+        // through to the retry would be the failure the kind exists to prevent, and one that dropped
+        // the connection would be a reconnect storm across a fleet on the day the server learns a
+        // new verb.
+        var server = new RecordingServer(AgentServerScript.Ok());
+        var retries = new List<RetryRequest>();
+
+        server.PushAfterHandshake.Enqueue(WireMessage.Encode(
+            ControlWire.KindShutdown,
+            new ShutdownRequest { DeviceId = "AAAA-AAAA-AAAA-AAAA", RequestedUtc = DateTimeOffset.UnixEpoch },
+            ProtocolJson.Default.ShutdownRequest,
+            ProtocolConstants.ChannelControl));
+
+        var (hub, _) = await RunAsync(server, attempts: 1, onRetry: retries.Add);
+
+        Assert.Empty(retries);
+        Assert.Single(server.Connections);
+        Assert.NotNull(hub);
+    }
+
+    [Fact]
+    public async Task A_shutdown_the_payload_of_which_cannot_be_read_does_not_take_the_socket_with_it()
+    {
+        var server = new RecordingServer(AgentServerScript.Ok());
+        var shutdowns = new List<ShutdownRequest>();
+
+        server.PushAfterHandshake.Enqueue(WireMessage.EncodeRaw(
+            ControlWire.KindShutdown,
+            System.Text.Json.JsonDocument.Parse("\"not an object\"").RootElement.Clone(),
+            ProtocolConstants.ChannelControl));
+
+        var (hub, _) = await RunAsync(server, attempts: 1, onShutdown: shutdowns.Add);
+
+        Assert.Empty(shutdowns);
+        Assert.Single(server.Connections);
+        Assert.NotNull(hub);
+    }
+
+    [Fact]
     public void The_hello_carries_what_the_loop_is_now_and_not_what_it_was_at_startup()
     {
         // The defect, at the layer that composes the sentence. `AgentStatusText` used to be a
@@ -416,7 +487,8 @@ public sealed class AgentControlLinkTests
         int attempts,
         string? serial = null,
         Func<HandshakeResult, CancellationToken, Task>? onVerdict = null,
-        Action<RetryRequest>? onRetry = null)
+        Action<RetryRequest>? onRetry = null,
+        Action<ShutdownRequest>? onShutdown = null)
     {
         var hub = new AgentStatusHub(AgentStatusFactory.Starting());
         using var key = DeviceKey.From(DeviceIdentity.CreateKeyPair());
@@ -427,6 +499,7 @@ public sealed class AgentControlLinkTests
         {
             HardwareSerial = serial,
             OnRetry = onRetry,
+            OnShutdown = onShutdown,
         };
 
         clock.OnDelay = _ =>
