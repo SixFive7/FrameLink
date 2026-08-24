@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Resources;
+using FrameLink.Agent.Local;
 using FrameLink.Agent.Stage;
+using FrameLink.Agent.State;
 using FrameLink.Agent.Supervise;
 
 namespace FrameLink.Tests;
@@ -90,7 +92,9 @@ public sealed class AgentProcessDeadlineTests
         }
         finally
         {
-            KillStrays(survivors);
+            // Nothing to sweep: the deadline killed the tree it started, which is the thing under
+            // test. Sweeping by name anyway is what let one test reach into another's.
+            Assert.Empty(Snapshot().Except(survivors));
         }
     }
 
@@ -139,6 +143,7 @@ public sealed class AgentProcessDeadlineTests
         {
             KillStrays(survivors);
         }
+
     }
 
     [Fact]
@@ -160,7 +165,9 @@ public sealed class AgentProcessDeadlineTests
             Assert.NotEmpty(grandchildren);
 
             var result = await run;
-            Assert.True(result.TimedOut);
+            Assert.True(
+                result.TimedOut,
+                $"the command answered on its own after {result.ExitCode}: {result.Combined}");
 
             foreach (var stray in grandchildren)
             {
@@ -178,7 +185,13 @@ public sealed class AgentProcessDeadlineTests
         }
         finally
         {
-            KillStrays(before);
+            // Deliberately no sweep by name here either — see the note on the test above. What this
+            // test proves is that the runner's own kill reached them, so a sweep would be covering
+            // for the very thing under test.
+            foreach (var stray in Snapshot().Except(before))
+            {
+                Assert.Fail($"process {stray} was left behind by a kill that claimed the whole tree");
+            }
         }
     }
 
@@ -593,6 +606,43 @@ public sealed class AgentProcessDeadlineTests
 
         Assert.Contains("pgrep", thrown.Message, StringComparison.Ordinal);
         Assert.Contains("did not answer within", thrown.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_command_that_never_answered_leaves_the_browser_stage()
+    {
+        var session = new FakeUserSession
+        {
+            Default = ProcessResult.DeadlineExceeded(
+                "runuser",
+                ["-u", "framelink", "--", "env", "systemctl", "--user", "is-active", "chromium-kiosk.service"],
+                ProcessDeadline.Service,
+                standardOutput: string.Empty,
+                standardError: string.Empty,
+                treeKilled: true),
+        };
+
+        var stage = new BrowserStage(new BrowserStageServices
+        {
+            Channel = new LocalChannel(),
+            Session = session,
+            SystemControl = new RecordingSystemControl(),
+            Hub = new AgentStatusHub(AgentStatusFactory.Green()),
+            Telemetry = new RecordingTelemetry(),
+            Clock = new ManualClock(),
+            Log = new RecordingLog(),
+        });
+
+        // <b>The loop the whole defect is worst in.</b> §2.7's browser stage exists to make sure the
+        // panel is never blank, and it is made almost entirely of systemctl calls — so a service
+        // manager that has stopped answering used to freeze the one mechanism that would have
+        // noticed a broken desktop, producing exactly the state that section forbids: no teardown,
+        // no console fallback, no escalation, and a tick that tried again in five seconds for ever.
+        var thrown = await Assert.ThrowsAsync<ProcessTimeoutException>(async () =>
+            await stage.TickAsync(TestContext.Current.CancellationToken));
+
+        Assert.Contains("systemctl --user is-active", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains(ProcessDeadline.Describe(ProcessDeadline.Service), thrown.Message, StringComparison.Ordinal);
     }
 
     [Fact]
