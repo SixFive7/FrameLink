@@ -22,10 +22,17 @@
 	 * both firmware readings and how long the write took. This component decides the colour and
 	 * the heading; the words are the frame's.
 	 */
-	import { onMount } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { api, ApiError } from '$lib/api/client';
 	import type { ArrayFlashStatusResponse } from '$lib/api/types';
-	import { describeFlashPhase, describeRefusal, firmwareVersion, shortDigest } from '$lib/array-flash';
+	import {
+		describeFlashPhase,
+		describeFlashProgress,
+		describeFlashStage,
+		describeRefusal,
+		firmwareVersion,
+		shortDigest
+	} from '$lib/array-flash';
 	import { describeEvent } from '$lib/reconcile';
 	import { timeAgo, timeExact } from '$lib/format';
 	import { toasts } from '$lib/stores/toast.svelte';
@@ -59,6 +66,21 @@
 	const look = $derived(view ? describeFlashPhase(view) : undefined);
 	const armed = $derived(view?.authorisation);
 	const bypassToken = $derived(view ? `${view.unattendedPrefix}${view.deviceId}` : '');
+	const running = $derived(view?.phase === 'writing' ? view.progress : undefined);
+
+	/**
+	 * How often to re-read this frame, in milliseconds.
+	 *
+	 * **A second while a write is running, and rarely otherwise.** The whole point of the live
+	 * phase is that a write lasts between thirty seconds and two minutes and used to be invisible
+	 * for all of it; a bar that only moved when somebody reloaded the page would be the same
+	 * blindness with extra steps. Everywhere else this is a screen somebody opens deliberately, so
+	 * five seconds while an authorisation is armed — the window in which a frame decides what to do
+	 * about it — and half a minute when there is nothing in flight at all. Each read is one bounded
+	 * query for one device.
+	 */
+	const cadence = $derived(view?.phase === 'writing' ? 1000 : armed ? 5000 : 30000);
+
 
 	async function load() {
 		try {
@@ -119,7 +141,29 @@
 		}
 	}
 
-	onMount(load);
+	let stopped = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	function again() {
+		if (stopped) return;
+		timer = setTimeout(async () => {
+			if (stopped) return;
+			// Never while a request of the operator's own is in flight: a poll landing between the
+			// POST and its response would replace the view the button just produced with an older one.
+			if (!busy) await load();
+			again();
+		}, cadence);
+	}
+
+	onMount(async () => {
+		await load();
+		again();
+	});
+
+	onDestroy(() => {
+		stopped = true;
+		if (timer !== undefined) clearTimeout(timer);
+	});
 </script>
 
 <Card>
@@ -171,6 +215,41 @@
 					{look?.label}{#if view.refusal}<span class="refusal"> — {describeRefusal(view.refusal)}</span>{/if}
 				</b>
 				<p>{view.detail}</p>
+				{#if running}
+					<!--
+						The bar. Its fill comes from the server, which derived it from the byte count the
+						frame sent against the pinned image's own length — this component draws it and
+						decides nothing about it, so the bar here and the bar on the frame's own panel are
+						filled to the same place by the same rule.
+
+						A write with no fraction is not a write with no progress: five of the seven stages
+						have nothing measurable in them, and those get a travelling bar with the stage named
+						underneath. An empty bar would say the write had gone backwards.
+					-->
+					<div
+						class="bar"
+						class:indeterminate={running.fraction === undefined}
+						role="progressbar"
+						aria-valuemin={0}
+						aria-valuemax={100}
+						aria-valuenow={running.fraction === undefined
+							? undefined
+							: Math.round(running.fraction * 100)}
+						aria-label={describeFlashStage(running)}
+					>
+						<div
+							class="fill"
+							style={running.fraction === undefined
+								? undefined
+								: `width: ${Math.round(running.fraction * 1000) / 10}%`}
+						></div>
+					</div>
+					<span class="stage">
+						{describeFlashStage(running)}{#if describeFlashProgress(running)}<span class="muted">
+								— {describeFlashProgress(running)}</span
+							>{/if}
+					</span>
+				{/if}
 				{#if view.reportedUtc}
 					<span class="when" title={timeExact(view.reportedUtc)}>
 						the frame said so {timeAgo(view.reportedUtc)}
@@ -393,6 +472,50 @@
 		margin-top: 2px;
 	}
 
+	.standing .bar {
+		margin-top: var(--space-3);
+		height: 8px;
+		border-radius: 4px;
+		background: color-mix(in srgb, var(--note-ink) 18%, transparent);
+		overflow: hidden;
+	}
+	.standing .bar .fill {
+		height: 100%;
+		border-radius: 4px;
+		background: var(--note-ink);
+		transition: width 0.4s linear;
+	}
+	.standing .bar.indeterminate .fill {
+		width: 30%;
+		animation: flash-travel 1.6s ease-in-out infinite;
+	}
+	@keyframes flash-travel {
+		0% {
+			margin-left: 0;
+		}
+		50% {
+			margin-left: 70%;
+		}
+		100% {
+			margin-left: 0;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.standing .bar .fill {
+			transition: none;
+		}
+		.standing .bar.indeterminate .fill {
+			width: 100%;
+			animation: none;
+			opacity: 0.45;
+		}
+	}
+	.standing .stage {
+		display: block;
+		margin-top: var(--space-2);
+		font-size: var(--text-xs);
+		color: var(--text-2);
+	}
 	.standing .refusal {
 		font-weight: var(--weight-regular, 400);
 		color: var(--text-2);

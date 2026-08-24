@@ -78,6 +78,26 @@ public sealed record ArrayFlashPrompt
     /// <summary>Whether the accent should read as a refusal rather than as work in progress.</summary>
     public bool Alarming { get; init; }
 
+    /// <summary>
+    /// How far a write in flight has got, or null on every screen that is not one.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Carried beside the sentences rather than folded into them</b>, because the two surfaces
+    /// draw it differently and neither may compose it. The frame's own screen draws a bar with the
+    /// stage named underneath, the Fleet Manager draws a bar with the byte count beside it, and both
+    /// need the numbers rather than a sentence containing them — while the <i>words</i> around the
+    /// bar stay where every other word on these screens is decided, in
+    /// <see cref="ArrayFlashVoice"/>.
+    /// </para>
+    /// <para>
+    /// Null on <see cref="ArrayFlashPhase.Writing"/> too, for the instant between the screen going
+    /// up and the first reading arriving — which is why every surface treats it as optional rather
+    /// than as something a writing screen is guaranteed to have.
+    /// </para>
+    /// </remarks>
+    public ArrayFlashProgress? Progress { get; init; }
+
     /// <summary>Everything on this screen as one string, so two screens can be compared.</summary>
     /// <remarks>
     /// <b>A record's generated equality is the wrong instrument here, and quietly so.</b>
@@ -89,7 +109,14 @@ public sealed record ArrayFlashPrompt
     /// </remarks>
     public string Signature => string.Join(
         Environment.NewLine,
-        [Phase.ToString(), Headline, Affordance ?? string.Empty, Alarming.ToString(), .. Lines]);
+        [
+            Phase.ToString(),
+            Headline,
+            Affordance ?? string.Empty,
+            Alarming.ToString(),
+            Progress?.Signature ?? string.Empty,
+            .. Lines,
+        ]);
 }
 
 /// <summary>
@@ -194,22 +221,101 @@ public static class ArrayFlashVoice
     }
 
     /// <summary>The writing screen. Shown however the write came to be agreed to.</summary>
+    /// <param name="progress">How far the write has got, or null before anything is known.</param>
     /// <remarks>
+    /// <para>
     /// It is drawn on a frame nobody approved locally too — an operator bypass means nobody was
     /// standing there when it started, not that nobody will walk past while it runs.
+    /// </para>
+    /// <para>
+    /// <b>The one line that changes is the first one, and it is what turns a static warning into
+    /// evidence that something is happening.</b> This screen used to say the same three sentences
+    /// for the whole write, so a write in progress and a frame that had died half way through it
+    /// looked identical — and the thing a person reaches for when they decide a screen has hung is
+    /// the plug, which is the exact outcome the screen exists to prevent. What goes in front of the
+    /// warning is therefore a named stage and, while the bytes are moving, how far they have got.
+    /// </para>
     /// </remarks>
-    public static ArrayFlashPrompt Writing() => new()
+    public static ArrayFlashPrompt Writing(ArrayFlashProgress? progress = null) => new()
     {
         Phase = ArrayFlashPhase.Writing,
         Headline = "Updating the microphone — please do not unplug this frame",
         Lines =
         [
+            StageLine(progress),
             "This takes " + Duration + ".",
             "Please leave the frame switched on until this screen says it has finished.",
             "Taking the power away now can break the microphone for good.",
         ],
         Affordance = null,
         Answerable = false,
+        Progress = progress,
+    };
+
+    /// <summary>
+    /// What a write is doing right now, in words a family member can read from across a room.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Every stage gets a sentence, including the ones with no number behind them.</b> The bar
+    /// reaches 100% at the end of the download and then the unit spends time committing what it
+    /// received to its own flash, resets, drops off the USB bus and comes back — twenty seconds and
+    /// more with nothing measurable happening. A bar sitting at 100% with no words beside it is
+    /// worse than no bar at all, because the person watching it concludes the frame has hung.
+    /// </para>
+    /// <para>
+    /// <b>No jargon reaches this screen.</b> <c>dfuMANIFEST</c> is <i>saving the update</i>,
+    /// re-enumeration is <i>waiting for the microphone to come back</i>, and the percentage is the
+    /// only number on it. The tool's own words are kept — <see cref="ArrayFlashProgress.Line"/>
+    /// carries them verbatim — and they go to the Fleet Manager, where somebody who wants them is
+    /// already looking.
+    /// </para>
+    /// </remarks>
+    public static string StageLine(ArrayFlashProgress? progress)
+    {
+        if (progress is null)
+        {
+            return "Getting the microphone ready.";
+        }
+
+        var elapsed = progress.Elapsed >= TimeSpan.FromSeconds(5)
+            ? string.Create(CultureInfo.InvariantCulture, $" ({(int)progress.Elapsed.TotalSeconds} seconds so far.)")
+            : string.Empty;
+
+        return progress.Stage switch
+        {
+            ArrayFlashStages.Downloading when progress.Percent is { } percent => string.Create(
+                CultureInfo.InvariantCulture,
+                $"Sending the update to the microphone — {percent}% done.{elapsed}"),
+            ArrayFlashStages.Downloading => "Sending the update to the microphone." + elapsed,
+            ArrayFlashStages.Manifesting =>
+                "The microphone is saving the update. This is the slowest part, and nothing will seem to happen for a "
+                    + "little while." + elapsed,
+            ArrayFlashStages.Settling => "The microphone has finished saving the update." + elapsed,
+            ArrayFlashStages.Resetting => "Restarting the microphone." + elapsed,
+            ArrayFlashStages.ReEnumerating => "Waiting for the microphone to come back." + elapsed,
+            ArrayFlashStages.Verifying => "Checking that the microphone has the update." + elapsed,
+            _ => "Getting the microphone ready." + elapsed,
+        };
+    }
+
+    /// <summary>The firmware screen's phase, in the one spelling every surface uses.</summary>
+    /// <remarks>
+    /// <b>Named rather than numbered, and named once.</b> The browser stage sends it to the page,
+    /// the self-report carries it to the Fleet Manager, and a consumer that does not recognise a
+    /// name renders what it was sent instead of guessing at a state from an integer whose meaning
+    /// moved. Two spellings of the same set would be decision 83's failure with no second
+    /// implementation needed to produce it.
+    /// </remarks>
+    public static string NameOf(ArrayFlashPhase phase) => phase switch
+    {
+        ArrayFlashPhase.Asking => "asking",
+        ArrayFlashPhase.Writing => "writing",
+        ArrayFlashPhase.Succeeded => "succeeded",
+        ArrayFlashPhase.Failed => "failed",
+        ArrayFlashPhase.Wedged => "wedged",
+        ArrayFlashPhase.Unfinished => "unfinished",
+        _ => "idle",
     };
 
     /// <summary>The screen a finished write leaves, whichever way it went.</summary>
@@ -423,6 +529,7 @@ public sealed class ArrayFlashApproval
     private readonly IAgentLog _log;
     private readonly Lock _gate = new();
 
+    private long _writing;
     private string? _approvedFor;
     private string? _asked;
     private DateTimeOffset? _askingSince;
@@ -577,8 +684,44 @@ public sealed class ArrayFlashApproval
         return true;
     }
 
-    /// <summary>Shows the write-in-progress screen for as long as the write lasts.</summary>
-    public void Writing() => Publish(ArrayFlashVoice.Writing());
+    /// <summary>
+    /// Claims the screen for a write that is about to start, and publishes nothing.
+    /// </summary>
+    /// <returns>
+    /// The epoch every later <see cref="Writing(long, ArrayFlashProgress?)"/> for this write must
+    /// present.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Claiming and painting are separated because only one of them is safe on the writing
+    /// thread.</b> This is an interlocked increment and returns immediately;
+    /// <see cref="Publish"/> calls every hub subscriber synchronously, and on a frame those
+    /// subscribers write a frame to <c>/dev/tty8</c> and send one to the browser. So the write's own
+    /// task takes the epoch here and never publishes again until the write is over — every frame in
+    /// between is drawn by <see cref="ArrayFlashProgressPump"/>, on a task of its own.
+    /// </para>
+    /// <para>
+    /// <b>The epoch is what stops a late frame resurrecting a finished write.</b> The pump is
+    /// deliberately never waited for, so a publish that was in flight when the write ended can
+    /// arrive after <see cref="Finished"/> has already put the outcome on the screen. Every
+    /// screen-taking call on this class moves the epoch on, and a progress frame presenting an old
+    /// one is dropped rather than drawn.
+    /// </para>
+    /// </remarks>
+    public long BeginWriting() => Interlocked.Increment(ref _writing);
+
+    /// <summary>Shows the write-in-progress screen, with whatever is known about it so far.</summary>
+    /// <param name="epoch">The value <see cref="BeginWriting"/> returned for this write.</param>
+    /// <param name="progress">How far it has got, or null before anything is known.</param>
+    public void Writing(long epoch, ArrayFlashProgress? progress = null)
+    {
+        if (Interlocked.Read(ref _writing) != epoch)
+        {
+            return;
+        }
+
+        Publish(ArrayFlashVoice.Writing(progress));
+    }
 
     /// <summary>Recomposes the current screen from what is true now.</summary>
     /// <remarks>
@@ -603,7 +746,13 @@ public sealed class ArrayFlashApproval
         Publish(prompt.Phase switch
         {
             ArrayFlashPhase.Asking => ArrayFlashVoice.Asking(Answerable, contact),
-            ArrayFlashPhase.Writing => ArrayFlashVoice.Writing(),
+
+            // Recomposed from the progress the screen already carries, never from nothing. A
+            // refresh that dropped it would take the bar off the panel every time the touchscreen
+            // watch or a settings push happened to land mid-write, and put it back on the next
+            // reading — a screen that blinks between "41% done" and "getting ready" is worse than
+            // one that never moved.
+            ArrayFlashPhase.Writing => ArrayFlashVoice.Writing(prompt.Progress),
             ArrayFlashPhase.Succeeded => ArrayFlashVoice.Finished(true, Answerable, contact),
             ArrayFlashPhase.Failed => ArrayFlashVoice.Finished(false, Answerable, contact),
             ArrayFlashPhase.Wedged => ArrayFlashVoice.Wedged(Answerable, contact),
@@ -615,6 +764,12 @@ public sealed class ArrayFlashApproval
     /// <summary>Shows the outcome, and starts the clock on how long it stays there.</summary>
     public void Finished(bool succeeded)
     {
+        // Before the screen is taken, not after. The progress pump is never waited for — waiting on
+        // it is exactly the coupling this feature exists to avoid — so a frame it had already
+        // composed can arrive after this line. Moving the epoch on here is what makes that frame a
+        // no-op instead of a write-in-progress screen drawn over a finished one.
+        Interlocked.Increment(ref _writing);
+
         lock (_gate)
         {
             _approvedFor = null;
@@ -689,6 +844,10 @@ public sealed class ArrayFlashApproval
     /// <summary>Puts the current screen away and rests before showing another.</summary>
     private void Dismiss()
     {
+        // For the same reason Finished does it: whatever takes the screen away wins over a progress
+        // frame that was already in flight when it did.
+        Interlocked.Increment(ref _writing);
+
         lock (_gate)
         {
             _shownAt = null;

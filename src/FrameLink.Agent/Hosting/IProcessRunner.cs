@@ -43,6 +43,41 @@ public interface IProcessRunner
         string executable,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs it, and hands each segment of its output over as it arrives rather than at the end.
+    /// </summary>
+    /// <param name="executable">The program to start.</param>
+    /// <param name="arguments">Its argument vector, compiled in as always.</param>
+    /// <param name="onOutput">
+    /// Called with one line — or one carriage-return-delimited redraw of a progress bar — per
+    /// segment, on the thread draining the child's pipes. <b>It must return promptly and it must not
+    /// do I/O.</b> A child's stdout is a pipe with a fixed kernel buffer, so a sink that blocks
+    /// blocks the child; the sink this exists for is a scan of one short line into a single-slot
+    /// box, and everything that can hang runs on a task downstream of that box.
+    /// </param>
+    /// <param name="cancellationToken">The caller's token, exactly as for the other overload.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>Only one command in this product needs it, and it is the one that cannot be watched any
+    /// other way.</b> A DFU write takes between thirty seconds and two minutes, and the agent used
+    /// to emit nothing at all between a household agreeing to it and the tool returning — so a write
+    /// in progress and a frame that died mid-write were indistinguishable from the console. Every
+    /// other command the agent runs answers in milliseconds and is read whole.
+    /// </para>
+    /// <para>
+    /// <b>The default implementation reports nothing, deliberately.</b> Progress is a convenience and
+    /// never a contract: an implementation that has no way to stream — every test double, and any
+    /// future runner over a transport that buffers — falls back to the whole-output overload and the
+    /// caller simply sees a write with no bar on it. Making this abstract would have made every
+    /// unrelated double implement a pipe drain.
+    /// </para>
+    /// </remarks>
+    Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        Action<string> onOutput,
+        CancellationToken cancellationToken) => RunAsync(executable, arguments, cancellationToken);
 }
 
 /// <summary>Starts real processes.</summary>
@@ -52,9 +87,27 @@ public sealed class HostProcessRunner : IProcessRunner
     public static HostProcessRunner Instance { get; } = new();
 
     /// <inheritdoc/>
-    public async Task<ProcessResult> RunAsync(
+    public Task<ProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken) =>
+        StreamAsync(executable, arguments, onOutput: null, cancellationToken);
+
+    /// <inheritdoc/>
+    public Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        Action<string> onOutput,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(onOutput);
+        return StreamAsync(executable, arguments, onOutput, cancellationToken);
+    }
+
+    private static async Task<ProcessResult> StreamAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        Action<string>? onOutput,
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executable);
@@ -84,8 +137,15 @@ public sealed class HostProcessRunner : IProcessRunner
             // moment a command fills the other pipe's buffer, which on a frame means a
             // reconciliation pass that never returns — and a hung pass is worse than a failed
             // one, because nothing on the screen ever changes to say so.
-            var standardOutput = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            var standardError = process.StandardError.ReadToEndAsync(cancellationToken);
+            //
+            // Both are also handed to the same sink when there is one, because which of them a tool
+            // draws its progress bar on is the tool's business: dfu-util has published it on stdout
+            // and on stderr in different builds, and a reader that picked one would work on a frame
+            // and report nothing on the next one. A sink told about both may see two segments race;
+            // the box behind it keeps the newest and drops the other, which is the correct outcome
+            // for a report and would be the wrong one for anything that mattered.
+            var standardOutput = DrainAsync(process.StandardOutput, onOutput, cancellationToken);
+            var standardError = DrainAsync(process.StandardError, onOutput, cancellationToken);
             await Task.WhenAll(standardOutput, standardError).ConfigureAwait(false);
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -98,5 +158,44 @@ public sealed class HostProcessRunner : IProcessRunner
         {
             return new ProcessResult(-1, string.Empty, exception.Message);
         }
+    }
+
+    /// <summary>
+    /// Reads one of the child's streams to the end, telling <paramref name="onOutput"/> as it goes.
+    /// </summary>
+    /// <remarks>
+    /// <b>The whole stream is still returned</b>, because the event trail carries the tool's output
+    /// verbatim and that is the first thing anybody debugging a bad flash reads. Streaming is
+    /// additive: what changes with a sink present is <i>when</i> the caller learns, not what it ends
+    /// up with. With no sink this is the same read-to-the-end it always was.
+    /// </remarks>
+    private static async Task<string> DrainAsync(
+        StreamReader reader,
+        Action<string>? onOutput,
+        CancellationToken cancellationToken)
+    {
+        if (onOutput is null)
+        {
+            return await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        var splitter = new ChildOutputSplitter(onOutput);
+        var whole = new System.Text.StringBuilder(1024);
+        var buffer = new char[1024];
+
+        while (true)
+        {
+            var read = await reader.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            whole.Append(buffer, 0, read);
+            splitter.Write(buffer.AsSpan(0, read));
+        }
+
+        splitter.Flush();
+        return whole.ToString();
     }
 }

@@ -289,6 +289,14 @@ public sealed class BrowserStage
             FlashHeadline = status.ArrayFlash?.Headline,
             FlashLines = status.ArrayFlash?.Lines,
             FlashAffordance = status.ArrayFlash?.Affordance,
+
+            // The bar, as a number rather than as a drawing. The console paints it in block
+            // characters on a framebuffer and the page paints it in CSS, and neither may decide what
+            // it means: null is "nothing measurable is happening", which is five of the seven stages
+            // of a write, and both surfaces are required to show the stage's name instead of an
+            // empty bar when they get it.
+            FlashProgress = status.ArrayFlash?.Progress?.Fraction,
+            FlashStage = status.ArrayFlash?.Progress?.Stage,
         };
     }
 
@@ -298,16 +306,7 @@ public sealed class BrowserStage
     /// not recognise a name renders the headline and the lines it was sent, which is the whole
     /// message, instead of guessing at a state from an integer whose meaning moved.
     /// </remarks>
-    public static string PhaseNameOf(ArrayFlashPhase phase) => phase switch
-    {
-        ArrayFlashPhase.Asking => "asking",
-        ArrayFlashPhase.Writing => "writing",
-        ArrayFlashPhase.Succeeded => "succeeded",
-        ArrayFlashPhase.Failed => "failed",
-        ArrayFlashPhase.Wedged => "wedged",
-        ArrayFlashPhase.Unfinished => "unfinished",
-        _ => "idle",
-    };
+    public static string PhaseNameOf(ArrayFlashPhase phase) => ArrayFlashVoice.NameOf(phase);
 
     /// <summary>Runs one evaluation of §2.7's stage 2 and its fallback rule.</summary>
     public async Task<BrowserStagePhase> TickAsync(CancellationToken cancellationToken)

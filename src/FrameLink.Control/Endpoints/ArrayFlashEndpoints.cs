@@ -231,13 +231,24 @@ public static class ArrayFlashEndpoints
                 || string.Equals(moment.Kind, DeviceEventKinds.ArrayFirmware, StringComparison.Ordinal))
             .ToArray();
 
-        var reading = ArrayFlashReading.From(mine, authorisation);
+        var online = registry.IsOnline(device.DeviceId);
+
+        // <b>Only for a frame with a socket open, and that is the whole of the staleness guard.</b>
+        // The self-report is the current picture rather than history: it is not buffered when a
+        // frame is offline and it is not cleared when one disappears, so the last thing a frame said
+        // before it went quiet stays in this column for as long as the row exists. Reading it on an
+        // offline frame would draw a bar at 41% for a week over a write that may have finished, may
+        // have failed, or may have taken the frame with it. Offline therefore falls back to the
+        // event trail, which is history and is allowed to be old.
+        var live = online ? ArrayFlashWire.Read(device.AgentStatus) : null;
+
+        var reading = ArrayFlashReading.From(mine, authorisation, live);
 
         return new ArrayFlashStatusResponse
         {
             DeviceId = device.DeviceId,
             Adopted = device.State is DeviceState.Adopted,
-            Online = registry.IsOnline(device.DeviceId),
+            Online = online,
             Target = new ArrayFlashTargetView
             {
                 Name = ArrayFlashPin.TargetName,
@@ -262,6 +273,20 @@ public static class ArrayFlashEndpoints
             Phase = reading.Phase,
             Detail = reading.Detail,
             Refusal = reading.Refusal,
+            Progress = reading.Progress is { } running
+                ? new ArrayFlashProgressView
+                {
+                    Stage = running.Stage ?? string.Empty,
+                    Percent = running.Percent,
+                    BytesWritten = running.BytesWritten,
+                    BytesTotal = running.BytesTotal,
+                    ElapsedSeconds = running.ElapsedSeconds,
+
+                    // Derived here rather than in the browser, so the bar on this screen and the bar
+                    // on the frame's own panel are filled to the same place by the same rule.
+                    Fraction = running.Fraction,
+                }
+                : null,
             ReportedUtc = reading.ReportedUtc,
             RunningFirmware = reading.RunningFirmware,
             RunningFirmwareUtc = reading.RunningFirmwareUtc,

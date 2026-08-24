@@ -268,6 +268,27 @@ public sealed record StageMessage
     public string? FlashAffordance { get; init; }
 
     /// <summary>
+    /// How full a progress bar should be drawn, from 0 to 1, or null when nothing is measurable.
+    /// </summary>
+    /// <remarks>
+    /// <b>Null is a value with a meaning, not an absence.</b> Only the download stage of a firmware
+    /// write has a quantity behind it; the unit committing the image to its own flash, resetting and
+    /// coming back on the USB bus takes tens of seconds with nothing to measure. A page that drew an
+    /// empty bar through those would say the write had gone backwards, and one that drew a full bar
+    /// would say it had finished — so the page is required to draw the stage's name and no bar at
+    /// all when this is null.
+    /// </remarks>
+    public double? FlashProgress { get; init; }
+
+    /// <summary>Which stage of a write is running, by name, or null.</summary>
+    /// <remarks>
+    /// The stage's own name in the agent's spelling, for a page that wants to key an animation or a
+    /// label off it. The <i>sentence</i> a person reads is already in <see cref="FlashLines"/>,
+    /// worded once by the agent, and this is not a second copy of it.
+    /// </remarks>
+    public string? FlashStage { get; init; }
+
+    /// <summary>
     /// An instruction to the product, rather than anything about the device's condition.
     /// </summary>
     /// <remarks>

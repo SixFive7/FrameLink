@@ -306,7 +306,7 @@ public static class StageRenderer
     /// which is decision 83's rule applied before there is a second implementation to disagree with.
     /// </para>
     /// </remarks>
-    private static List<string> BuildFlash(ArrayFlashPrompt prompt, int inner, int accent, bool colour)
+    private static List<string> BuildFlash(ArrayFlashPrompt prompt, int tick, int inner, int accent, bool colour)
     {
         var lines = new List<string>(prompt.Lines.Count + 6)
         {
@@ -325,6 +325,35 @@ public static class StageRenderer
             Compose([], inner, colour),
         };
 
+        // The bar, above the sentences rather than below them, because it is the part somebody
+        // glances at from across the room and the sentences are what they read when they come
+        // closer. It is the one moving thing on this screen and it is not an exception to decision
+        // 70: what it animates is a write that is genuinely happening, measured against the pinned
+        // image's own byte count while bytes are moving, and against nothing at all when they are
+        // not — which is why the indeterminate form is used for the stages that have no quantity,
+        // rather than a determinate bar frozen at whatever the download left it at.
+        if (prompt.Progress is { } progress)
+        {
+            // Narrower than the activity line's bar, for the same reason the countdown's is: this
+            // one carries the longest caption on the screen — a percentage *and* a byte count — and
+            // the caption is the part the operator asked for. A bar sized like the others would push
+            // the numbers off the right edge on an 80-column console.
+            var barWidth = Math.Max(8, inner - 56);
+
+            lines.Add(Compose(
+                [
+                    new Run(Pad("Updating", LabelWidth), StagePalette.Label),
+                    new Run(
+                        (progress.Fraction is { } fraction ? Bar(fraction, barWidth) : Marquee(tick, barWidth)) + "  ",
+                        accent),
+                    new Run(FlashProgressText(progress), StagePalette.Body),
+                ],
+                inner,
+                colour));
+
+            lines.Add(Compose([], inner, colour));
+        }
+
         foreach (var line in prompt.Lines)
         {
             AddField(lines, string.Empty, line, inner, colour);
@@ -339,11 +368,37 @@ public static class StageRenderer
         return lines;
     }
 
+    /// <summary>
+    /// The short caption beside a firmware write's bar — the numbers, not the sentence.
+    /// </summary>
+    /// <remarks>
+    /// <b>The words are already above it and are not repeated here.</b> The stage is spelled out in
+    /// plain language in the screen's first line, worded by <c>ArrayFlashVoice</c> for a family
+    /// member; this is the caption a bar carries, so it is the percentage while there is one, the
+    /// byte count when it fits, and the elapsed seconds when there is nothing else — which is what
+    /// says a still bar is a wait rather than a hang.
+    /// </remarks>
+    private static string FlashProgressText(ArrayFlashProgress progress)
+    {
+        var seconds = (int)progress.Elapsed.TotalSeconds;
+
+        if (progress.Percent is { } percent && progress.Fraction is not null)
+        {
+            return progress.BytesWritten is { } written && progress.BytesTotal > 0
+                ? string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{percent}% — {written:N0} of {progress.BytesTotal:N0} bytes")
+                : string.Create(CultureInfo.InvariantCulture, $"{percent}%");
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{seconds}s so far");
+    }
+
     private static List<string> BuildHead(AgentStatus status, int tick, int inner, int accent, bool colour)
     {
         if (status.ArrayFlash is { } prompt)
         {
-            return BuildFlash(prompt, inner, accent, colour);
+            return BuildFlash(prompt, tick, inner, accent, colour);
         }
 
         // A stopped frame gets a still glyph in the accent of a refusal, not a turning spinner.

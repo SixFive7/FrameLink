@@ -1232,10 +1232,25 @@ public sealed class AgentArrayFlashTests
         ArrayFlashPrompt? during = null;
         fixture.Processes.Before = command =>
         {
-            if (command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
+            if (!command.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal))
             {
-                during = fixture.Screen;
+                return;
             }
+
+            // Waited for rather than read at the instant the tool starts. The screen is drawn by a
+            // task of the flash's own — nothing on the reporting path runs on the thread performing
+            // the write, because a publish reaches subscribers that write to /dev/tty8 and to the
+            // browser and either of them can block — so "the panel says this while the write runs"
+            // is now an eventual fact rather than an instantaneous one. This spin is on the writing
+            // thread and the publisher is on another, so nothing here can deadlock.
+            var deadline = DateTime.UtcNow.AddSeconds(20);
+
+            while (DateTime.UtcNow < deadline && fixture.Screen?.Phase != ArrayFlashPhase.Writing)
+            {
+                Thread.Sleep(5);
+            }
+
+            during = fixture.Screen;
         };
 
         await fixture.Flash().TickAsync(TestContext.Current.CancellationToken);
@@ -2271,6 +2286,26 @@ internal sealed class FlashProcessRunner : IProcessRunner
     /// <summary>Runs after a <c>dfu-util</c> command, modelling the device re-enumerating.</summary>
     public Action? OnWrite { get; set; }
 
+    /// <summary>
+    /// What <c>dfu-util</c> "prints" while it runs, in the order it prints it.
+    /// </summary>
+    /// <remarks>
+    /// Chunks rather than lines, because the thing being exercised is a progress bar rewritten in
+    /// place with carriage returns — a fixture that handed over whole lines would never touch the
+    /// splitting that makes a live bar possible at all.
+    /// </remarks>
+    public List<string> Output { get; } = [];
+
+    /// <summary>
+    /// Awaited after the output has been delivered and before the tool "exits".
+    /// </summary>
+    /// <remarks>
+    /// The seam a test needs to observe a write <i>while it is running</i>. Everything about the
+    /// reporting path is asynchronous by design, so a test that only looked afterwards would be
+    /// asserting on whatever the scheduler happened to do.
+    /// </remarks>
+    public Func<Task>? Draining { get; set; }
+
     public Task<ProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
@@ -2287,6 +2322,46 @@ internal sealed class FlashProcessRunner : IProcessRunner
         }
 
         return Task.FromResult(Script?.Invoke(line) ?? new ProcessResult(0, string.Empty, string.Empty));
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// Delivered through the production <see cref="ChildOutputSplitter"/> rather than by calling the
+    /// sink once per entry, so a test that scripts a carriage-return bar is exercising the same
+    /// splitting a real pipe drain does.
+    /// </remarks>
+    public async Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        Action<string> onOutput,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(onOutput);
+
+        if (!string.Equals(executable, ArrayFirmwareFlash.DfuUtil, StringComparison.Ordinal) || Output.Count == 0)
+        {
+            return await RunAsync(executable, arguments, cancellationToken);
+        }
+
+        var line = executable + " " + string.Join(' ', arguments);
+        Commands.Add(line);
+        Before?.Invoke(line);
+
+        var splitter = new ChildOutputSplitter(onOutput);
+        foreach (var chunk in Output)
+        {
+            splitter.Write(chunk);
+        }
+
+        splitter.Flush();
+
+        if (Draining is { } waiting)
+        {
+            await waiting().ConfigureAwait(false);
+        }
+
+        OnWrite?.Invoke();
+        return Result;
     }
 }
 

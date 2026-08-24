@@ -344,18 +344,45 @@ export interface RetryResponse {
 /**
  * `ArrayFlashPhases` — what the console says a frame's firmware write is doing.
  *
- * **There is no `writing`, and that is not an omission.** The agent emits nothing at all between
- * the household agreeing and `dfu-util` returning; the only live surface for a write in progress
- * is the frame's own panel, where the person who agreed to it is standing. The record arrives
- * complete — elapsed time, both firmware readings, the tool's own output — the moment it is over.
+ * **`writing` is read off a live self-report, never inferred.** The note here used to say there
+ * could be no such phase, because the agent emitted nothing at all between the household agreeing
+ * and `dfu-util` returning. The agent now parses the tool's output as it arrives and folds the
+ * stage, the percentage and the byte count into the self-report it already sends — so this phase
+ * is something the frame said, and it is set only for a frame the server currently holds a socket
+ * to. A frame that goes quiet mid-write falls back to whatever its last event said.
  */
 export type ArrayFlashPhase =
 	| 'not-authorised'
 	| 'authorised'
 	| 'awaiting-household'
+	| 'writing'
 	| 'refused'
 	| 'flashed'
 	| 'failed';
+
+/**
+ * `ArrayFlashProgressView` — how far a write running right now has got.
+ *
+ * Every number here came from the frame. `fraction` is the one derived value and the server
+ * derives it, so this bar and the bar on the frame's own panel fill to the same place.
+ *
+ * **A null `fraction` is a value, not an absence.** Only the download stage has a quantity behind
+ * it; the unit committing the image to its own flash, resetting and coming back on the USB bus is
+ * tens of seconds with nothing to measure. Draw an indeterminate bar with the stage named beside
+ * it — an empty bar would say the write went backwards and a full one would say it had finished.
+ */
+export interface ArrayFlashProgressView {
+	/** One of `preparing`, `downloading`, `manifesting`, `settling`, `resetting`, `re-enumerating`, `verifying` — or whatever a newer agent sent. */
+	stage: string;
+	/** `dfu-util`'s own printed percentage. */
+	percent?: number;
+	bytesWritten?: number;
+	/** The pinned image's length, known from the pin before the tool says anything. */
+	bytesTotal?: number;
+	elapsedSeconds?: number;
+	/** How full to draw the bar, 0 to 1, or absent when nothing measurable is happening. */
+	fraction?: number;
+}
 
 /** `ArrayFlashTargetView` — the image the fleet converges on. */
 export interface ArrayFlashTargetView {
@@ -398,6 +425,8 @@ export interface ArrayFlashStatusResponse {
 	detail: string;
 	/** Which interlock refused, verbatim from the frame. */
 	refusal?: string;
+	/** Present only while `phase` is `writing`, which needs the frame to be online. */
+	progress?: ArrayFlashProgressView;
 	reportedUtc?: string;
 	/** The newest reading of which firmware this frame's array is running. */
 	runningFirmware?: string;

@@ -731,7 +731,14 @@ public sealed class ArrayFirmwareFlash
         // On the panel for the whole of the write, however it came to be agreed to. An unattended
         // write means nobody was standing there when it started — not that nobody will walk past
         // while it runs, and the person who does needs the same sentence the approver read.
-        _services.Approval.Writing();
+        //
+        // <b>Every word of it is drawn by a task of its own, and this thread draws none of them.</b>
+        // The panel's publish reaches AgentStatusHub, which calls its subscribers synchronously —
+        // one writes a frame to /dev/tty8 and another sends one to the browser — so a screen this
+        // thread painted would sit between dfu-util and the drain of its own pipe. Claiming the
+        // screen is an interlocked increment and returns; everything after it belongs to the pump.
+        var progress = new ArrayFlashProgressBox(target.SizeBytes);
+        using var pump = ArrayFlashProgressPump.Start(_services.Approval, progress, _services.Log);
 
         try
         {
@@ -739,14 +746,28 @@ public sealed class ArrayFirmwareFlash
                 $"Writing {target.Name} to the microphone unit: {DfuUtil} {string.Join(' ', Arguments(path))}. "
                 + $"It reported firmware {before} before this.");
 
+            // <b>The sink is the box and nothing else, and that is the load-bearing line.</b> It is
+            // called on the thread draining the child's pipes, where a block would fill the pipe and
+            // stall the write; it does a scan of one short line and one reference write, it cannot
+            // throw, and it waits on nothing. Everything that can hang — the screen, the browser
+            // channel, the socket to the Fleet Manager — is downstream of it on the pump's task,
+            // which this thread never awaits and shares no token, no clock and no lock with.
             write = await _services.Processes
-                .RunAsync(DfuUtil, Arguments(path), cancellationToken)
+                .RunAsync(DfuUtil, Arguments(path), progress.Read, cancellationToken)
                 .ConfigureAwait(false);
 
             // The write is over, one way or the other, from this line on.
             returned = true;
 
+            // The stage nothing else could report. dfu-util has exited, so its output has stopped,
+            // and what happens now is this frame watching the USB bus for up to ninety seconds. A
+            // bar that reached 100% and then said nothing for that long is how a person concludes a
+            // frame has hung, and what they reach for when they conclude it is the plug.
+            progress.Enter(ArrayFlashStages.ReEnumerating);
+
             after = await AwaitReEnumerationAsync(target.Version, cancellationToken).ConfigureAwait(false);
+
+            progress.Enter(ArrayFlashStages.Verifying);
         }
         finally
         {
@@ -794,6 +815,19 @@ public sealed class ArrayFirmwareFlash
             summary += " The unit this was written to reads as: " + identity.Describe() + ".";
         }
 
+        // How far the tool got, in the trail rather than only on a screen nobody may still be
+        // looking at. It matters most on the write that did not work: "it stopped at 62% of 933,888
+        // bytes, at the download" is the difference between a unit whose Upgrade partition is half
+        // written and one that took the whole image and would not come back, and those two need
+        // different things doing to them.
+        if (progress.Current is { BytesWritten: > 0 } reading)
+        {
+            summary += string.Create(
+                CultureInfo.InvariantCulture,
+                $" {DfuUtil} last reported {reading.BytesWritten} of {target.SizeBytes} bytes sent, at the "
+                + $"'{reading.Stage}' stage.");
+        }
+
         if (!succeeded)
         {
             summary += " The write did not produce the pinned firmware. Nothing further will be attempted on this "
@@ -821,10 +855,33 @@ public sealed class ArrayFirmwareFlash
             },
             cancellationToken).ConfigureAwait(false);
 
+        // Stopped before the outcome goes up, and stopped by a call that returns whatever the
+        // reporting path is doing. The `using` above is the guarantee it happens at all; this is the
+        // ordering, so that the last thing the panel is asked to draw is the outcome rather than one
+        // more frame of a write that has finished. Disposing twice is a no-op by construction.
+        pump.Dispose();
+
         // The screen the person who stood guard is owed: whether it worked, that they may unplug
         // the frame again, and something to press. It stays until somebody presses it or until the
         // linger runs out, because an unattended frame has nobody to press anything.
-        _services.Approval.Finished(succeeded);
+        //
+        // <b>Guarded, because this is the one publish left on the writing thread.</b> The write is
+        // over and its outcome is already in the journal and on its way to the Fleet Manager by the
+        // time this runs, so a screen that cannot be painted has nothing left to spoil — but an
+        // exception out of a hub subscriber here would leave the tick reporting a failure for a
+        // write that worked, which is the same lie in the other direction. Reporting never decides
+        // an outcome, at either end of the operation.
+        try
+        {
+            _services.Approval.Finished(succeeded);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not StackOverflowException)
+        {
+            _services.Log.Warn(
+                "The firmware write finished and its outcome could not be put on the frame's screen: "
+                + exception.Message
+                + ". The outcome above is what happened; only the screen failed.");
+        }
 
         _reported = null;
         _reportedWhy = null;

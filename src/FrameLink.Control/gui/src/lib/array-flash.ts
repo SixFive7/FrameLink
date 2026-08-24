@@ -20,7 +20,7 @@
  */
 
 import type { IconName } from './components/Icon.svelte';
-import type { ArrayFlashPhase, ArrayFlashStatusResponse } from './api/types';
+import type { ArrayFlashPhase, ArrayFlashProgressView, ArrayFlashStatusResponse } from './api/types';
 import type { Tone } from './reconcile';
 
 export interface FlashPresentation {
@@ -33,6 +33,7 @@ const PHASE: Record<ArrayFlashPhase, FlashPresentation> = {
 	'not-authorised': { label: 'Not authorised', tone: 'muted', icon: 'shieldCheck' },
 	authorised: { label: 'Authorised', tone: 'warn', icon: 'key' },
 	'awaiting-household': { label: 'Waiting for somebody at the frame', tone: 'warn', icon: 'clock' },
+	writing: { label: 'Writing now', tone: 'warn', icon: 'clock' },
 	refused: { label: 'Refused', tone: 'info', icon: 'ban' },
 	flashed: { label: 'Written', tone: 'ok', icon: 'check' },
 	failed: { label: 'Write failed', tone: 'danger', icon: 'alert' }
@@ -96,6 +97,60 @@ export function describeRefusal(refusal: string): string {
 		default:
 			return refusal;
 	}
+}
+
+/**
+ * The stage of a write in flight, named for an operator.
+ *
+ * **Every stage gets a name, including the five with no number behind them.** `dfu-util`'s bar
+ * reaches 100% and the unit then spends tens of seconds committing the image to its own flash,
+ * resetting and coming back on the USB bus — and a bar that sat full through all of that, with
+ * nothing beside it saying why, is how somebody concludes a frame has hung. An unrecognised stage
+ * is shown as the frame sent it, exactly as an unrecognised refusal token is.
+ */
+export function describeFlashStage(progress: ArrayFlashProgressView): string {
+	switch (progress.stage) {
+		case 'preparing':
+			return 'Getting the microphone unit ready';
+		case 'downloading':
+			return 'Sending the image to the unit';
+		case 'manifesting':
+			return 'The unit is committing the image to its own flash';
+		case 'settling':
+			return 'The unit has finished committing the image';
+		case 'resetting':
+			return 'Resetting the unit';
+		case 're-enumerating':
+			return 'Waiting for the unit to come back on the USB bus';
+		case 'verifying':
+			return 'Reading the version back from the unit';
+		default:
+			return progress.stage || 'Writing firmware';
+	}
+}
+
+/**
+ * The numbers beside the bar — the percentage, the byte count and how long it has been running.
+ *
+ * Empty when the frame sent none of them, which is the honest state of a write whose stage has
+ * nothing measurable in it and which has only just started.
+ */
+export function describeFlashProgress(progress: ArrayFlashProgressView): string {
+	const parts: string[] = [];
+
+	if (typeof progress.percent === 'number') parts.push(`${progress.percent}%`);
+
+	if (typeof progress.bytesWritten === 'number') {
+		parts.push(
+			typeof progress.bytesTotal === 'number'
+				? `${progress.bytesWritten.toLocaleString()} of ${progress.bytesTotal.toLocaleString()} bytes`
+				: `${progress.bytesWritten.toLocaleString()} bytes`
+		);
+	}
+
+	if (typeof progress.elapsedSeconds === 'number') parts.push(`${progress.elapsedSeconds}s in`);
+
+	return parts.join(' · ');
 }
 
 /** `2 1 0` as the array spells it, `2.1.0` as a person reads it. */

@@ -70,6 +70,47 @@ public sealed record ArrayFlashAuthorisationView
     public string? UnattendedDeviceId { get; init; }
 }
 
+/// <summary>
+/// How far a write that is running <i>right now</i> has got, as the frame itself reports it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The console draws the bar; it does not decide what the bar means.</b> Every field here is a
+/// number the frame sent — the stage it is at, <c>dfu-util</c>'s own printed percentage, the bytes
+/// it says it has sent against the pinned image's length, and how long the write has been running.
+/// <see cref="Fraction"/> is the one derived value and it is derived on the server so that the two
+/// surfaces that draw this bar, the frame's own screen and this console, fill it to the same place.
+/// </para>
+/// <para>
+/// <b>Null <see cref="Fraction"/> is a value with a meaning.</b> Only the download stage has a
+/// quantity behind it; the unit committing the image to its flash, resetting and coming back on the
+/// USB bus is tens of seconds with nothing to measure. A console that drew an empty bar through
+/// those would say the write had gone backwards and one that drew a full bar would say it had
+/// finished, so the contract is that a null fraction is drawn as an indeterminate bar with the
+/// stage named beside it.
+/// </para>
+/// </remarks>
+public sealed record ArrayFlashProgressView
+{
+    /// <summary>The stage, in the agent's own spelling. Shown as sent when unrecognised.</summary>
+    public required string Stage { get; init; }
+
+    /// <summary><c>dfu-util</c>'s own printed percentage, or null.</summary>
+    public int? Percent { get; init; }
+
+    /// <summary>Bytes the tool says it has sent, or null.</summary>
+    public long? BytesWritten { get; init; }
+
+    /// <summary>The pinned image's length in bytes, or null.</summary>
+    public long? BytesTotal { get; init; }
+
+    /// <summary>How long the write has been running, in whole seconds.</summary>
+    public int? ElapsedSeconds { get; init; }
+
+    /// <summary>How full to draw the bar, from 0 to 1, or null when nothing is measurable.</summary>
+    public double? Fraction { get; init; }
+}
+
 /// <summary>Everything the console renders about one frame's firmware write.</summary>
 public sealed record ArrayFlashStatusResponse
 {
@@ -109,6 +150,18 @@ public sealed record ArrayFlashStatusResponse
 
     /// <summary>Which interlock refused, verbatim from the frame, or null.</summary>
     public string? Refusal { get; init; }
+
+    /// <summary>
+    /// How far a write in flight has got, or null when none is running on this frame right now.
+    /// </summary>
+    /// <remarks>
+    /// Non-null only while <see cref="Phase"/> is <c>writing</c>, which is only ever set from a live
+    /// self-report on a frame this server currently holds a socket to. A frame that went quiet
+    /// mid-write leaves this null rather than freezing a bar at whatever it last said, because a
+    /// stationary bar asserts that a write is still running and the thing that stopped might be the
+    /// frame.
+    /// </remarks>
+    public ArrayFlashProgressView? Progress { get; init; }
 
     /// <summary>When the frame said it.</summary>
     public DateTimeOffset? ReportedUtc { get; init; }

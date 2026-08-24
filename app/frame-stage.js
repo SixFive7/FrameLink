@@ -194,6 +194,40 @@ function headline(text, accent) {
   return row;
 }
 
+// A progress bar for a firmware write, determinate when the agent sent a fraction and travelling
+// when it did not. The travelling form is CSS rather than a script loop on purpose: this page runs
+// on a frame for months at a time, and a requestAnimationFrame loop that outlived the screen it was
+// drawn for is exactly the kind of leak the v1 post-mortem was about.
+function progressBar(fraction, accent) {
+  const colour = typeof ACCENTS[accent] === 'string' ? ACCENTS[accent] : ACCENTS.blue;
+
+  const track = document.createElement('div');
+  track.style.cssText = [
+    'width:min(44em,70vw)', 'height:14px', 'border-radius:7px', 'background:#242424',
+    'overflow:hidden', 'margin:6px 0 4px',
+  ].join(';');
+
+  const fill = document.createElement('div');
+  const known = typeof fraction === 'number' && isFinite(fraction);
+  const percent = known ? Math.max(0, Math.min(1, fraction)) * 100 : 30;
+
+  fill.style.cssText = [
+    `width:${percent}%`, 'height:100%', `background:${colour}`, 'border-radius:7px',
+    known ? 'transition:width .4s linear' : 'animation:framelink-flash-travel 1.6s ease-in-out infinite',
+  ].join(';');
+
+  if (!known && !document.getElementById('framelink-flash-keyframes')) {
+    const style = document.createElement('style');
+    style.id = 'framelink-flash-keyframes';
+    style.textContent =
+      '@keyframes framelink-flash-travel{0%{margin-left:0}50%{margin-left:70%}100%{margin-left:0}}';
+    document.head.appendChild(style);
+  }
+
+  track.appendChild(fill);
+  return track;
+}
+
 // The microphone-update screens — version2.md decision 91. Rendered *before* productRuns is
 // consulted, and that is the whole reason this block is separate.
 //
@@ -213,6 +247,19 @@ function renderFlash(element, stage) {
   element.style.display = 'flex';
 
   element.appendChild(headline(stage.flashHeadline, stage.accent));
+
+  // The bar, when the agent sent one. Its fraction is a number the agent computed against the
+  // pinned image's own byte count and this file does not derive one of its own — a page that
+  // guessed at progress would be the second opinion decision 83 exists to prevent, and the number
+  // it would have to guess from is one only the frame can see.
+  //
+  // A null fraction is not "no progress": it is one of the five stages of a write with nothing
+  // measurable in it — the unit committing the image to its own flash, resetting, coming back on
+  // the USB bus. Those get a travelling highlight rather than an empty bar, because an empty bar
+  // says the write went backwards and a full one says it finished.
+  if (stage.flashStage) {
+    element.appendChild(progressBar(stage.flashProgress, stage.accent));
+  }
 
   for (const text of stage.flashLines || []) {
     element.appendChild(line(text, 'font-size:19px;color:#e8e8e8;max-width:44em;line-height:1.5'));

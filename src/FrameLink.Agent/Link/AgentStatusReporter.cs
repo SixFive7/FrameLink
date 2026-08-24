@@ -1,3 +1,4 @@
+using FrameLink.Agent.Firmware;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.State;
 using FrameLink.Protocol;
@@ -31,6 +32,23 @@ namespace FrameLink.Agent.Link;
 /// history and losing one loses a fact, and this is the opposite: the current picture, superseded
 /// by the next change and re-sent in full by the next hello. Buffering it could only deliver a
 /// stale sentence behind a fresh one.
+/// </para>
+/// <para>
+/// <b>A firmware write in flight rides in the same string</b>, appended by
+/// <see cref="ArrayFlashWire"/> after the §2.3 vocabulary rather than inside it (decision 91). Two
+/// consequences follow and both are wanted. The Fleet Manager learns what a write is doing while it
+/// is doing it — which is the whole of what it used to be missing, because the frame emitted nothing
+/// at all between a household agreeing and <c>dfu-util</c> returning. And a frame writing firmware
+/// still classifies as whatever its reconciliation loop is: a write is not a rung on §2.6's ladder,
+/// nothing has drifted, the product runs, and <see cref="AgentHealth.Classify"/> reads only the head
+/// of the string.
+/// </para>
+/// <para>
+/// <b>It is also the last link in the chain that must not reach the write.</b> Nothing here is on
+/// the writing thread: the flash publishes to the hub from a task of its own, the hub's signal into
+/// this class is a semaphore release that cannot block, and the send below is this class's own await
+/// on its own loop. A Fleet Manager that has stopped answering therefore leaves a socket blocked
+/// here and an array being written to entirely undisturbed.
 /// </para>
 /// </remarks>
 public sealed class AgentStatusReporter : IDisposable
@@ -85,7 +103,35 @@ public sealed class AgentStatusReporter : IDisposable
     public int Sent { get; private set; }
 
     /// <summary>What this frame would say about itself right now.</summary>
-    public string? Current => AgentHealth.ReportFor(_hub.Current.Reconcile.LoopState, _detail);
+    /// <remarks>
+    /// One read of the hub, not two. The snapshot is immutable and replaced wholesale, so reading it
+    /// once is what makes the loop state and the firmware screen in the composed sentence describe
+    /// the same instant.
+    /// </remarks>
+    public string? Current
+    {
+        get
+        {
+            var status = _hub.Current;
+
+            return ArrayFlashWire.Append(
+                AgentHealth.ReportFor(status.Reconcile.LoopState, _detail),
+                FlashOf(status.ArrayFlash));
+        }
+    }
+
+    /// <summary>The firmware screen as the wire carries it, or null when there is none.</summary>
+    /// <remarks>
+    /// <b>Every firmware screen is reported, not only a write in flight.</b> A frame asking its
+    /// household to agree, a frame refusing over a unit it does not recognise and a frame showing
+    /// the Safe Mode gesture are all states an operator is currently blind to between one event and
+    /// the next; a screen with no progress behind it still says which screen it is, which is the
+    /// answer to "what is that frame doing right now".
+    /// </remarks>
+    private static ArrayFlashWireStatus? FlashOf(ArrayFlashPrompt? prompt) =>
+        prompt is null ? null
+        : prompt.Progress is { } progress ? progress.ToWire(ArrayFlashVoice.NameOf(prompt.Phase))
+        : new ArrayFlashWireStatus { Screen = ArrayFlashVoice.NameOf(prompt.Phase) };
 
     /// <summary>
     /// The self-report for a handshake, recorded as the thing the Fleet Manager has been told.
