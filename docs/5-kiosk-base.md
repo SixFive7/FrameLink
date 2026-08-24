@@ -17,7 +17,7 @@ Confirm that the ~2 GB of ZRAM swap that Pi OS Trixie enables by default is actu
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-Pi OS Trixie enables ~2 GB of ZRAM swap out of the box via the `rpi-swap` package — we do not configure anything, just verify. ZRAM compresses cold memory pages in RAM (rather than writing to the SD card) and gives the 2 GB Pi 5 meaningfully more effective headroom under Chromium's WebRTC load, without the write amplification of disk-based swap on a flash card.
+Pi OS Trixie enables ~2 GB of ZRAM swap out of the box via the `rpi-swap` package, so we do not configure anything, just verify. ZRAM compresses cold memory pages in RAM (rather than writing to the SD card) and gives the 2 GB Pi 5 meaningfully more effective headroom under Chromium's WebRTC load, without the write amplification of disk-based swap on a flash card.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -34,7 +34,7 @@ NAME       TYPE      SIZE USED PRIO
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-A `/dev/zram0` line with type `partition`, size `2G`, and priority `100`. If `swapon --show` prints nothing at all, ZRAM is not active — check `systemctl status rpi-swap` and confirm the `rpi-swap` package is installed with `dpkg -l rpi-swap`.
+A `/dev/zram0` line with type `partition`, size `2G`, and priority `100`. If `swapon --show` prints nothing at all, ZRAM is not active; check `systemctl status rpi-swap` and confirm the `rpi-swap` package is installed with `dpkg -l rpi-swap`.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -54,11 +54,11 @@ Install the five packages the kiosk stack needs in a single `apt install` call.
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
 Five packages and what each does:
-1. `labwc` — the Wayland compositor. Chosen over Wayfire / weston / sway for its small footprint, stable wlroots-based output-rotation path (via `wlr-randr`), and `rc.xml` touch-mapping support.
-2. `chromium` — the browser. On Trixie the package is `chromium` (not the older `chromium-browser`); the binary is `/usr/bin/chromium`.
-3. `pipewire-alsa` — shim that lets Chromium's WebRTC audio reach real ALSA devices on Pi OS Lite (where there is no PulseAudio).
-4. `wireplumber` — session manager that PipeWire relies on under Debian and derivatives.
-5. `wlr-randr` — one-shot CLI used in step 6 to rotate the DSI output. labwc's `rc.xml` does not accept output transforms — those come from `wlr-randr` (one-shot) or `kanshi` (daemon); the one-shot form matches a kiosk's static-configuration intent.
+1. `labwc`: the Wayland compositor. Chosen over Wayfire / weston / sway for its small footprint, stable wlroots-based output-rotation path (via `wlr-randr`), and `rc.xml` touch-mapping support.
+2. `chromium`: the browser. On Trixie the package is `chromium` (not the older `chromium-browser`); the binary is `/usr/bin/chromium`.
+3. `pipewire-alsa`: shim that lets Chromium's WebRTC audio reach real ALSA devices on Pi OS Lite (where there is no PulseAudio).
+4. `wireplumber`: session manager that PipeWire relies on under Debian and derivatives.
+5. `wlr-randr`: one-shot CLI used in step 6 to rotate the DSI output. labwc's `rc.xml` does not accept output transforms; those come from `wlr-randr` (one-shot) or `kanshi` (daemon); the one-shot form matches a kiosk's static-configuration intent.
 
 The install pulls in about 215 dependencies totalling ~256 MB.
 
@@ -101,11 +101,11 @@ Processing triggers for libgdk-pixbuf-2.0-0:arm64 (2.42.12+dfsg-4+deb13u1) ...
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-All five requested packages in the `Installing:` list, around 215 dependencies, ~256 MB download, and `Setting up` lines for each of the five at the end — particularly `Setting up labwc ...` and `Setting up chromium ...`. The `update-alternatives: using /usr/bin/chromium to provide /usr/bin/x-www-browser` line confirms Chromium is wired in as the system default browser. `...` in the middle is the dependency-list / `Get:` truncation marker — tens of lines elided for brevity.
+All five requested packages in the `Installing:` list, around 215 dependencies, ~256 MB download, and `Setting up` lines for each of the five at the end, particularly `Setting up labwc ...` and `Setting up chromium ...`. The `update-alternatives: using /usr/bin/chromium to provide /usr/bin/x-www-browser` line confirms Chromium is wired in as the system default browser. `...` in the middle is the dependency-list / `Get:` truncation marker; tens of lines are elided for brevity.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The full kiosk software stack is on disk. Nothing is configured or running yet — every piece still needs wiring up in the following steps.
+The full kiosk software stack is on disk. Nothing is configured or running yet; every piece still needs wiring up in the following steps.
 
 <a id="3-enable-console-autologin"></a>
 <img src="https://img.shields.io/badge/STEP_03-Enable_console_autologin-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Enable console autologin"/>
@@ -120,7 +120,7 @@ Run `raspi-config` in non-interactive mode to write the autologin drop-in silent
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-`raspi-config nonint do_boot_behaviour B2` writes the same configuration the interactive menu would — a `getty@tty1.service` drop-in that replaces the agetty invocation with `agetty --autologin framelink` — but without prompts and idempotently (re-running does nothing if the drop-in already matches). After reboot the Pi auto-logs in as `framelink` on tty1 with no password prompt.
+`raspi-config nonint do_boot_behaviour B2` writes the same configuration the interactive menu would (a `getty@tty1.service` drop-in that replaces the agetty invocation with `agetty --autologin framelink`) but without prompts and idempotently (re-running does nothing if the drop-in already matches). After reboot the Pi auto-logs in as `framelink` on tty1 with no password prompt.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -139,7 +139,7 @@ ExecStart=-/sbin/agetty --autologin framelink --noclear %I $TERM
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-A `[Service]` section with exactly these three lines. The first `ExecStart=` on its own clears any ExecStart inherited from the parent unit (systemd requires this to override `ExecStart`); the second supplies the autologin version. If the username in the second line is not `framelink`, raspi-config picked up a different username — re-check the username you set in [guide 2](2-sd-flash-first-boot.md).
+A `[Service]` section with exactly these three lines. The first `ExecStart=` on its own clears any ExecStart inherited from the parent unit (systemd requires this to override `ExecStart`); the second supplies the autologin version. If the username in the second line is not `framelink`, raspi-config picked up a different username, so re-check the username you set in [guide 2](2-sd-flash-first-boot.md).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -150,7 +150,7 @@ tty1 will autologin as `framelink` at the next boot. No password prompt on the c
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-Installing labwc does not arrange for it to start — on Pi OS Lite there is no display manager. Without a shell-login hook, autologin lands framelink at a bare bash prompt and labwc never launches.
+Installing labwc does not arrange for it to start, because on Pi OS Lite there is no display manager. Without a shell-login hook, autologin lands framelink at a bare bash prompt and labwc never launches.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -159,8 +159,8 @@ Create a `~/.bash_profile` that runs `exec labwc` when bash is the autologin she
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
 Two conditions scope the `exec` tightly:
-- `"$(tty)" = "/dev/tty1"` — only fires on the autologin console, never on SSH sessions or other TTYs.
-- `-z "$WAYLAND_DISPLAY"` — idempotent re-entry guard. If something ever re-sources `~/.bash_profile` while a Wayland session is already live, this skips the exec.
+- `"$(tty)" = "/dev/tty1"`: only fires on the autologin console, never on SSH sessions or other TTYs.
+- `-z "$WAYLAND_DISPLAY"`: idempotent re-entry guard. If something ever re-sources `~/.bash_profile` while a Wayland session is already live, this skips the exec.
 
 `exec` replaces the login bash with labwc so no orphan shell lingers. Sourcing `~/.profile` first preserves the normal bash login behaviour that bash otherwise skips when `~/.bash_profile` exists.
 
@@ -189,11 +189,11 @@ fi
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The echoed `~/.bash_profile` matches the heredoc byte-for-byte: the profile-source line, a blank line, the conditional with both the tty and `WAYLAND_DISPLAY` checks, and `exec labwc` inside the `if`. If the conditional is missing either check, labwc will fire on SSH sessions too — which breaks remote admin.
+The echoed `~/.bash_profile` matches the heredoc byte-for-byte: the profile-source line, a blank line, the conditional with both the tty and `WAYLAND_DISPLAY` checks, and `exec labwc` inside the `if`. If the conditional is missing either check, labwc will fire on SSH sessions too, which breaks remote admin.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-When framelink autologs in on tty1 at the next boot, bash will source `~/.profile` and then `exec labwc`. Nothing is running yet — takes effect on the reboot in step 8.
+When framelink autologs in on tty1 at the next boot, bash will source `~/.profile` and then `exec labwc`. Nothing is running yet; this takes effect on the reboot in step 8.
 
 <a id="5-create-the-chromium-systemd-user-service"></a>
 <img src="https://img.shields.io/badge/STEP_05-Create_the_Chromium_systemd_user_service-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Create the Chromium systemd user service"/>
@@ -210,20 +210,20 @@ Wrap Chromium in a systemd `--user` unit that waits for the Wayland socket to ex
 
 The unit structure:
 - `Type=simple` with `ExecStart` running Chromium in the foreground.
-- `Environment="WAYLAND_DISPLAY=wayland-0"` — labwc creates the Wayland socket at `wayland-0` in `/run/user/$(id -u)/`; Chromium's `--ozone-platform=wayland` looks for this env var.
-- `ExecStartPre=/bin/rm -rf /tmp/framelink-chromium` — wipes the browser profile before every service start. The profile is deliberately throwaway (it lives on tmpfs — see `--user-data-dir` below), but within one boot it survives service restarts, and Chromium's module cache inside it then keeps serving stale JavaScript after the kiosk's web app ([guide 10](10-spa.md)) is updated on disk — new code reaches the disk but never the browser. Starting every launch from an empty profile guarantees fresh code. No permission state is lost: the camera permission Chromium later gets via the desktop portal ([guide 6 (camera)](6-camera.md)) lives in `~/.local/share/flatpak/db`, not in the profile.
-- `ExecStartPre=/bin/bash -c 'while [ ! -S ... ]; do sleep 0.1; done'` — state-driven wait loop that spins until the Wayland socket file exists, so Chromium never starts before labwc is ready. Much more reliable than a fixed `sleep`.
-- `Restart=always` + `RestartSec=5` — Chromium crash → systemd restarts it five seconds later. The kiosk recovers without operator intervention.
-- `WantedBy=default.target` — user-service default target, enabled by `systemctl --user enable`.
+- `Environment="WAYLAND_DISPLAY=wayland-0"`: labwc creates the Wayland socket at `wayland-0` in `/run/user/$(id -u)/`; Chromium's `--ozone-platform=wayland` looks for this env var.
+- `ExecStartPre=/bin/rm -rf /tmp/framelink-chromium`: wipes the browser profile before every service start. The profile is deliberately throwaway (it lives on tmpfs; see `--user-data-dir` below), but within one boot it survives service restarts, and Chromium's module cache inside it then keeps serving stale JavaScript after the kiosk's web app ([guide 10](10-spa.md)) is updated on disk: new code reaches the disk but never the browser. Starting every launch from an empty profile guarantees fresh code. No permission state is lost: the camera permission Chromium later gets via the desktop portal ([guide 6 (camera)](6-camera.md)) lives in `~/.local/share/flatpak/db`, not in the profile.
+- `ExecStartPre=/bin/bash -c 'while [ ! -S ... ]; do sleep 0.1; done'`: state-driven wait loop that spins until the Wayland socket file exists, so Chromium never starts before labwc is ready. Much more reliable than a fixed `sleep`.
+- `Restart=always` + `RestartSec=5`: Chromium crash → systemd restarts it five seconds later. The kiosk recovers without operator intervention.
+- `WantedBy=default.target`: user-service default target, enabled by `systemctl --user enable`.
 
 The Chromium command-line flags, each load-bearing:
-- `--ozone-platform=wayland` — required; Chromium's default X11 backend fails silently under labwc.
-- `--user-data-dir=/tmp/framelink-chromium` — puts the profile on tmpfs, so a power cut never leaves stale `SingletonLock` or dirty-exit state behind. No `sed`-the-Preferences-file hack needed.
-- `--kiosk` + `--noerrdialogs` + `--disable-infobars` + `--disable-session-crashed-bubble` + `--no-first-run` — quiet kiosk UI: fullscreen, no error dialogs, no "Restore pages?" prompts, no first-run wizard.
-- `--auto-accept-camera-and-microphone-capture` — pre-grants `getUserMedia` permission for the LiveKit call flow in later guides. **Do not add `--use-fake-ui-for-media-stream`** — it conflicts with this flag on this Chromium build and causes a silent startup crash.
-- `--enable-features=UsePipeWireCamera` — turns on Chromium's PipeWire camera backend so it uses the native libcamera → PipeWire → desktop-portal camera path that [guide 6 (camera)](6-camera.md) sets up. The legacy V4L2 path is avoided because it hangs while probing the Pi's many internal camera-pipeline nodes.
-- `--autoplay-policy=no-user-gesture-required` — lets the SPA's audio/video autoplay without a user tap.
-- `--disable-background-timer-throttling` + `--disable-renderer-backgrounding` — keeps the kiosk tab responsive when its window is not in the foreground (relevant under labwc's tiling behaviour).
+- `--ozone-platform=wayland`: required; Chromium's default X11 backend fails silently under labwc.
+- `--user-data-dir=/tmp/framelink-chromium`: puts the profile on tmpfs, so a power cut never leaves stale `SingletonLock` or dirty-exit state behind. No `sed`-the-Preferences-file hack needed.
+- `--kiosk` + `--noerrdialogs` + `--disable-infobars` + `--disable-session-crashed-bubble` + `--no-first-run`, for a quiet kiosk UI: fullscreen, no error dialogs, no "Restore pages?" prompts, no first-run wizard.
+- `--auto-accept-camera-and-microphone-capture`: pre-grants `getUserMedia` permission for the LiveKit call flow in later guides. **Do not add `--use-fake-ui-for-media-stream`**, because it conflicts with this flag on this Chromium build and causes a silent startup crash.
+- `--enable-features=UsePipeWireCamera`: turns on Chromium's PipeWire camera backend so it uses the native libcamera → PipeWire → desktop-portal camera path that [guide 6 (camera)](6-camera.md) sets up. The legacy V4L2 path is avoided because it hangs while probing the Pi's many internal camera-pipeline nodes.
+- `--autoplay-policy=no-user-gesture-required`: lets the SPA's audio/video autoplay without a user tap.
+- `--disable-background-timer-throttling` + `--disable-renderer-backgrounding`: keeps the kiosk tab responsive when its window is not in the foreground (relevant under labwc's tiling behaviour).
 
 The placeholder URL `https://webrtc.github.io/samples/` is a quick end-to-end WebRTC smoke page; it will be replaced by `http://localhost:8888` (the kiosk SPA) in [guide 10](10-spa.md).
 
@@ -274,11 +274,11 @@ Created symlink '/home/framelink/.config/systemd/user/default.target.wants/chrom
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `Created symlink` line confirms `systemctl --user enable` wrote the target-wants symlink. Both the source and the target of the `→` reference `chromium-kiosk.service` under `~/.config/systemd/user/`. If you see `Failed to enable unit` or any error instead, the unit file has a syntax problem — re-check the heredoc content.
+The `Created symlink` line confirms `systemctl --user enable` wrote the target-wants symlink. Both the source and the target of the `→` reference `chromium-kiosk.service` under `~/.config/systemd/user/`. If you see `Failed to enable unit` or any error instead, the unit file has a syntax problem, so re-check the heredoc content.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The kiosk service is enabled and will start automatically when `default.target` is reached in the framelink user session. It is not running yet — the autostart in step 6 fires it once labwc is up.
+The kiosk service is enabled and will start automatically when `default.target` is reached in the framelink user session. It is not running yet; the autostart in step 6 fires it once labwc is up.
 
 <a id="6-create-the-labwc-autostart"></a>
 <img src="https://img.shields.io/badge/STEP_06-Create_the_labwc_autostart-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 06 — Create the labwc autostart"/>
@@ -294,10 +294,10 @@ Create labwc's autostart file with two lines: one rotates the DSI output to land
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
 The two lines:
-- `wlr-randr --output DSI-2 --transform 270` — applies a 270° transform to the `DSI-2` output. The Waveshare 10.1-DSI-TOUCH-A is natively portrait 800×1280; rotating 270° gives a 1280×800 landscape surface for Chromium. labwc's `rc.xml` does not accept output transforms — they have to come from `wlr-randr` (one-shot) or `kanshi` (daemon); the one-shot form matches the kiosk's static configuration.
-- `systemctl --user start chromium-kiosk.service &` — starts the kiosk service, backgrounded with `&` so the autostart script returns promptly. The service's own `ExecStartPre` wait loop handles any residual timing against the Wayland socket.
+- `wlr-randr --output DSI-2 --transform 270`: applies a 270° transform to the `DSI-2` output. The Waveshare 10.1-DSI-TOUCH-A is natively portrait 800x1280; rotating 270° gives a 1280x800 landscape surface for Chromium. labwc's `rc.xml` does not accept output transforms; they have to come from `wlr-randr` (one-shot) or `kanshi` (daemon); the one-shot form matches the kiosk's static configuration.
+- `systemctl --user start chromium-kiosk.service &`: starts the kiosk service, backgrounded with `&` so the autostart script returns promptly. The service's own `ExecStartPre` wait loop handles any residual timing against the Wayland socket.
 
-If the display ends up upside-down in landscape on the first boot, change `270` to `90` in the autostart file (same step, opposite 180° flip). If your hardware uses a different DSI connector, confirm its name with `WAYLAND_DISPLAY=wayland-0 wlr-randr` over SSH first — on this build it is `DSI-2`. labwc requires the autostart file to be executable; the `chmod +x` is non-optional.
+If the display ends up upside-down in landscape on the first boot, change `270` to `90` in the autostart file (same step, opposite 180° flip). If your hardware uses a different DSI connector, confirm its name with `WAYLAND_DISPLAY=wayland-0 wlr-randr` over SSH first; on this build it is `DSI-2`. labwc requires the autostart file to be executable; the `chmod +x` is non-optional.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -319,7 +319,7 @@ ls -la ~/.config/labwc/autostart
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `ls` line must show permissions starting `-rwx` (the owner's executable bit is set — `chmod +x` did fire), size 91 bytes (matches the two-line autostart content), owner `framelink framelink`, and path ending `/home/framelink/.config/labwc/autostart`. If the permissions start `-rw-` instead, `chmod` did not run and labwc will silently ignore the autostart file on the next start.
+The `ls` line must show permissions starting `-rwx` (the owner's executable bit is set, so `chmod +x` did fire), size 91 bytes (matches the two-line autostart content), owner `framelink framelink`, and path ending `/home/framelink/.config/labwc/autostart`. If the permissions start `-rw-` instead, `chmod` did not run and labwc will silently ignore the autostart file on the next start.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
@@ -330,7 +330,7 @@ When labwc starts on the next boot it will rotate the DSI output to landscape an
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-With the output rotated to landscape but no touch-input mapping, touch events stay in the panel's native portrait coordinate system — taps land on the wrong pixels after the image rotates.
+With the output rotated to landscape but no touch-input mapping, touch events stay in the panel's native portrait coordinate system, so taps land on the wrong pixels after the image rotates.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -338,7 +338,7 @@ Create `~/.config/labwc/rc.xml` with a `<touch mapToOutput="DSI-2"/>` element th
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-With `mapToOutput="DSI-2"`, wlroots automatically re-maps touch coordinates to match whatever transform the output has applied. No `LIBINPUT_CALIBRATION_MATRIX` udev rule is required and no Waveshare-specific device-ID matching is needed — it works purely off the output identity.
+With `mapToOutput="DSI-2"`, wlroots automatically re-maps touch coordinates to match whatever transform the output has applied. No `LIBINPUT_CALIBRATION_MATRIX` udev rule is required and no Waveshare-specific device-ID matching is needed, because it works purely off the output identity.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -374,7 +374,7 @@ Touch input is configured to follow the rotated DSI-2 output. Takes effect on th
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-Every piece configured above — the autologin drop-in, `~/.bash_profile`, the Chromium user service, the labwc autostart, the touch-mapping `rc.xml` — is still dormant. Nothing fires until the framelink user session starts fresh on tty1.
+Every piece configured above (the autologin drop-in, `~/.bash_profile`, the Chromium user service, the labwc autostart, the touch-mapping `rc.xml`) is still dormant. Nothing fires until the framelink user session starts fresh on tty1.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -409,7 +409,7 @@ The Pi is rebooting.
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-We need to confirm that the full autostart chain actually fired — autologin, labwc, output rotation, Chromium service — end-to-end in the right order, not just that individual files exist.
+We need to confirm that the full autostart chain actually fired, from autologin through labwc and output rotation to the Chromium service, end-to-end in the right order, not just that individual files exist.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -418,11 +418,11 @@ Reconnect over SSH once the Pi is back and run three quick checks: is the kiosk 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
 Each of the three commands probes a different link in the chain:
-- `systemctl --user is-active chromium-kiosk.service` — the service is running (proves the labwc autostart's `systemctl --user start` ran, which proves labwc started, which proves `~/.bash_profile` exec'd, which proves autologin worked).
-- `ps -e -o comm | grep -c "^chromium$"` — counts Chromium processes. Chromium spawns about a dozen child processes (main browser process, GPU process, renderer, utility, broker, …). A healthy kiosk shows somewhere around 12; zero or one means Chromium crashed during startup.
-- `WAYLAND_DISPLAY=wayland-0 wlr-randr | grep Transform` — the `DSI-2` output's transform is 270° (the labwc autostart's `wlr-randr` call took effect).
+- `systemctl --user is-active chromium-kiosk.service`: the service is running (proves the labwc autostart's `systemctl --user start` ran, which proves labwc started, which proves `~/.bash_profile` exec'd, which proves autologin worked).
+- `ps -e -o comm | grep -c "^chromium$"`: counts Chromium processes. Chromium spawns about a dozen child processes (main browser process, GPU process, renderer, utility, broker, ...). A healthy kiosk shows somewhere around 12; zero or one means Chromium crashed during startup.
+- `WAYLAND_DISPLAY=wayland-0 wlr-randr | grep Transform`: the `DSI-2` output's transform is 270° (the labwc autostart's `wlr-randr` call took effect).
 
-If any of the three fails, `journalctl --user -u chromium-kiosk.service -n 50 --no-pager` is the first place to look — the systemd journal captures Chromium's stdout, startup errors, and any `ExecStartPre` timing issues.
+If any of the three fails, `journalctl --user -u chromium-kiosk.service -n 50 --no-pager` is the first place to look; the systemd journal captures Chromium's stdout, startup errors, and any `ExecStartPre` timing issues.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -442,7 +442,7 @@ Transform: 270
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-Three lines: `active` (service is running), a Chromium process count somewhere around 12 (your exact number may differ depending on how many renderer processes are up, but it should not be `0` or `1`), and `Transform: 270`. If `active` is instead `inactive` or `failed`, `journalctl --user -u chromium-kiosk.service -n 50 --no-pager` will show why. If the process count is `0`, the service exited — usually a mis-configured `ExecStart`. If `Transform:` is missing or reads `Transform: normal`, `wlr-randr` did not run — check that the labwc autostart file is executable (`ls -la ~/.config/labwc/autostart` should start `-rwx`).
+Three lines: `active` (service is running), a Chromium process count somewhere around 12 (your exact number may differ depending on how many renderer processes are up, but it should not be `0` or `1`), and `Transform: 270`. If `active` is instead `inactive` or `failed`, `journalctl --user -u chromium-kiosk.service -n 50 --no-pager` will show why. If the process count is `0`, the service exited, usually because of a mis-configured `ExecStart`. If `Transform:` is missing or reads `Transform: normal`, `wlr-randr` did not run; check that the labwc autostart file is executable (`ls -la ~/.config/labwc/autostart` should start `-rwx`).
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 

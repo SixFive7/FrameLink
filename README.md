@@ -1,7 +1,7 @@
 # FrameLink
 
 > [!WARNING]
-> # 🚧 WORK IN PROGRESS — NOT COMPLETE OR CORRECT 🚧
+> # 🚧 WORK IN PROGRESS: NOT COMPLETE OR CORRECT 🚧
 >
 > **This repository is actively being built and is not finished.** Build guides, hardware choices, software configuration, and documentation are all subject to change. Steps may be missing, incorrect, untested, or out of order. Do not rely on any part of this repo to produce a working FrameLink unit yet.
 >
@@ -9,13 +9,13 @@
 
 ---
 
-A Raspberry Pi-based digital photo frame with one-button video calling. Designed for elderly family members with dementia — always showing familiar photos, with a simple physical button to start a face-to-face video call with up to 6 devices in a shared room.
+A Raspberry Pi-based digital photo frame with one-button video calling. Designed for elderly family members with dementia: always showing familiar photos, with a simple physical button to start a face-to-face video call with up to 6 devices in a shared room.
 
 ## Concept
 
 Each FrameLink unit runs [Immich Kiosk](https://github.com/damongolding/immich-kiosk) to display a slideshow of family photos on a touchscreen. A physical GPIO button on the device joins a shared video call room, temporarily replacing the photo slideshow. When the call ends (second button press or all others leave), the slideshow resumes automatically.
 
-The goal is zero-interaction operation for the viewer — photos play continuously, and answering a call requires no action. The only interaction is pressing the button to *initiate* a call.
+The goal is zero-interaction operation for the viewer. Photos play continuously, and answering a call requires no action. The only interaction is pressing the button to *initiate* a call.
 
 ## Hardware
 
@@ -29,19 +29,19 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
 | Power supply | [Official 27W USB Type-C Power Supply (White, EU)](https://www.waveshare.com/raspberry-pi-5-official-27w-psu.htm?sku=25910) | Raspberry Pi 5 Official 27W PSU White EU | Raspberry Pi Foundation | 25910 |
 | Cooling | [Aluminum Heatsink with Thermal Pads and Spring-Loaded Push Pins](https://www.waveshare.com/pi5-active-cooler-c.htm) | Pi5-Active-Cooler-C | Waveshare | 26415 |
 | Mic array | [ReSpeaker XVF3800 USB 4-Mic Array](https://thepihut.com/products/respeaker-xmos-xvf3800-ai-powered-4-mic-array-for-clear-voice-even-in-noise) | ReSpeaker XVF3800 | Seeed Studio | 101991441 |
-| Speaker | [Adafruit Mono Enclosed Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/3351/6612456) — chosen over the PUI AS07104PO in an A/B loudness test (+12 dB speech-band, measured); pre-attached JST PH cable, no splice needed | 3351 | Adafruit | 3351 |
-| Call button | GPIO momentary push button (TBD) | — | — | — |
-| Network cable | RJ45 Cat5e/Cat6 Ethernet cable — preferred over WiFi for reliability | — | — | — |
+| Speaker | [Adafruit Mono Enclosed Speaker 3W 4Ω](https://www.digikey.nl/nl/products/detail/adafruit-industries-llc/3351/6612456), chosen over the PUI AS07104PO in an A/B loudness test (+12 dB speech-band, measured); pre-attached JST PH cable, no splice needed | 3351 | Adafruit | 3351 |
+| Call button | GPIO momentary push button (TBD) | - | - | - |
+| Network cable | RJ45 Cat5e/Cat6 Ethernet cable, preferred over WiFi for reliability | - | - | - |
 
 ## Software Stack
 
-- **OS**: Raspberry Pi OS Lite (Trixie, Debian 13) — first-party hardware support, built-in overlayfs for SD card longevity, largest Pi kiosk community
-- **Display server**: Wayland with labwc compositor — official default since Oct 2024, GPU-accelerated compositing
-- **Photo slideshow**: [Immich Kiosk](https://github.com/damongolding/immich-kiosk) — connects to an existing Immich server, runs inside an iframe in the SPA
-- **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU — auto-reconnect, built-in TURN, adaptive bitrate, single Docker container
-- **Kiosk shell**: Custom SPA serving as the parent page — WebRTC client in parent, Immich Kiosk in iframe, CSS toggle between modes
-- **Camera**: dedicated PipeWire camera node (GStreamer libcamerasrc, ISP-scaled 1920x1080@30, full FoV) — consumed by Chromium via the desktop portal, published as H.264
-- **GPIO handler**: Python daemon (gpiozero) — detects button press, sends toggle command to SPA via localhost WebSocket; doubles as the kiosk-page watchdog (restarts the browser if the SPA's socket stays dead)
+- **OS**: Raspberry Pi OS Lite (Trixie, Debian 13), picked for first-party hardware support, built-in overlayfs for SD card longevity, and the largest Pi kiosk community
+- **Display server**: Wayland with labwc compositor, the official default since Oct 2024, with GPU-accelerated compositing
+- **Photo slideshow**: [Immich Kiosk](https://github.com/damongolding/immich-kiosk), which connects to an existing Immich server and runs inside an iframe in the SPA
+- **Video calling**: [LiveKit](https://github.com/livekit/livekit) SFU, with auto-reconnect, built-in TURN, adaptive bitrate and a single Docker container
+- **Kiosk shell**: Custom SPA serving as the parent page, with the WebRTC client in the parent, Immich Kiosk in the iframe, and a CSS toggle between modes
+- **Camera**: dedicated PipeWire camera node (GStreamer libcamerasrc, ISP-scaled 1920x1080@30, full FoV), consumed by Chromium via the desktop portal, published as H.264
+- **GPIO handler**: Python daemon (gpiozero) that detects a button press and sends a toggle command to the SPA via localhost WebSocket; doubles as the kiosk-page watchdog (restarts the browser if the SPA's socket stays dead)
 
 ## Architecture
 
@@ -92,60 +92,60 @@ Each unit consists of (x2 ordered, sourced from [Waveshare](https://www.waveshar
                                               +-----------------------------+
 ```
 
-Pi endpoints require **zero inbound ports** — all connections are outbound (HTTPS + UDP).
+Pi endpoints require **zero inbound ports**; all connections are outbound (HTTPS + UDP).
 
 ## Research
 
 Key design decisions and the reasoning behind them:
 
-- [Operating System](research/os-choice.md) — why Raspberry Pi OS Lite over 11 other candidates
-- [Video Calling Platform](research/video-calling.md) — why LiveKit over 20 other candidates, with Janus as fallback
-- [Display Server & Compositor](research/display-server.md) — why Wayland with labwc over X11 and cage
-- [Kiosk Switching Architecture](research/kiosk-architecture.md) — why SPA with iframe over tab switching
-- [Camera & Audio](research/camera-audio.md) — libcamera + PipeWire for Camera Module 3, ReSpeaker XVF3800 mic array + enclosed speaker for audio
-- [2GB RAM Feasibility](research/ram-feasibility.md) — budget analysis, mitigations, and mandatory hardware validation plan
+- [Operating System](research/os-choice.md): why Raspberry Pi OS Lite over 11 other candidates
+- [Video Calling Platform](research/video-calling.md): why LiveKit over 20 other candidates, with Janus as fallback
+- [Display Server & Compositor](research/display-server.md): why Wayland with labwc over X11 and cage
+- [Kiosk Switching Architecture](research/kiosk-architecture.md): why SPA with iframe over tab switching
+- [Camera & Audio](research/camera-audio.md): libcamera + PipeWire for Camera Module 3, ReSpeaker XVF3800 mic array + enclosed speaker for audio
+- [2GB RAM Feasibility](research/ram-feasibility.md): budget analysis, mitigations, and mandatory hardware validation plan
 
 ## Build Guide
 
-The build is split into one hardware guide and fourteen software guides, each stepping through validated instructions only. Guides 1–13 build a frame; guides 14 and 15 stand up the server the fleet reports to — 15 is the one in daily use, and 14 is kept ready for the day the server deployment happens:
+The build is split into one hardware guide and fourteen software guides, each stepping through validated instructions only. Guides 1-13 build a frame; guides 14 and 15 stand up the server the fleet reports to. Guide 15 is the one in daily use, and 14 is kept ready for the day the server deployment happens:
 
-1. [Hardware assembly](docs/1-hardware-build-guide.md) — Pi + display + camera + speaker
-2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md) — Trixie Lite, SSH, base updates
-3. [Hardware configuration](docs/3-hardware-configuration.md) — DSI display, rotation, kernel parameters
-4. [Audio configuration](docs/4-audio-configuration.md) — ReSpeaker XVF3800 pinning, amp enable, mixer persistence
-5. [Kiosk base](docs/5-kiosk-base.md) — labwc + Chromium fullscreen
-6. [Camera](docs/6-camera.md) — dedicated PipeWire camera node, H.264 1080p30, full field of view
-7. [LiveKit server deployment](docs/7-livekit-server.md) — Docker Compose + token minting; superseded by the Fleet Manager's own bundled call server, kept until the agent is at parity
-8. [WebRTC call-load validation](docs/8-webrtc-validation.md) — soak a real call, the 2 GB go/no-go gate
-9. [Immich Kiosk](docs/9-immich-kiosk.md) — Docker photo slideshow (offline-capable)
-10. [Kiosk SPA](docs/10-spa.md) — slideshow iframe, video grid, LiveKit client
-11. [GPIO button daemon](docs/11-gpio-button.md) — Python gpiozero → WebSocket toggle
-12. [systemd services & reliability](docs/12-systemd-and-reliability.md) — services, watchdog, SD protection
-13. [Multi-device deployment](docs/13-multi-device-deploy.md) — golden image, per-device identity, household rollout
-14. [Fleet Manager deployment](docs/14-fleet-manager-deployment.md) — the server: container image, Portainer stack behind Traefik, bundled call server, alerting, backup and rollback; **deferred until a release is cut**, and nothing in it is a pending action
-15. [The Fleet Manager on your workstation](docs/15-local-fleet-manager.md) — the development stack: the same image and the same bundled call server under Docker Desktop on Windows, plain HTTP, the two Windows problems that decide the design, and an idempotent cutover from `dotnet run`
+1. [Hardware assembly](docs/1-hardware-build-guide.md): Pi + display + camera + speaker
+2. [SD card flashing & first boot](docs/2-sd-flash-first-boot.md): Trixie Lite, SSH, base updates
+3. [Hardware configuration](docs/3-hardware-configuration.md): DSI display, rotation, kernel parameters
+4. [Audio configuration](docs/4-audio-configuration.md): ReSpeaker XVF3800 pinning, amp enable, mixer persistence
+5. [Kiosk base](docs/5-kiosk-base.md): labwc + Chromium fullscreen
+6. [Camera](docs/6-camera.md): dedicated PipeWire camera node, H.264 1080p30, full field of view
+7. [LiveKit server deployment](docs/7-livekit-server.md): Docker Compose + token minting; superseded by the Fleet Manager's own bundled call server, kept until the agent is at parity
+8. [WebRTC call-load validation](docs/8-webrtc-validation.md): soak a real call, the 2 GB go/no-go gate
+9. [Immich Kiosk](docs/9-immich-kiosk.md): Docker photo slideshow (offline-capable)
+10. [Kiosk SPA](docs/10-spa.md): slideshow iframe, video grid, LiveKit client
+11. [GPIO button daemon](docs/11-gpio-button.md): Python gpiozero → WebSocket toggle
+12. [systemd services & reliability](docs/12-systemd-and-reliability.md): services, watchdog, SD protection
+13. [Multi-device deployment](docs/13-multi-device-deploy.md): golden image, per-device identity, household rollout
+14. [Fleet Manager deployment](docs/14-fleet-manager-deployment.md). The server: container image, Portainer stack behind Traefik, bundled call server, alerting, backup and rollback; **deferred until a release is cut**, and nothing in it is a pending action
+15. [The Fleet Manager on your workstation](docs/15-local-fleet-manager.md). The development stack: the same image and the same bundled call server under Docker Desktop on Windows, plain HTTP, the two Windows problems that decide the design, and an idempotent cutover from `dotnet run`
 
 ## To Do
 
-- [x] **A/B test speakers** — done: the Adafruit 3351 wins by 12 dB speech-band over the PUI AS07104PO (94.5 vs 82.2 dB, measured); it is the product speaker (see the BOM row).
-- [ ] **Design 3D-printed case** — wall-mounted enclosure holding display, Pi, XVF3800 + camera assembly (top), and speaker (bottom). Three acoustically separated chambers for AEC. See [case design notes](research/camera-audio.md#aec-acoustic-echo-cancellation-design). Ventilation is a performance requirement: a worst-case 6-way call plateaus at 80.7 °C on the bare heatsink, only ~4 °C under the throttle point.
-- [ ] **Tune XVF3800 AEC** — set `AUDIO_MGR_SYS_DELAY` once the enclosure fixes the speaker-to-mic geometry (amp enable and mixer levels are covered by [guide 4](docs/4-audio-configuration.md)).
-- [ ] **Source remaining parts** — USB-C to USB-A cables (×2), GPIO buttons (×2), microSD cards (×2), foam tape for speaker isolation.
-- [x] **If neither enclosed speaker is loud/clear enough** — not needed: with both mixer controls at 0 dB the 3351 reaches desk-phone loudness (~94 dB close-miked), verified clean on continuous narration at maximum volume.
+- [x] **A/B test speakers**. Done: the Adafruit 3351 wins by 12 dB speech-band over the PUI AS07104PO (94.5 vs 82.2 dB, measured); it is the product speaker (see the BOM row).
+- [ ] **Design 3D-printed case**: wall-mounted enclosure holding display, Pi, XVF3800 + camera assembly (top), and speaker (bottom). Three acoustically separated chambers for AEC. See [case design notes](research/camera-audio.md#aec-acoustic-echo-cancellation-design). Ventilation is a performance requirement: a worst-case 6-way call plateaus at 80.7 °C on the bare heatsink, only ~4 °C under the throttle point.
+- [ ] **Tune XVF3800 AEC**: set `AUDIO_MGR_SYS_DELAY` once the enclosure fixes the speaker-to-mic geometry (amp enable and mixer levels are covered by [guide 4](docs/4-audio-configuration.md)).
+- [ ] **Source remaining parts**: USB-C to USB-A cables (x2), GPIO buttons (x2), microSD cards (x2), foam tape for speaker isolation.
+- [x] **If neither enclosed speaker is loud/clear enough**. Not needed: with both mixer controls at 0 dB the 3351 reaches desk-phone loudness (~94 dB close-miked), verified clean on continuous narration at maximum volume.
 
 ## Key Risk
 
-**2GB RAM + 5 software-decoded WebRTC streams — measured on hardware, and it holds.** Pi 5 has no hardware H.264 decode, so Chromium software-decodes every incoming stream and a call is by a wide margin the heaviest thing a frame ever does. That is no longer an estimate: on a real Pi 5, a full six-way call runs a *stable* Chromium process tree of about 1.3 GB, and the worst case — five decoded streams plus this unit's own 1080p publish — settles at 80.7 °C on a bare heatsink. Those measurements are what set the memory watchdog's thresholds in [guide 12](docs/12-systemd-and-reliability.md), and the mitigations are shipped rather than planned: ZRAM compressed swap, three-layer H.264 simulcast publishing (180p, 360p and 1080p at 30 fps), LiveKit adaptive-layer selection so the small grid tiles subscribe to a cheap layer, and the slideshow iframe unloaded for the duration of every call.
+**2GB RAM + 5 software-decoded WebRTC streams: measured on hardware, and it holds.** Pi 5 has no hardware H.264 decode, so Chromium software-decodes every incoming stream and a call is by a wide margin the heaviest thing a frame ever does. That is no longer an estimate: on a real Pi 5, a full six-way call runs a *stable* Chromium process tree of about 1.3 GB, and the worst case (five decoded streams plus this unit's own 1080p publish) settles at 80.7 °C on a bare heatsink. Those measurements are what set the memory watchdog's thresholds in [guide 12](docs/12-systemd-and-reliability.md), and the mitigations are shipped rather than planned: ZRAM compressed swap, three-layer H.264 simulcast publishing (180p, 360p and 1080p at 30 fps), LiveKit adaptive-layer selection so the small grid tiles subscribe to a cheap layer, and the slideshow iframe unloaded for the duration of every call.
 
 **What is still open is duration and thermal margin, not feasibility.** The multi-hour soak defined in [guide 8](docs/8-webrtc-validation.md) has not been run, so nothing yet proves a call that is still healthy at bedtime; every expected output in that guide is an explicit placeholder until it is, and a household with two frames cannot produce a six-way call to measure. And 80.7 °C is only ~4 °C under the throttle point, which is what makes ventilation in the enclosure a performance requirement rather than a finishing touch. The original budget analysis, and the mitigations as they were first planned, are kept in the [2GB RAM feasibility notes](research/ram-feasibility.md) as the pre-decision record.
 
 ## License and name
 
-FrameLink is source-available. Read all of it, build units from it for yourself or anyone you are helping, change it, publish your changes — the single thing you may not do is sell a commercial product or service that competes with FrameLink while it is young. Five years after any given release, even that restriction lapses and the release becomes plain MIT.
+FrameLink is source-available. Read all of it, build units from it for yourself or anyone you are helping, change it, publish your changes. The single thing you may not do is sell a commercial product or service that competes with FrameLink while it is young. Five years after any given release, even that restriction lapses and the release becomes plain MIT.
 
-- **Everything original in this repository** (code, configuration, documentation, build guides, research notes, images) — the [FrameLink License](LICENSE). It is a bespoke variant of the [Functional Source License 1.1 (MIT Future License)](https://fsl.software/), word-for-word identical to the published template except that each release converts to MIT on its **fifth** anniversary rather than its second. Internal use, personal use, non-commercial education and non-commercial research are all named as permitted purposes. Because the term deviates from the template, the identifier is `LicenseRef-FrameLink-FSL-1.1-MIT-5yr` — never the bare `FSL-1.1-MIT`, which would misstate the term by three years.
+- **Everything original in this repository** (code, configuration, documentation, build guides, research notes, images): the [FrameLink License](LICENSE). It is a custom variant of the [Functional Source License 1.1 (MIT Future License)](https://fsl.software/), word-for-word identical to the published template except that each release converts to MIT on its **fifth** anniversary rather than its second. Internal use, personal use, non-commercial education and non-commercial research are all named as permitted purposes. Because the term deviates from the template, the identifier is `LicenseRef-FrameLink-FSL-1.1-MIT-5yr`, never the bare `FSL-1.1-MIT`, which would misstate the term by three years.
 - **Versions published before the relicense stay under EUPL-1.2.** Every commit released up to that point was licensed under the [European Union Public Licence v1.2](https://interoperable-europe.ec.europa.eu/collection/eupl/eupl-text-eupl-12), and that grant cannot be taken back. If you received FrameLink under the EUPL, you keep those rights in that version permanently. The new license applies going forward only, and the EUPL-licensed commits remain in this repository's git history.
-- **Vendored third-party files keep their own licenses** — the bundled `lit` and `livekit-client` builds, manufacturer wiring diagrams, and Raspberry Pi Imager screenshots are not ours to relicense. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
-- **Name and branding** — the name "FrameLink", the project's visual identity, and the distinctive build-guide layout are **not** covered by any of the above. See [TRADEMARK.md](TRADEMARK.md) for what's permitted and what isn't.
+- **Vendored third-party files keep their own licenses.** The bundled `lit` and `livekit-client` builds, manufacturer wiring diagrams, and Raspberry Pi Imager screenshots are not ours to relicense. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+- **Name and branding**: the name "FrameLink", the project's visual identity, and the distinctive build-guide layout are **not** covered by any of the above. See [TRADEMARK.md](TRADEMARK.md) for what's permitted and what isn't.
 
 Copyright © Jori Huisman.

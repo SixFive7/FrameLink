@@ -1,6 +1,6 @@
 # Software Build Guide 10 — Kiosk SPA (Shell + LiveKit Client)
 
-This guide deploys the FrameLink web app onto the Pi and serves it locally so the kiosk browser loads it. The app is the frame's brain: by default it shows the [Immich Kiosk](9-immich-kiosk.md) slideshow built in guide 9, and it switches to a [LiveKit](7-livekit-server.md) video call when the physical button from [guide 11](11-gpio-button.md) is pressed or an incoming call arrives. The app ships as plain files with its `lit` and `livekit-client` libraries vendored in, so there is no build step and no `npm`. We serve those files with `busybox httpd` bound to `127.0.0.1:8888` — already on the base image — so the frame depends on no external web host, then point the Chromium kiosk service at `http://localhost:8888/` and order it to wait for that local server before it opens.
+This guide deploys the FrameLink web app onto the Pi and serves it locally so the kiosk browser loads it. The app is the frame's brain: by default it shows the [Immich Kiosk](9-immich-kiosk.md) slideshow built in guide 9, and it switches to a [LiveKit](7-livekit-server.md) video call when the physical button from [guide 11](11-gpio-button.md) is pressed or an incoming call arrives. The app ships as plain files with its `lit` and `livekit-client` libraries vendored in, so there is no build step and no `npm`. We serve those files with `busybox httpd` bound to `127.0.0.1:8888`, which is already on the base image, so the frame depends on no external web host, then point the Chromium kiosk service at `http://localhost:8888/` and order it to wait for that local server before it opens.
 
 ---
 
@@ -17,7 +17,7 @@ Install `git`, then clone the FrameLink repository into the home folder so the a
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The app is a static single-page application: an `index.html`, a handful of ES modules (`frame-app.js` and friends), and a `vendor/` folder holding pre-built copies of the two libraries it needs — `lit` (the small web-component framework the UI is written in) and `livekit-client` (the browser SDK that joins the video room). Because those libraries are vendored as ready-to-load files, the app has **no build step and no `npm`** — the browser loads the files exactly as they sit on disk. Cloning the whole repository is therefore all the "install" the app needs.
+The app is a static single-page application: an `index.html`, a handful of ES modules (`frame-app.js` and friends), and a `vendor/` folder holding pre-built copies of the two libraries it needs: `lit` (the small web-component framework the UI is written in) and `livekit-client` (the browser SDK that joins the video room). Because those libraries are vendored as ready-to-load files, the app has **no build step and no `npm`**; the browser loads the files exactly as they sit on disk. Cloning the whole repository is therefore all the "install" the app needs.
 
 1. `sudo apt install -y git` puts `git` on the image; a fresh Raspberry Pi OS Lite install does not always carry it.
 2. `[ -d ~/FrameLink ] || git clone ...` clones the repo into `~/FrameLink` **only if that folder does not already exist**, so re-running the step on a Pi that is already cloned does nothing instead of erroring with `destination path already exists`.
@@ -39,11 +39,11 @@ sudo apt install -y git
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The `apt` line finishes with `git` set up and no `E:` error, and `git clone` ends with a `Receiving objects: 100%` / `Resolving deltas: 100%` pair and no `fatal:` line. If you see `fatal: destination path '/home/framelink/FrameLink' already exists`, the guard did not fire because the folder was there — that is harmless, the existing clone is reused. A `Could not resolve host: github.com` means the Pi has no internet path to GitHub.
+The `apt` line finishes with `git` set up and no `E:` error, and `git clone` ends with a `Receiving objects: 100%` / `Resolving deltas: 100%` pair and no `fatal:` line. If you see `fatal: destination path '/home/framelink/FrameLink' already exists`, the guard did not fire because the folder was there. That is harmless; the existing clone is reused. A `Could not resolve host: github.com` means the Pi has no internet path to GitHub.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The FrameLink app and its vendored `lit` and `livekit-client` libraries are on the Pi at `~/FrameLink/app`, ready to configure and serve. The app cannot connect to anything yet — it has no configuration.
+The FrameLink app and its vendored `lit` and `livekit-client` libraries are on the Pi at `~/FrameLink/app`, ready to configure and serve. The app cannot connect to anything yet, because it has no configuration.
 
 <a id="2-create-the-app-configuration"></a>
 <img src="https://img.shields.io/badge/STEP_02-Create_the_app_configuration-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 02 — Create the app configuration"/>
@@ -58,13 +58,13 @@ Copy the bundled example configuration to `config.json`, then fill in this unit'
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-The app reads a single file, `app/config.json`, at start-up. The repo ships `app/config.example.json` as a template you copy and edit — the real `config.json` is per-unit and is not committed. Its five fields:
+The app reads a single file, `app/config.json`, at start-up. The repo ships `app/config.example.json` as a template you copy and edit; the real `config.json` is per-unit and is not committed. Its five fields:
 
-1. `identity` — this frame's LiveKit identity, the name other callers see (e.g. `framelink-douwe`). It must be unique per unit so two frames in the same room do not collide.
-2. `room` — the LiveKit room every family device joins (e.g. `family`). All frames and phones that should be able to call each other share one room name.
-3. `livekitUrl` — the WebSocket address of the LiveKit server from [guide 7](7-livekit-server.md), in the form `ws://YOUR-LIVEKIT-HOST:7880`. This is where the app connects to place and receive calls.
-4. `immichKioskUrl` — the **local** Immich Kiosk slideshow URL from [guide 9](9-immich-kiosk.md). The example already contains `http://127.0.0.1:3000/` with the full set of display query parameters the frame needs — `disable_ui`, `hide_cursor`, `disable_navigation`, `frameless`, `image_fit=cover`, `transition=fade`, `duration=30`, and `use_offline_mode=true` (which tells Kiosk to serve cached photos when your Immich server is unreachable). Leave it as shipped unless you changed Kiosk's port.
-5. `token` — a long-lived LiveKit access token minted for this `identity` and `room` per [guide 7](7-livekit-server.md). **This is a secret**: it grants the bearer the right to join your video room. It is never printed in this guide and must not be committed — paste it into `config.json` and leave it only there.
+1. `identity`: this frame's LiveKit identity, the name other callers see (e.g. `framelink-douwe`). It must be unique per unit so two frames in the same room do not collide.
+2. `room`: the LiveKit room every family device joins (e.g. `family`). All frames and phones that should be able to call each other share one room name.
+3. `livekitUrl`: the WebSocket address of the LiveKit server from [guide 7](7-livekit-server.md), in the form `ws://YOUR-LIVEKIT-HOST:7880`. This is where the app connects to place and receive calls.
+4. `immichKioskUrl`: the **local** Immich Kiosk slideshow URL from [guide 9](9-immich-kiosk.md). The example already contains `http://127.0.0.1:3000/` with the full set of display query parameters the frame needs: `disable_ui`, `hide_cursor`, `disable_navigation`, `frameless`, `image_fit=cover`, `transition=fade`, `duration=30`, and `use_offline_mode=true` (which tells Kiosk to serve cached photos when your Immich server is unreachable). Leave it as shipped unless you changed Kiosk's port.
+5. `token`: a long-lived LiveKit access token minted for this `identity` and `room` per [guide 7](7-livekit-server.md). **This is a secret**: it grants the bearer the right to join your video room. It is never printed in this guide and must not be committed; paste it into `config.json` and leave it only there.
 
 The block below copies the example to `config.json` (only if `config.json` does not already exist, so a re-run never clobbers a token you already pasted), then opens the file in `nano` for you to fill in the five values. Editing the file in place keeps the secret token off the terminal and out of your shell history.
 
@@ -84,18 +84,18 @@ nano config.json
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-`nano` opens on the JSON template. Set `identity`, `room`, and `livekitUrl` to this unit's values, paste your long-lived token into `token` (between the quotes), and leave `immichKioskUrl` as shipped unless you changed Kiosk's port in [guide 9](9-immich-kiosk.md). Save with `Ctrl+O`, `Enter`, then exit with `Ctrl+X`. A trailing comma or a missing quote makes the file invalid JSON and the app falls back to its built-in defaults (so the slideshow and call will not work) — keep the punctuation exactly as in the example.
+`nano` opens on the JSON template. Set `identity`, `room`, and `livekitUrl` to this unit's values, paste your long-lived token into `token` (between the quotes), and leave `immichKioskUrl` as shipped unless you changed Kiosk's port in [guide 9](9-immich-kiosk.md). Save with `Ctrl+O`, `Enter`, then exit with `Ctrl+X`. A trailing comma or a missing quote makes the file invalid JSON and the app falls back to its built-in defaults (so the slideshow and call will not work), so keep the punctuation exactly as in the example.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The app now has its per-unit configuration: which slideshow to embed, which LiveKit room to join, and the token that authorises it. The files still are not being served to a browser — that is the next step.
+The app now has its per-unit configuration: which slideshow to embed, which LiveKit room to join, and the token that authorises it. The files still are not being served to a browser; that is the next step.
 
 <a id="3-serve-the-app-locally"></a>
 <img src="https://img.shields.io/badge/STEP_03-Serve_the_app_locally-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 03 — Serve the app locally"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-The app is just files on disk. A browser cannot load an app reliably from `file://` — the modules and the LiveKit connection need a real web server — and we do not want to depend on a web host somewhere else on the internet that could go down.
+The app is just files on disk. A browser cannot load an app reliably from `file://`, because the modules and the LiveKit connection need a real web server, and we do not want to depend on a web host somewhere else on the internet that could go down.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -103,7 +103,7 @@ Serve the app folder over HTTP from the Pi itself using `busybox httpd`, run as 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-`busybox` is already on the Raspberry Pi OS Lite image, and it includes a tiny static web server, `httpd` — no package to install. We point it at the app folder and bind it to localhost only, so the app is reachable by the Pi's own browser but never exposed to the network.
+`busybox` is already on the Raspberry Pi OS Lite image, and it includes a tiny static web server, `httpd`, so there is no package to install. We point it at the app folder and bind it to localhost only, so the app is reachable by the Pi's own browser but never exposed to the network.
 
 The service is defined exactly as in `deploy/systemd/framelink-spa.service`. Its `ExecStart` runs `busybox httpd -f -p 127.0.0.1:8888 -h /home/framelink/FrameLink/app`: `-f` keeps it in the foreground so systemd can supervise it, `-p 127.0.0.1:8888` binds it to port 8888 on loopback only, and `-h` sets the document root to the app folder cloned in [step 1](#1-clone-the-framelink-app-onto-the-pi). `Restart=always` with `RestartSec=2` relaunches it within two seconds if it ever exits.
 
@@ -140,18 +140,18 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8888/
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-The closing `curl` prints `HTTP 200`, proving `busybox httpd` is serving the app on `127.0.0.1:8888`. `enable --now` prints a `Created symlink` line and is otherwise silent. A `Failed to connect to bus` error from `systemctl --user` means this SSH login has no user session bus — confirm the autologin session from [guide 5](5-kiosk-base.md#3-enable-console-autologin) is active, or log out and back in. If `curl` prints `HTTP 000` or `Connection refused`, the service did not start — check `systemctl --user status framelink-spa.service`.
+The closing `curl` prints `HTTP 200`, proving `busybox httpd` is serving the app on `127.0.0.1:8888`. `enable --now` prints a `Created symlink` line and is otherwise silent. A `Failed to connect to bus` error from `systemctl --user` means this SSH login has no user session bus, so confirm the autologin session from [guide 5](5-kiosk-base.md#3-enable-console-autologin) is active, or log out and back in. If `curl` prints `HTTP 000` or `Connection refused`, the service did not start; check `systemctl --user status framelink-spa.service`.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The FrameLink app is being served on the Pi at `http://127.0.0.1:8888/`, from a service that restarts on its own and comes back after a reboot, with no dependency on any external web host. The kiosk browser is still pointed at the placeholder URL from guide 5 — the next step redirects it here.
+The FrameLink app is being served on the Pi at `http://127.0.0.1:8888/`, from a service that restarts on its own and comes back after a reboot, with no dependency on any external web host. The kiosk browser is still pointed at the placeholder URL from guide 5; the next step redirects it here.
 
 <a id="4-point-the-kiosk-browser-at-the-app"></a>
 <img src="https://img.shields.io/badge/STEP_04-Point_the_kiosk_browser_at_the_app-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 04 — Point the kiosk browser at the app"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-The Chromium kiosk service from guide 5 still opens a placeholder page, and even pointed at the right address it could launch before the local server is ready — on a cold boot the browser and the server start at the same time, and a browser that opens first sees a "connection refused" error page and stays stuck on it.
+The Chromium kiosk service from guide 5 still opens a placeholder page, and even pointed at the right address it could launch before the local server is ready. On a cold boot the browser and the server start at the same time, and a browser that opens first sees a "connection refused" error page and stays stuck on it.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
@@ -159,13 +159,13 @@ Replace the Chromium service with its final form: point it at the local app and 
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-This is the **final** `chromium-kiosk.service`, defined exactly as in `deploy/systemd/chromium-kiosk.service`. Point by point — what changes from the guide 5 version, what carries over, and why each piece matters for an unattended frame:
+This is the **final** `chromium-kiosk.service`, defined exactly as in `deploy/systemd/chromium-kiosk.service`. Point by point: what changes from the guide 5 version, what carries over, and why each piece matters for an unattended frame:
 
-1. The `ExecStart` URL is now `http://localhost:8888/` — the local server from [step 3](#3-serve-the-app-locally) — instead of the placeholder. All the other Chromium flags (`--kiosk`, `--ozone-platform=wayland`, the camera flags from [guide 6](6-camera.md), and so on) are unchanged.
-2. `framelink-spa.service` in `After=` and `Wants=` ties the browser to the local server: `Wants` pulls the server into the same start-up, and `After` makes systemd *start* the browser after the server — but "after the service started" is not the same as "after the server is answering requests", which is why the readiness wait below is still needed.
-3. `framelink-camera.service` in `After=` and `Wants=` does the same for the dedicated PipeWire camera node from [guide 6](6-camera.md): the camera daemon now joins the browser's start-up set on every boot. Unlike the web server it gets no readiness gate — the app only acquires the camera when a call starts, not at page load, so start ordering alone is enough.
-4. The first `ExecStartPre`, `/bin/rm -rf /tmp/framelink-chromium`, carries over from guide 5: it wipes the throwaway tmpfs profile before every start, because Chromium's module cache inside it otherwise keeps serving stale app JavaScript after an app update — the updated files reach the disk but never the browser. Now that the kiosk serves the real app, this wipe is what makes every future update of `~/FrameLink` actually take effect on the next service restart. The portal camera permission is unaffected — it lives in `~/.local/share/flatpak/db`, not in the profile.
-5. The other two `ExecStartPre` guards make Chromium **block until its world is ready**. The first, `while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done`, waits for the Wayland socket to exist so Chromium has a display to draw on. The second, `until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done`, polls the local server every 0.3 s and only returns once it answers — so Chromium never opens before the app is actually being served. Together these defeat the cold-boot race: whichever of display or server is slower, Chromium waits for it.
+1. The `ExecStart` URL is now `http://localhost:8888/`, the local server from [step 3](#3-serve-the-app-locally), instead of the placeholder. All the other Chromium flags (`--kiosk`, `--ozone-platform=wayland`, the camera flags from [guide 6](6-camera.md), and so on) are unchanged.
+2. `framelink-spa.service` in `After=` and `Wants=` ties the browser to the local server: `Wants` pulls the server into the same start-up, and `After` makes systemd *start* the browser after the server. But "after the service started" is not the same as "after the server is answering requests", which is why the readiness wait below is still needed.
+3. `framelink-camera.service` in `After=` and `Wants=` does the same for the dedicated PipeWire camera node from [guide 6](6-camera.md): the camera daemon now joins the browser's start-up set on every boot. Unlike the web server it gets no readiness gate, because the app only acquires the camera when a call starts, not at page load, so start ordering alone is enough.
+4. The first `ExecStartPre`, `/bin/rm -rf /tmp/framelink-chromium`, carries over from guide 5: it wipes the throwaway tmpfs profile before every start, because Chromium's module cache inside it otherwise keeps serving stale app JavaScript after an app update: the updated files reach the disk but never the browser. Now that the kiosk serves the real app, this wipe is what makes every future update of `~/FrameLink` actually take effect on the next service restart. The portal camera permission is unaffected, because it lives in `~/.local/share/flatpak/db`, not in the profile.
+5. The other two `ExecStartPre` guards make Chromium **block until its world is ready**. The first, `while [ ! -S "/run/user/$(id -u)/${WAYLAND_DISPLAY}" ]; do sleep 0.1; done`, waits for the Wayland socket to exist so Chromium has a display to draw on. The second, `until curl -sf http://127.0.0.1:8888/ >/dev/null 2>&1; do sleep 0.3; done`, polls the local server every 0.3 s and only returns once it answers, so Chromium never opens before the app is actually being served. Together these defeat the cold-boot race: whichever of display or server is slower, Chromium waits for it.
 
 `daemon-reload` reads the rewritten unit; `restart` relaunches Chromium against the new URL with the new guards.
 
@@ -218,30 +218,30 @@ systemctl --user restart chromium-kiosk.service
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-`tee` echoes the unit file; the two `systemctl --user` commands are silent on success, and the DSI screen reloads into the FrameLink app showing the slideshow. To confirm the browser that is actually running was opened at the local app, ask systemd which process belongs to the service and read that one process's command line: `tr '\0' ' ' < /proc/$(systemctl --user show chromium-kiosk.service -p MainPID --value)/cmdline | grep -o 'http://[^ ]*:8888/'`. A pass prints one address ending in `:8888/` — `http://localhost:8888/` on a frame built by hand from this guide, `http://127.0.0.1:8888/` on one the FrameLink agent has provisioned, which is the same server on the same port. Two things make the older habit of reading `pgrep -a chromium` unreliable here, and both are worth knowing: that listing is the browser's whole family of processes with nothing to say which one the service owns, and Chromium renames itself as it starts, so what the system hands back for any of them is a single run-on line of text rather than the separate arguments the service gave it — searching that text for an address is safe, splitting it back into arguments is not. Printing nothing means the service had no main process to ask about: it is still inside the two waits above, or it is not running — `systemctl --user status chromium-kiosk.service` says which. A `Failed to connect to bus` error means the user session bus is unavailable from this login — see the note in [step 3](#3-serve-the-app-locally). If the screen sits on a spinner, the local server is not answering — recheck [step 3](#3-serve-the-app-locally)'s `curl`.
+`tee` echoes the unit file; the two `systemctl --user` commands are silent on success, and the DSI screen reloads into the FrameLink app showing the slideshow. To confirm the browser that is actually running was opened at the local app, ask systemd which process belongs to the service and read that one process's command line: `tr '\0' ' ' < /proc/$(systemctl --user show chromium-kiosk.service -p MainPID --value)/cmdline | grep -o 'http://[^ ]*:8888/'`. A pass prints one address ending in `:8888/`: `http://localhost:8888/` on a frame built by hand from this guide, `http://127.0.0.1:8888/` on one the FrameLink agent has provisioned, which is the same server on the same port. Two things make the older habit of reading `pgrep -a chromium` unreliable here, and both are worth knowing: that listing is the browser's whole family of processes with nothing to say which one the service owns, and Chromium renames itself as it starts, so what the system hands back for any of them is a single run-on line of text rather than the separate arguments the service gave it. Searching that text for an address is safe; splitting it back into arguments is not. Printing nothing means the service had no main process to ask about: it is still inside the two waits above, or it is not running, and `systemctl --user status chromium-kiosk.service` says which. A `Failed to connect to bus` error means the user session bus is unavailable from this login; see the note in [step 3](#3-serve-the-app-locally). If the screen sits on a spinner, the local server is not answering, so recheck [step 3](#3-serve-the-app-locally)'s `curl`.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
-The kiosk browser now loads the FrameLink app from the local server, and it is ordered to wait for both the display and that server before it opens — so it survives a cold boot without landing on an error page. The final step confirms the whole frame comes up correctly.
+The kiosk browser now loads the FrameLink app from the local server, and it is ordered to wait for both the display and that server before it opens, so it survives a cold boot without landing on an error page. The final step confirms the whole frame comes up correctly.
 
 <a id="5-verify-the-frame-works"></a>
 <img src="https://img.shields.io/badge/STEP_05-Verify_the_frame_works-555555?style=for-the-badge&labelColor=228b22" height="50" alt="Step 05 — Verify the frame works"/>
 
 ![PROBLEM](https://img.shields.io/badge/🤔-PROBLEM-e05d44?style=flat-square)
 
-Every piece is configured, but we have not yet confirmed the frame actually comes up into a working slideshow on its own — the way it will every time it is switched on.
+Every piece is configured, but we have not yet confirmed the frame actually comes up into a working slideshow on its own, the way it will every time it is switched on.
 
 ![APPROACH](https://img.shields.io/badge/💡-APPROACH-fbbf24?style=flat-square)
 
-Reboot the Pi, then check that both services are active and the local server answers — and look at the screen to confirm the photos are showing.
+Reboot the Pi, then check that both services are active and the local server answers, and look at the screen to confirm the photos are showing.
 
 ![TECHNICAL EXPLANATION](https://img.shields.io/badge/🧠-TECHNICAL_EXPLANATION-8a2be2?style=flat-square)
 
-A reboot is the real test, because it exercises the full cold-boot ordering: the slideshow server, the Wayland session, the readiness guards, and Chromium all coming up together. After the Pi is back, `systemctl --user is-active framelink-spa chromium-kiosk` reports the live state of both user services — both should read `active`. The `curl` re-confirms the local server is serving the app. The authoritative confirmation, though, is the screen itself: a working frame shows the Immich photos from [guide 9](9-immich-kiosk.md) filling the display.
+A reboot is the real test, because it exercises the full cold-boot ordering: the slideshow server, the Wayland session, the readiness guards, and Chromium all coming up together. After the Pi is back, `systemctl --user is-active framelink-spa chromium-kiosk` reports the live state of both user services, and both should read `active`. The `curl` re-confirms the local server is serving the app. The authoritative confirmation, though, is the screen itself: a working frame shows the Immich photos from [guide 9](9-immich-kiosk.md) filling the display.
 
-One behaviour worth knowing about before you judge what the screen shows: the app never points its slideshow iframe at the Immich Kiosk address without first *probing* that the server actually answers, and while the probe fails it shows the calm spinner splash instead and retries with a growing pause (three seconds at first, capped at thirty). This is deliberate self-protection, not cosmetics — pointing a Chromium iframe at a dead local port makes the browser churn error-page reloads that leak renderer memory at a measured ~50 MB per minute, which on this 2 GB machine ends in an out-of-memory kill within the hour. The probe repeats once a minute even while photos are showing, so a slideshow container that dies later unloads back to the splash instead of leaking, and comes back by itself within seconds of the container returning. On a healthy cold boot the only visible trace is the splash lasting a moment longer while Immich Kiosk finishes starting.
+One behaviour worth knowing about before you judge what the screen shows: the app never points its slideshow iframe at the Immich Kiosk address without first *probing* that the server actually answers, and while the probe fails it shows the calm spinner splash instead and retries with a growing pause (three seconds at first, capped at thirty). This is deliberate self-protection, not cosmetics: pointing a Chromium iframe at a dead local port makes the browser churn error-page reloads that leak renderer memory at a measured ~50 MB per minute, which on this 2 GB machine ends in an out-of-memory kill within the hour. The probe repeats once a minute even while photos are showing, so a slideshow container that dies later unloads back to the splash instead of leaking, and comes back by itself within seconds of the container returning. On a healthy cold boot the only visible trace is the splash lasting a moment longer while Immich Kiosk finishes starting.
 
-The frame's other mode — the video call — is not exercised here. The app switches to the call grid when it is told to, either by the physical button wired in [guide 11](11-gpio-button.md) (which sends a `toggle` command over a localhost WebSocket) or by an incoming call (the app auto-answers when a remote participant joins the room). With no button yet and no caller, the frame correctly rests on the slideshow; call mode is validated once [guide 11](11-gpio-button.md) is done.
+The frame's other mode, the video call, is not exercised here. The app switches to the call grid when it is told to, either by the physical button wired in [guide 11](11-gpio-button.md) (which sends a `toggle` command over a localhost WebSocket) or by an incoming call (the app auto-answers when a remote participant joins the room). With no button yet and no caller, the frame correctly rests on the slideshow; call mode is validated once [guide 11](11-gpio-button.md) is done.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
 
@@ -259,7 +259,7 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:8888/
 
 ![LOOK FOR](https://img.shields.io/badge/🔎-LOOK_FOR-ea580c?style=flat-square)
 
-After reconnecting, `is-active` prints `active` on two lines and `curl` prints `HTTP 200`, and — the real proof — the screen is cycling through your Immich photos full-screen. If `is-active` prints `inactive` or `failed` for either service, inspect it with `systemctl --user status <name>`; if the screen shows a spinner instead of photos, the slideshow URL or the Immich Kiosk container from [guide 9](9-immich-kiosk.md) is the place to look. You will not see the video grid here — that is expected until the button from [guide 11](11-gpio-button.md) is wired.
+After reconnecting, `is-active` prints `active` on two lines and `curl` prints `HTTP 200`. The real proof is the screen: it is cycling through your Immich photos full-screen. If `is-active` prints `inactive` or `failed` for either service, inspect it with `systemctl --user status <name>`; if the screen shows a spinner instead of photos, the slideshow URL or the Immich Kiosk container from [guide 9](9-immich-kiosk.md) is the place to look. You will not see the video grid here; that is expected until the button from [guide 11](11-gpio-button.md) is wired.
 
 ![ACHIEVED](https://img.shields.io/badge/🏆-ACHIEVED-228b22?style=flat-square)
 
