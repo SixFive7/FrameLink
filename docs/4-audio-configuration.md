@@ -252,7 +252,7 @@ Now that you are reconnected, read the volume back and check that the automatic 
 
 Line by line:
 1. `amixer -c 0 sget PCM,0` reads the stereo playback control from card 0; `grep 'Front Left'` narrows the output to the one line showing the restored level.
-2. `amixer -c 0 sget PCM,1` reads the second, mono playback stage the same way. This is the control whose loss would silently cost 15 dB, so its restore is verified explicitly.
+2. `amixer -c 0 sget PCM,1` reads the second, mono playback stage the same way. This is the control whose loss would silently cost about 18 dB, so its restore is verified explicitly.
 3. `systemctl status alsa-restore.service` reports what the restore unit did during this boot; `--no-pager` prints straight to the terminal instead of opening an interactive pager, and `head -8` keeps just the summary block.
 
 ![RUN THESE COMMANDS OVER SSH](https://img.shields.io/badge/👤-RUN_THESE_COMMANDS_OVER_SSH-1e40af?style=flat-square)
