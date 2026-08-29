@@ -223,7 +223,14 @@ public sealed class AgentResourceGraphTests
         // running: a frame whose apt-daily.timer was disabled reported green for ever and silently
         // stopped taking security updates. Unlike the recognition gate this one is an ordinary
         // resource — observing it is a status query and `systemctl enable --now` plainly works.
-        // 86 since the agent brought its own unit into the graph. Every systemd unit this product
+        // 87 since the rest of the flash followed the recognition gate into the graph, on the
+        // operator's instruction: the whole of "make this frame carry out the write somebody
+        // authorised" is now six rungs rather than one operation beside the loop. Decision 90's
+        // diagnosis is untouched and is what shapes them — none of the four claims that this array
+        // runs a particular firmware, because that is the claim with no Act that can succeed. They
+        // claim that no *instruction* is outstanding, which every frame in the fleet satisfies
+        // almost always, so the chain is dormant rather than merely quiet.
+        // 90 since the agent brought its own unit into the graph. Every systemd unit this product
         // installs was reconciled except fl-agent.service, the one that starts the reconciler:
         // written once by `fl-agent install` and never audited again, so a unit from an old
         // installer survives for the life of the card while an update replaces only the binary.
@@ -232,9 +239,34 @@ public sealed class AgentResourceGraphTests
         // invisible until the boot that does not come back, after which nothing is left to report
         // it. All three are repairable only while the agent is running, which is why they are
         // declared as early in the walk as anything that is not the display or the journal.
-        Assert.Equal(86, graph.Count);
+        Assert.Equal(90, graph.Count);
         Assert.Contains(ArrayRecognitionResource.ResourceName, graph.Ordered.Select(resource => resource.Name));
         Assert.True(graph.Find(ArrayRecognitionResource.ResourceName)!.IsGate);
+
+        // Three of the four are gates, and the assertion is worth making here rather than only in
+        // AgentArrayFlashTests: a gate that quietly became an ordinary resource would spend three
+        // attempts and three reboots on a household's frame reaching the conclusion it had already
+        // reached, which is the exact cost IResource.IsGate exists to avoid.
+        Assert.True(graph.Find(ArrayFlashAuthorisationResource.ResourceName)!.IsGate);
+        Assert.True(graph.Find(ArrayFlashConsentResource.ResourceName)!.IsGate);
+        Assert.False(graph.Find(ArrayFlashWriteResource.ResourceName)!.IsGate);
+        Assert.True(graph.Find(ArrayFlashVerifiedResource.ResourceName)!.IsGate);
+
+        // The chain, edge by edge. It is the operator's own order and the order the file declares,
+        // so a dependency dropped by an edit would otherwise show up only as a frame writing
+        // firmware nobody had agreed to.
+        Assert.Equal(
+            [XvfFirmwareImageResource.ResourceName, ArrayRecognitionResource.ResourceName],
+            graph.Find(ArrayFlashAuthorisationResource.ResourceName)!.DependsOn);
+        Assert.Equal(
+            [ArrayFlashAuthorisationResource.ResourceName],
+            graph.Find(ArrayFlashConsentResource.ResourceName)!.DependsOn);
+        Assert.Equal(
+            [ArrayFlashConsentResource.ResourceName, PackageResource.Prefix + "dfu-util"],
+            graph.Find(ArrayFlashWriteResource.ResourceName)!.DependsOn);
+        Assert.Equal(
+            [ArrayFlashWriteResource.ResourceName],
+            graph.Find(ArrayFlashVerifiedResource.ResourceName)!.DependsOn);
 
         var names = graph.Ordered.Select(resource => resource.Name).ToHashSet(StringComparer.Ordinal);
         Assert.DoesNotContain(PackageResource.Prefix + "git", names);
@@ -348,11 +380,21 @@ public sealed class AgentResourceGraphTests
         // upgrade. The document enumerates the apt *configuration* it inherited from guide 12 and
         // stops there; the timers were left to the stock image, which is exactly the gap
         // `reference/outside-the-dag-review.md` item 39 found and the operator approved closing.
+        //
+        // The four firmware-chain rungs — `firmware.xvf3800.authorised`, `.consent`, `.written` and
+        // `.verified`. The document enumerates the flash as an operation beside the loop, because
+        // that is what decision 91 built and what decision 93 simplified; the operator has since
+        // asked for it as steps in the DAG, and these are those steps. Like the apt timers above,
+        // they are a decision taken after the document rather than a gap in it.
         var extra = new[]
         {
             "agent.device-name",
             "kiosk.config.albums",
             AptDailyTimersResource.ResourceName,
+            ArrayFlashAuthorisationResource.ResourceName,
+            ArrayFlashConsentResource.ResourceName,
+            ArrayFlashWriteResource.ResourceName,
+            ArrayFlashVerifiedResource.ResourceName,
 
             // The agent's own unit: its content, its enablement, and whether the service systemd
             // is running is the one that file describes. The document enumerates every unit this

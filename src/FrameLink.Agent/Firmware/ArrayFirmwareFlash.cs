@@ -420,8 +420,75 @@ public sealed class ArrayFirmwareFlash
     /// </remarks>
     public static IReadOnlyList<string> Arguments(string path) => ["-R", "-e", "-a", "1", "-D", path];
 
+    /// <summary>
+    /// What one look concluded: a refusal, or the authorisation a write may now start for.
+    /// </summary>
+    /// <param name="Refusal">Why nothing may be written, or null when everything permits it.</param>
+    /// <param name="Authorisation">The exact string a write would be bound to and would spend.</param>
+    /// <param name="Parsed">That string taken apart, so the write does not parse it a second time.</param>
+    /// <remarks>
+    /// <b>The implicit conversion is what keeps the refusal sites unchanged</b>, and that matters more
+    /// than it looks: this method's body is a ladder of a dozen guards, every one of which is exercised
+    /// by a test asserting no process started, and rewriting each <c>return</c> to wrap itself would
+    /// have been a dozen chances to change one of them by hand. A refusal carries no authorisation
+    /// because a refusal is precisely the case where none may be spent.
+    /// </remarks>
+    private readonly record struct ArrayFlashConsideration(
+        ArrayFlashOutcome? Refusal,
+        string Authorisation,
+        ArrayFlashAuthorisation Parsed)
+    {
+        public static implicit operator ArrayFlashConsideration(ArrayFlashOutcome refusal) =>
+            new(refusal, string.Empty, default);
+    }
+
     /// <summary>Looks once for an authorisation, and performs the flash if everything permits it.</summary>
+    /// <remarks>
+    /// <b>The whole operation, and it is what <c>firmware.xvf3800.written</c>'s Act calls.</b> The
+    /// graph decides <i>whether</i> a write is called for and reports each rung of that decision; this
+    /// decides whether it may start <i>in the second before <c>dfu-util</c> does</i>, and performs it.
+    /// The two are deliberately not the same check — a resource says what was true at the last pass,
+    /// and a unit can be unplugged between them.
+    /// </remarks>
     public async Task<ArrayFlashOutcome> TickAsync(CancellationToken cancellationToken)
+    {
+        var considered = await ConsiderAsync(cancellationToken).ConfigureAwait(false);
+
+        return considered.Refusal
+            ?? await FlashAsync(considered.Authorisation, considered.Parsed, cancellationToken)
+                .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Everything a tick decides and none of what it writes — the screen half, on its own.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>This is what the loop beside the reconciler runs now, and the split is the whole of the
+    /// move into the graph.</b> Raising a firmware question on the panel, refreshing it, and taking it
+    /// away when a call starts are all things that have to happen on a five-second cadence; the
+    /// reconcile pass runs every five minutes and its Observe may have no side effects at all, so it
+    /// can do neither. The write is the other half, and it belongs to
+    /// <c>firmware.xvf3800.written</c>'s Act, where §2.4's reboot then proves across a boot that the
+    /// array came back on the firmware it was given.
+    /// </para>
+    /// <para>
+    /// It returns the refusal, or <see langword="null"/> when everything permits a write — which
+    /// this method deliberately does not then perform. Nothing here starts a process.
+    /// </para>
+    /// </remarks>
+    public async Task<ArrayFlashOutcome?> PrepareAsync(CancellationToken cancellationToken) =>
+        (await ConsiderAsync(cancellationToken).ConfigureAwait(false)).Refusal;
+
+    /// <summary>
+    /// One look at the authorisation and at everything in front of it, with no write.
+    /// </summary>
+    /// <remarks>
+    /// The screen is managed from here — every refusal takes this class's question off the panel and
+    /// the local-approval path puts one up — because that is the one part of the decision that is a
+    /// side effect, and §2.3 forbids a resource's Observe from having any.
+    /// </remarks>
+    private async Task<ArrayFlashConsideration> ConsiderAsync(CancellationToken cancellationToken)
     {
         var pin = _services.Installer.Pin;
         var target = pin.Target;
@@ -489,18 +556,10 @@ public sealed class ArrayFirmwareFlash
         // Deferrals, before anything is spent. Both of these are ordinary and both come back on the
         // next tick with the authorisation still armed. Both also take the screen back: a firmware
         // question must never be sitting on top of a call somebody has just started.
-        if (_services.CallActive?.Invoke() == true)
+        if (Deferral() is { } deferred)
         {
             _services.Approval.Withdraw();
-            return Quiet(ArrayFlashRefusal.CallInProgress, "Somebody is on a call; the firmware write is waiting.");
-        }
-
-        if (_services.RestartPending?.Invoke() == true)
-        {
-            _services.Approval.Withdraw();
-            return Quiet(
-                ArrayFlashRefusal.AgentRestartPending,
-                "A new agent version is in place and this process is about to restart; the firmware write is waiting.");
+            return Quiet(deferred.Kind, deferred.Why);
         }
 
         if (await PreflightAsync(cancellationToken).ConfigureAwait(false) is { } refusal)
@@ -535,7 +594,7 @@ public sealed class ArrayFirmwareFlash
             return waiting;
         }
 
-        return await FlashAsync(authorisation, parsed, cancellationToken).ConfigureAwait(false);
+        return new ArrayFlashConsideration(null, authorisation, parsed);
     }
 
     /// <summary>
@@ -636,6 +695,41 @@ public sealed class ArrayFirmwareFlash
         return false;
     }
 
+    /// <summary>
+    /// Why a write authorised on this frame is being held back at this instant, or null.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two deferrals, one definition, and the graph reads the same one this class does.</b> Both
+    /// are ordinary, both come back on the next look with the authorisation still armed, and neither
+    /// spends anything. They are a deferral rather than drift for a reason that only became visible
+    /// once the write moved into the graph: §2.4 crosses a reboot after every Act, so a resource that
+    /// reported a call in progress as <i>drift</i> would act, fail, and reboot the frame — in the
+    /// middle of the call it was deferring for.
+    /// </para>
+    /// <para>
+    /// It is deliberately not a refusal <i>list</i>. A third condition belongs here only if waiting
+    /// is the right answer to it; anything a person has to resolve belongs on the ladder, where it
+    /// reaches one.
+    /// </para>
+    /// </remarks>
+    public (ArrayFlashRefusal Kind, string Why)? Deferral()
+    {
+        if (_services.CallActive?.Invoke() == true)
+        {
+            return (ArrayFlashRefusal.CallInProgress, "Somebody is on a call; the firmware write is waiting.");
+        }
+
+        if (_services.RestartPending?.Invoke() == true)
+        {
+            return (
+                ArrayFlashRefusal.AgentRestartPending,
+                "A new agent version is in place and this process is about to restart; the firmware write is waiting.");
+        }
+
+        return null;
+    }
+
     /// <summary>Ticks once, then on the interval, until asked to stop.</summary>
     public async Task RunAsync(CancellationToken cancellationToken)
     {
@@ -643,7 +737,12 @@ public sealed class ArrayFirmwareFlash
         {
             try
             {
-                await TickAsync(cancellationToken).ConfigureAwait(false);
+                // <b>Prepare, never write.</b> The write is `firmware.xvf3800.written`'s Act now, so
+                // this loop exists for the screen: it raises the firmware question, refreshes it, and
+                // takes it away. A tick here that also wrote would be a second writer racing the
+                // graph's one, and the authorisation is single-use — the loser of that race would be
+                // reporting a refusal for a write that had just happened.
+                await PrepareAsync(cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -977,10 +1076,7 @@ public sealed class ArrayFirmwareFlash
             // version says; a profile that will not read is not, because a unit that has only just
             // re-enumerated may simply not be answering its control interface yet, and calling a
             // good write bad would send somebody to a frame that is well.
-            succeeded =
-                (string.Equals(after, target.Version, StringComparison.Ordinal)
-                    || string.Equals(control, target.Version, StringComparison.Ordinal))
-                && (profile is null || string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal));
+            succeeded = Landed(after, control, profile, target);
 
             if (succeeded)
             {
@@ -1129,14 +1225,21 @@ public sealed class ArrayFirmwareFlash
     /// <summary>
     /// The build configuration the unit reports now, which is what says <i>which</i> image landed.
     /// </summary>
-    private async Task<string?> ControlProfileAsync(CancellationToken cancellationToken)
+    /// <remarks>
+    /// Static and taking the tool, because <c>firmware.xvf3800.verified</c> asks the same question of
+    /// the same unit and there must be one answer to it. A frame with no control tool answers null,
+    /// which both readers treat as <i>unknown</i> rather than as <i>wrong</i>.
+    /// </remarks>
+    public static async Task<string?> ControlProfileAsync(XvfHost tool, CancellationToken cancellationToken)
     {
-        if (_services.Tool.Root() is not { } root)
+        ArgumentNullException.ThrowIfNull(tool);
+
+        if (tool.Root() is not { } root)
         {
             return null;
         }
 
-        var reply = await _services.Tool
+        var reply = await tool
             .RunAsync(root, [ArrayHardwareGate.BuildConfigurationCommand], cancellationToken)
             .ConfigureAwait(false);
 
@@ -1145,19 +1248,99 @@ public sealed class ArrayFirmwareFlash
     }
 
     /// <summary>The control interface's own answer, when there is a tool to ask it with.</summary>
-    private async Task<string?> ControlVersionAsync(CancellationToken cancellationToken)
+    public static async Task<string?> ControlVersionAsync(XvfHost tool, CancellationToken cancellationToken)
     {
-        if (_services.Tool.Root() is not { } root)
+        ArgumentNullException.ThrowIfNull(tool);
+
+        if (tool.Root() is not { } root)
         {
             return null;
         }
 
-        var reply = await _services.Tool
+        var reply = await tool
             .RunAsync(root, [XvfHost.VersionCommand], cancellationToken)
             .ConfigureAwait(false);
 
         return XvfHost.Version(reply.StandardOutput) ?? XvfHost.Version(reply.Combined);
     }
+
+    /// <summary>
+    /// Whether the unit in front of us runs the image the pin names — <b>the one definition of it</b>.
+    /// </summary>
+    /// <param name="descriptorVersion">What <c>bcdDevice</c> decodes to, or null.</param>
+    /// <param name="controlVersion">What <c>VERSION</c> answered, or null.</param>
+    /// <param name="profile">What <c>BLD_MSG</c> answered, or null when it would not read.</param>
+    /// <param name="target">The image the pin says this build may write.</param>
+    /// <remarks>
+    /// <para>
+    /// <b>The version alone cannot say it, which is why the profile is in the conjunction.</b> Upstream
+    /// publishes three <c>v2.1.0</c> images and all three answer <c>VERSION 2 1 0</c>, so a unit
+    /// carrying the 48 kHz or the six-channel build reports exactly what a good write reports. A
+    /// profile that reads and disagrees is a failure whatever the version says.
+    /// </para>
+    /// <para>
+    /// <b>A profile that will not read is not a failure</b>, and the asymmetry is deliberate: a unit
+    /// that has only just re-enumerated may not be answering its control interface yet, and calling a
+    /// good write bad sends somebody to a frame that is well.
+    /// </para>
+    /// <para>
+    /// Static and shared by this class's own post-write check and by
+    /// <c>firmware.xvf3800.verified</c>'s Observe. Two spellings of <i>did it land</i> would
+    /// eventually disagree, and the disagreement has one direction — a resource escalating over a
+    /// write the operation itself had already called good.
+    /// </para>
+    /// </remarks>
+    public static bool Landed(
+        string? descriptorVersion,
+        string? controlVersion,
+        string? profile,
+        XvfFirmwareImage target) =>
+        (string.Equals(descriptorVersion, target.Version, StringComparison.Ordinal)
+                || string.Equals(controlVersion, target.Version, StringComparison.Ordinal))
+            && (profile is null || string.Equals(profile, XvfFirmwarePin.Profile, StringComparison.Ordinal));
+
+    /// <summary>The authorisation this frame has durably recorded as spent, or null.</summary>
+    /// <remarks>
+    /// Read rather than remembered, and read by the graph as well as by this class. It is the record
+    /// that outlives the process, which is what makes <i>has a write been carried out on this
+    /// frame</i> answerable after a reboot, after a crash, and by a resource that never saw one
+    /// happen.
+    /// </remarks>
+    public static string? Spent(IStateStore store)
+    {
+        ArgumentNullException.ThrowIfNull(store);
+
+        return store.ReadText(ConsumedFileName)?.Trim() is { Length: > 0 } spent ? spent : null;
+    }
+
+    /// <summary>
+    /// The authorisation armed on this frame and not yet spent, or null when nothing is outstanding.
+    /// </summary>
+    /// <remarks>
+    /// <b>Null is the ordinary state of every frame in the fleet</b>, and it is what makes the
+    /// firmware chain in the graph dormant rather than merely quiet: every step in that chain reads
+    /// in sync when this is null, so a frame carrying a factory array converges its screen, its
+    /// camera and its speaker exactly as it did before any of it existed. That was decision 90's
+    /// objection to firmware in the graph, and answering it is what made the chain buildable.
+    /// </remarks>
+    public static string? Outstanding(FleetValues values, IStateStore store)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentNullException.ThrowIfNull(store);
+
+        if (values.Find(AuthorisationKey) is not { } authorisation)
+        {
+            return null;
+        }
+
+        return string.Equals(Spent(store), authorisation, StringComparison.Ordinal) ? null : authorisation;
+    }
+
+    private Task<string?> ControlProfileAsync(CancellationToken cancellationToken) =>
+        ControlProfileAsync(_services.Tool, cancellationToken);
+
+    private Task<string?> ControlVersionAsync(CancellationToken cancellationToken) =>
+        ControlVersionAsync(_services.Tool, cancellationToken);
 
     private string? Consumed() => _services.Store.ReadText(ConsumedFileName)?.Trim();
 

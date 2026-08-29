@@ -776,14 +776,46 @@ public sealed class AgentAudioTests
         Assert.Contains(block, resource => resource.Name == ArrayRecognitionResource.ResourceName);
         Assert.True((await Observe(block, ArrayRecognitionResource.ResourceName)).InSync);
 
-        // And no resource in the block converges a firmware *version*, which is the thing decision
-        // 90 removed and decision 91 did not put back: the gate is a precondition with no Act, and
-        // the images resource is about files on the card.
+        // <b>The property in its strongest form: this frame is done with firmware.</b> A 2.0.6 array
+        // and no authorisation, and every rung of the chain reads in sync — so nothing after it in
+        // the catalog is Blocked, nothing escalates, and decision 68 stops nothing. Six rungs now
+        // rather than two, and the count is deliberately not asserted here: what matters is that
+        // whatever the chain grows to, none of it drifts on a frame nobody has asked to do anything.
+        var firmware = block
+            .Where(resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal))
+            .ToList();
+
+        Assert.NotEmpty(firmware);
+
+        // `firmware.xvf3800.image` is deliberately outside this. It drifts here because the fixture
+        // never installed the pinned files, and it is the one firmware resource with an ordinary Act
+        // that repairs itself — it converges, spends nothing and stops nothing. What must not drift
+        // is everything else, because every one of those either stops the pass or writes to hardware.
+        foreach (var resource in firmware.Where(
+            resource => resource.Name != XvfFirmwareImageResource.ResourceName))
+        {
+            var observation = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(
+                observation.InSync,
+                resource.Name + " drifted on a frame running the shipping firmware with nothing authorised: "
+                    + observation.Delta);
+        }
+
+        // And no resource in the block converges a firmware *version*, which is the thing decision 90
+        // removed and neither decision 91 nor the move of the flash into the graph put back. Three
+        // shapes are permitted and the third is the new one: a gate, which has no Act at all; the
+        // images resource, which is about files on the card; and `firmware.xvf3800.written`, whose
+        // Act is the interlocked operation and whose claim is that no *instruction* is outstanding —
+        // never that this array runs a particular firmware.
         Assert.All(
-            block.Where(resource => resource.Name.StartsWith("firmware.", StringComparison.Ordinal)),
+            firmware,
             resource => Assert.True(
-                resource.IsGate || resource.Name == XvfFirmwareImageResource.ResourceName,
-                resource.Name + " converges something firmware-shaped that is neither a gate nor the pinned images."));
+                resource.IsGate
+                    || resource.Name == XvfFirmwareImageResource.ResourceName
+                    || resource.Name == ArrayFlashWriteResource.ResourceName,
+                resource.Name + " converges something firmware-shaped that is neither a gate, the pinned images, "
+                    + "nor the authorised write."));
     }
 
     [Fact]

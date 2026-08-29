@@ -888,6 +888,21 @@ public sealed class AgentArrayFlashTests
         Assert.Contains("new RebootHold(", host, StringComparison.Ordinal);
         Assert.Contains("arrayFlash.RunAsync(shutdown.Token)", host, StringComparison.Ordinal);
 
+        // The chain in the graph, which nothing else here would catch: a host that built the catalog
+        // without handing it the flash, the approval or the window would leave every one of those
+        // rungs permanently in sync — a frame that quietly never carried out an authorised write,
+        // never asked anybody, and reported green throughout. The suite would stay entirely green,
+        // because every test above builds its own rungs.
+        Assert.Contains("ArrayFlash = () => arrayFlash", host, StringComparison.Ordinal);
+        Assert.Contains("FlashApproval = flashApproval", host, StringComparison.Ordinal);
+        Assert.Contains("FlashWindow = flashWindow", host, StringComparison.Ordinal);
+
+        // And the two directions of §2.5 rung 5 on the consent gate: agreeing resets its budget so a
+        // stopped frame resumes, and a retry wakes the question so the press is not answered by the
+        // same screen for six hours.
+        Assert.Contains("reconciler?.ResetBudget(ArrayFlashConsentResource.ResourceName)", host, StringComparison.Ordinal);
+        Assert.Contains("flashApproval.Wake();", host, StringComparison.Ordinal);
+
         // The window is constructed before the update service, because it latches whether a
         // *previous* process was writing firmware and nothing may have written a marker first.
         Assert.True(
@@ -1378,6 +1393,12 @@ public sealed class AgentArrayFlashTests
         Assert.Equal(ArrayFlashPhase.Succeeded, prompt.Phase);
         Assert.Contains("It worked", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
         Assert.Contains("safe to unplug", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
+
+        // And it names the restart, because the write is `firmware.xvf3800.written`'s Act now and
+        // §2.4 crosses a reboot after every Act. A screen saying "it is finished" on a frame that is
+        // about to reboot without saying so is a surprise this product does not otherwise hand
+        // people, and the panel showing this prompt is the one thing that covers the countdown.
+        Assert.Contains("restart itself", string.Join(" ", prompt.Lines), StringComparison.Ordinal);
         Assert.Equal("OK", prompt.Affordance);
 
         // And it stays there until somebody takes it, rather than vanishing before it is read.
@@ -2685,6 +2706,417 @@ public sealed class AgentArrayFlashTests
             fixture.Processes.Commands,
             line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
     }
+
+    // ---------------------------------------------------------------------------------------
+    // The flash as six rungs of the DAG: dormant, then a chain, then a person
+    // ---------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_frame_nobody_has_authorised_anything_on_finds_every_firmware_rung_in_sync()
+    {
+        // <b>The property the whole decomposition rests on, and the one decision 90 was about.</b> A
+        // resource over the array's firmware *version* drifts for ever on a frame carrying a factory
+        // unit, spends three attempts and three reboots, escalates, and by decision 68 stops the
+        // frame's screen, camera and speaker over a number nobody was going to let it write. None of
+        // these four claims that. They claim no *instruction* is outstanding, which this frame — a
+        // 2.0.6 array, no authorisation — satisfies, so the chain is dormant rather than merely
+        // quiet.
+        //
+        // If any rung ever loses that dormancy check, this is the test that says so, and it says so
+        // about the case that is every frame in the fleet.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+
+        Assert.Equal("2 0 6", fixture.Running());
+
+        foreach (var rung in fixture.Chain())
+        {
+            var observation = await rung.ObserveAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(
+                observation.InSync,
+                $"{rung.Name} drifted on a frame with no firmware write authorised: {observation.Delta}");
+        }
+    }
+
+    [Fact]
+    public async Task An_authorisation_naming_another_image_stops_the_frame_instead_of_refusing_quietly()
+    {
+        // Before the chain existed this was a refusal event and a log line: the flash reported
+        // `NotThePinnedImage` once and went back to sleep, and an operator who had typed the wrong
+        // digest found out only if they went looking. It is a setting somebody typed in the Fleet
+        // Manager, so no command on this frame can converge it — a gate, which reaches §2.5 rung 2
+        // with the budget declared spent, and decision 68 then stops the pass around it.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Settings[ArrayFirmwareFlash.AuthorisationKey] = new string('0', 64) + ":a typo";
+
+        var rung = fixture.Authorised();
+        var observation = await rung.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.True(rung.IsGate);
+        Assert.Contains("000000000000", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains(fixture.Pin.Target.Name, observation.Observed, StringComparison.Ordinal);
+
+        // No Act, and it says so loudly rather than returning a no-op the loop would believe.
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await rung.ActAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_write_that_was_cut_off_part_way_stops_the_frame_without_spending_a_reboot()
+    {
+        // The durable marker, reported where it costs nothing. `ArrayFirmwareFlash` refuses every
+        // write while the file is on the card and that refusal is untouched; what the graph adds is
+        // that a frame in this state reaches a person on the first Observe rather than after three
+        // attempts and three reboots — which is the exact cost `IResource.IsGate` exists to avoid,
+        // on the exact case it was written for.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        // A write that began and whose process did not live to finish it. The marker outlives it.
+        fixture.MarkInterrupted("writing the target image to the microphone unit");
+
+        var rung = fixture.Authorised(fixture.Window());
+        var observation = await rung.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.True(rung.IsGate);
+        Assert.Contains("never finished", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains(ArrayFlashWindow.MarkerFileName, observation.Observed, StringComparison.Ordinal);
+
+        // The two stopping conditions need different people doing different things, so the plain
+        // sentence follows the Observe rather than describing whichever was written first.
+        Assert.Contains("cut off part-way", rung.Detected, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_frame_carrying_the_marker_and_no_authorisation_is_left_alone()
+    {
+        // Below the dormancy check on purpose. A frame nobody has asked to write anything is a frame
+        // with nothing to refuse, and stopping its screen, camera and speaker over a write that will
+        // not be attempted is decision 90's cost arrived at by another road. Everybody is still told:
+        // the loop beside the reconciler puts the interrupted message on the panel either way.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.MarkInterrupted("writing the target image to the microphone unit");
+
+        var rung = fixture.Authorised(fixture.Window());
+
+        Assert.True((await rung.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        var refusal = await fixture.Flash(reuseWindow: true).PrepareAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.PreviousFlashUnfinished, refusal?.Refusal);
+        Assert.NotNull(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task The_authorisation_rung_carries_the_running_version_against_the_pin()
+    {
+        // The operator's "the running version compared against the pin", and it lives in the observed
+        // half of this rung rather than in a resource of its own — because a rung that *drifted* on
+        // the version would be the resource decision 90 removed. It is reported, not converged.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        var observation = await fixture.Authorised().ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("firmware 2 0 6 over USB", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains(XvfFirmwarePin.Profile, observation.Observed, StringComparison.Ordinal);
+        Assert.Contains(fixture.Pin.Target.Version, observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Consent_waits_for_a_person_as_a_gate_rather_than_as_an_Act_that_awaits()
+    {
+        // <b>The shape the operator asked for.</b> Consent waits indefinitely by design, and an Act
+        // that awaited it would hang the pass for as long as the household was out. `Escalated`
+        // already means *stopped, waiting for a person, for as long as it takes*, so the rung is a
+        // gate: no Act, no reboot, one escalation, and decision 68 stops the pass around it.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise(approved: false);
+
+        var rung = fixture.Consent();
+
+        Assert.True(rung.IsGate);
+        var waiting = await rung.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.False(waiting.InSync);
+        Assert.Contains("agreed", waiting.Observed, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await rung.ActAsync(TestContext.Current.CancellationToken));
+
+        // The question is raised beside the loop, because §2.3 forbids an Observe from having side
+        // effects and a firmware question has to leave the panel within seconds of a call starting.
+        // The rung reads the answer; it does not ask.
+        Assert.Null(fixture.Screen);
+
+        var asked = await fixture.Flash().PrepareAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ArrayFlashRefusal.AwaitingLocalApproval, asked?.Refusal);
+        Assert.NotNull(fixture.Screen);
+
+        Assert.True(fixture.HoldTheScreen());
+        Assert.True((await rung.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+    }
+
+    [Fact]
+    public void Agreeing_at_the_frame_resets_the_consent_rung_so_the_stopped_pass_can_resume()
+    {
+        // <b>Without this the frame could never come back from its own question.</b> §2.5 rung 2
+        // means an escalated resource is not observed again until somebody resets its budget, so a
+        // household pressing yes would be agreeing to a write on a frame that had stopped listening.
+        // The press is rung 5's, reaching the same reset path the Fleet Manager's retry reaches.
+        using var fixture = new FlashFixture();
+        fixture.AttachPanel();
+
+        var agreed = new List<string>();
+        var approval = new ArrayFlashApproval(fixture.Hub, fixture.Clock, new RecordingLog())
+        {
+            Agreed = agreed.Add,
+        };
+
+        Assert.True(approval.Ask("sha:ticket"));
+        Assert.True(approval.Answer("a hold on the panel"));
+
+        Assert.Equal(["sha:ticket"], agreed);
+    }
+
+    [Fact]
+    public void A_retry_at_the_frame_wakes_the_firmware_question_out_of_its_rest_window()
+    {
+        // The trap the decomposition created and this closes. The screen asks for thirty minutes and
+        // then rests for six hours; that used to be invisible, because a resting frame went back to
+        // showing photographs. Now consent is a rung, so a resting frame is a *stopped* frame showing
+        // the consent it is waiting for and offering "try again" — and without this, that press
+        // resets the attempt budget, produces the identical screen, and leaves the person no way to
+        // say yes for six hours.
+        using var fixture = new FlashFixture();
+        fixture.AttachPanel();
+
+        var approval = new ArrayFlashApproval(fixture.Hub, fixture.Clock, new RecordingLog());
+
+        Assert.True(approval.Ask("sha:ticket"));
+
+        // Thirty minutes with nobody answering closes the window and starts the rest.
+        fixture.Clock.UtcNow += ArrayFlashApproval.AskWindow;
+        Assert.False(approval.Ask("sha:ticket"));
+        Assert.False(approval.Ask("sha:ticket"));
+
+        approval.Wake();
+
+        Assert.True(approval.Ask("sha:ticket"));
+        Assert.NotNull(fixture.Screen);
+    }
+
+    [Fact]
+    public async Task Nobody_is_asked_to_agree_to_a_write_that_would_change_nothing()
+    {
+        // A unit already running the pinned image on the pinned build configuration needs no
+        // household's permission for a write that would write nothing — so consent reads in sync and
+        // lets the rung below spend the authorisation and say so. The check is the whole of `Landed`
+        // rather than the version alone, because a unit on v2.1.0_48k2ch answers the same version.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Roll(fixture.Pin.Target.Version);
+        fixture.Authorise(approved: false);
+
+        var observation = await fixture.Consent().ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("nothing to agree to", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_write_rung_runs_the_one_interlocked_operation_and_then_reads_in_sync()
+    {
+        // The Act is `ArrayFirmwareFlash.TickAsync` and nothing else: the single-use authorisation
+        // spent atomically before the process starts, the durable marker, the three attempts and the
+        // last pre-flight all stay exactly where they were. What the rung adds is that §2.4 then
+        // crosses a reboot and re-observes, which is stronger evidence than the ninety-second
+        // re-enumeration poll the operation takes on its own.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        var flash = fixture.Flash();
+        var rung = fixture.Written(flash);
+
+        var before = await rung.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.False(before.InSync);
+
+        // Not a gate, and it is the only one of the four that is not: this is the rung with a real
+        // Act, which is the whole difference decision 63 named.
+        Assert.False(((IResource)rung).IsGate);
+
+        var action = await rung.ActAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+        Assert.Equal(fixture.Authorisation, fixture.Consumed);
+        Assert.Contains(fixture.Pin.Target.Name, action.Change, StringComparison.Ordinal);
+
+        // The verify §2.3 makes the same method as the Observe.
+        Assert.True((await rung.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        // And the other half of the claim, which is the one about the unit rather than the record.
+        Assert.True((await fixture.Verified().ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+    }
+
+    [Fact]
+    public async Task A_call_in_progress_defers_the_write_rung_rather_than_drifting_it()
+    {
+        // <b>The guard that only became necessary once the write was in the graph.</b> §2.4 crosses a
+        // reboot after every Act, so a rung reporting a call in progress as *drift* would act, be
+        // refused by the operation's own deferral, and then reboot the frame — in the middle of the
+        // call it was deferring for. Waiting is not drift.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.CallActive = true;
+
+        var observation = await fixture.Written(fixture.Flash())
+            .ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("on a call", observation.Observed, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_pending_agent_restart_defers_the_write_rung_too()
+    {
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.RestartPending = true;
+
+        var observation = await fixture.Written(fixture.Flash())
+            .ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Contains("about to restart", observation.Observed, StringComparison.Ordinal);
+        Assert.Null(fixture.Consumed);
+    }
+
+    [Fact]
+    public async Task The_loop_beside_the_reconciler_prepares_the_screen_and_never_writes()
+    {
+        // <b>Two writers would race a single-use authorisation.</b> The loop beside the reconciler
+        // used to perform the write; it now prepares only, and the write is the graph's Act. If this
+        // ever regressed, the loser of the race would report a refusal for a write that had just
+        // happened — and nothing else in the suite would notice, because both paths end in the same
+        // spent authorisation.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        var ready = await fixture.Flash().PrepareAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(ready);
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_loop_itself_ticks_a_ready_frame_and_still_writes_nothing()
+    {
+        // The same property asserted through the loop rather than through the method it calls,
+        // because the two are separable and the separation is the whole change: a `RunAsync` that
+        // called the full tick again would write here, and the test above would still pass. One turn
+        // of the loop over a frame that has everything — images, tool, dfu-util, a recognised unit
+        // on 2.0.6, an authorisation, and a household that has already agreed.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+
+        using var cancellation = new CancellationTokenSource();
+        fixture.Clock.OnDelay = _ => cancellation.Cancel();
+
+        await fixture.Flash().RunAsync(cancellation.Token);
+
+        Assert.Null(fixture.Consumed);
+        Assert.DoesNotContain(
+            fixture.Processes.Commands,
+            line => line.StartsWith(ArrayFirmwareFlash.DfuUtil + " ", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_write_that_did_not_land_stops_the_frame_on_the_verification_rung()
+    {
+        // The two halves the operator asked for, and the reason they are two. The write rung claims
+        // the *instruction* was carried out, and after a write it truthfully has been — the
+        // authorisation is spent. A rung that stopped there would be the v1 governor shape: success
+        // claimed because the write returned rather than because the world is right. So this rung
+        // looks at the unit, and it is a gate because the authorisation that bought the write is
+        // spent and there is no second write to try.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.Authorise();
+        fixture.ReEnumerate = false;
+
+        var rung = fixture.Written(fixture.Flash());
+        await rung.ActAsync(TestContext.Current.CancellationToken);
+
+        Assert.True((await rung.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        var verified = fixture.Verified();
+        var observation = await verified.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(verified.IsGate);
+        Assert.False(observation.InSync);
+        Assert.Contains("2 0 6", observation.Observed, StringComparison.Ordinal);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await verified.ActAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task A_frame_that_has_never_written_firmware_verifies_vacuously()
+    {
+        // It must never become a resource over the firmware version. A frame carrying a factory array
+        // and no spent authorisation has made no write, so there is no write to verify.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+
+        var observation = await fixture.Verified().ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(observation.InSync);
+        Assert.Equal("2 0 6", fixture.Running());
+        Assert.Contains("no firmware has ever been written", observation.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_unit_on_another_build_of_the_target_version_does_not_verify()
+    {
+        // The measured collision again, on the other side of the write. All three v2.1.0 images
+        // answer VERSION 2 1 0, so a rung that verified on the version alone would call a frame
+        // carrying the 48 kHz build converged. `ArrayFirmwareFlash.Landed` is one definition shared
+        // by the operation's own post-write check and by this rung, which is what stops the two
+        // disagreeing about a unit somebody has to look at.
+        using var fixture = new FlashFixture();
+        await fixture.ReadyToFlashAsync();
+        fixture.MarkSpent(fixture.Pin.Target.Sha256 + ":an earlier write");
+        fixture.Roll(fixture.Pin.Target.Version);
+        fixture.SeedTool(profile: "ua-io48-sqr");
+
+        var observation = await fixture.Verified().ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("ua-io48-sqr", observation.Observed, StringComparison.Ordinal);
+    }
 }
 
 /// <summary>A frame with a synthetic pin, a synthetic bus and a recording <c>dfu-util</c>.</summary>
@@ -3113,6 +3545,51 @@ internal sealed class FlashFixture : IDisposable
     {
         DeviceId = "TEST-DEVICE",
     };
+
+    /// <summary>The control tool, over the same frame the flash sees.</summary>
+    public XvfHost Tool => new(Files.Files, Processes, _session);
+
+    /// <summary>The Fleet Manager's settings, as the graph's rungs read them.</summary>
+    public FleetValues Values => new(key => Settings.GetValueOrDefault(key));
+
+    /// <summary>The first firmware rung: the instruction names the image this build carries.</summary>
+    public ArrayFlashAuthorisationResource Authorised(ArrayFlashWindow? window = null) =>
+        new(Files.Files, Tool, Files.Store, Values, window, Pin);
+
+    /// <summary>The rung that is a person.</summary>
+    public ArrayFlashConsentResource Consent() =>
+        new(Files.Files, Tool, Files.Store, Values, Approval, () => "TEST-DEVICE", Pin);
+
+    /// <summary>The rung whose Act is the whole interlocked operation.</summary>
+    public ArrayFlashWriteResource Written(ArrayFirmwareFlash? flash = null) =>
+        new(Files.Store, Values, () => flash);
+
+    /// <summary>The rung that looks at the unit rather than at the record.</summary>
+    public ArrayFlashVerifiedResource Verified() => new(Files.Files, Tool, Files.Store, Pin);
+
+    /// <summary>All six firmware rungs, in the order the catalog declares them.</summary>
+    public IReadOnlyList<IResource> Chain() =>
+    [
+        new XvfFirmwareImageResource(Files.Files, Images),
+        Recognition(),
+        Authorised(),
+        Consent(),
+        Written(),
+        Verified(),
+    ];
+
+    /// <summary>The window the flash and the first firmware rung share.</summary>
+    public ArrayFlashWindow Window() => _window ??= new ArrayFlashWindow(Files.Store, Clock);
+
+    /// <summary>Leaves the marker a write that was killed part-way through would leave behind.</summary>
+    public void MarkInterrupted(string detail) => Files.Store.WriteSecretAtomic(
+        ArrayFlashWindow.MarkerFileName,
+        System.Text.Encoding.UTF8.GetBytes(Clock.UtcNow.ToString("O", CultureInfo.InvariantCulture) + " " + detail + "\n"));
+
+    /// <summary>Records an authorisation as already spent, as a completed write would leave it.</summary>
+    public void MarkSpent(string authorisation) => Files.Store.WriteSecretAtomic(
+        ArrayFirmwareFlash.ConsumedFileName,
+        System.Text.Encoding.UTF8.GetBytes(authorisation + "\n"));
 
     public void Dispose() => Files.Dispose();
 }

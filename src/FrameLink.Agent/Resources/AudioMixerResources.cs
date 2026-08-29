@@ -1642,6 +1642,43 @@ public static class AudioCatalog
             // itself rather than escalated on something nobody needs to come out for.
             new ArrayRecognitionResource(context.Files, tool),
 
+            // The rest of the flash, decomposed into the graph on the operator's instruction. Six
+            // rungs now, and the first two of them were already here: the hardware is recognised, the
+            // image is on the card and verified, the instruction names that image and this is how the
+            // unit stands against it, somebody has agreed, the write, and then what the unit came back
+            // as.
+            //
+            // <b>Every one of them is dormant on a frame nobody has authorised anything on</b>, which
+            // is the property that makes the decomposition legal at all. Decision 90 removed firmware
+            // from the graph because "make this board run version X" has no Act that can always
+            // succeed, and would therefore stop the pass on every frame carrying a factory array.
+            // None of these claims that. They claim that no *instruction* is outstanding, which is
+            // true of every frame in the fleet almost always, and each of them says so in one
+            // settings lookup and one small file read.
+            //
+            // Three of the four are gates, for the same reason the recognition gate is: an
+            // authorisation naming an image this build does not carry, a household that has not
+            // agreed yet, and a write that did not produce the pinned firmware are all things no
+            // command on this frame can put right. `IResource.IsGate` takes each of them straight to
+            // §2.5 rung 2 with no Act and no reboot, decision 68 stops the pass around it, and rung 6
+            // keeps it there until a person arrives — which is exactly what waiting for consent
+            // means, and is why consent needed no Act that waits.
+            new Firmware.ArrayFlashAuthorisationResource(
+                context.Files,
+                tool,
+                context.Store,
+                context.Values,
+                context.FlashWindow),
+            new Firmware.ArrayFlashConsentResource(
+                context.Files,
+                tool,
+                context.Store,
+                context.Values,
+                context.FlashApproval,
+                context.DeviceId),
+            new Firmware.ArrayFlashWriteResource(context.Store, context.Values, context.ArrayFlash),
+            new Firmware.ArrayFlashVerifiedResource(context.Files, tool, context.Store),
+
             // Positions 55–62. `firmware.xvf3800.version` used to sit at the head of this block,
             // and decision 90 took it out of the graph entirely: a DFU flash is the only Act that
             // could ever converge it, this product will never perform one unattended, and a

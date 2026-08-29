@@ -109,6 +109,41 @@ public sealed record DeviceCatalogContext
     /// </remarks>
     public IXvfHostDownload? XvfHostDownload { get; init; }
 
+    /// <summary>
+    /// The one operation that writes firmware, where one is running (decisions 91 and 93).
+    /// </summary>
+    /// <remarks>
+    /// A delegate rather than a value, and optional, for two separate reasons. It is <i>late</i>
+    /// because the operation needs the supervisor's view of whether somebody is on a call and the
+    /// update service's view of whether this process is about to restart, both of which are built
+    /// after the catalog. It is <i>optional</i> for the reason <see cref="Button"/> is: a catalog is
+    /// also built where nothing can write firmware at all, and <c>firmware.xvf3800.written</c> reports
+    /// that as the in-sync state it is rather than skipping itself.
+    /// </remarks>
+    public Func<Firmware.ArrayFirmwareFlash?> ArrayFlash { get; init; } = () => null;
+
+    /// <summary>
+    /// The screen a person agrees to a firmware write on, where there is one.
+    /// </summary>
+    /// <remarks>
+    /// Read by <c>firmware.xvf3800.consent</c> and written by nothing in the catalog: the question is
+    /// raised beside the loop, because §2.3 forbids a resource's Observe from having side effects and
+    /// a firmware question has to leave the panel within seconds of a call starting. Absent means a
+    /// frame nobody can agree at, which that rung reports rather than skips.
+    /// </remarks>
+    public Firmware.ArrayFlashApproval? FlashApproval { get; init; }
+
+    /// <summary>
+    /// The durable record of a firmware write that was cut off part-way, where there is one.
+    /// </summary>
+    /// <remarks>
+    /// Latched at construction and never re-read, which is the whole value of it: it describes a
+    /// <i>previous</i> process. <c>firmware.xvf3800.authorised</c> reports it so that a frame in that
+    /// state reaches a person without spending three attempts and three reboots first; the refusal
+    /// itself never left <c>ArrayFirmwareFlash</c>.
+    /// </remarks>
+    public Firmware.ArrayFlashWindow? FlashWindow { get; init; }
+
     /// <summary>How files the agent creates are locked down.</summary>
     /// <remarks>
     /// Needed from the kiosk block onwards: the fetched executable has to carry the executable bit,
@@ -158,22 +193,24 @@ public sealed record DeviceCatalogContext
 /// implementable</b> and all 80 are here. <c>pkg.git</c> is the one that is not, and it is an
 /// exclusion rather than a gap — open question 3's adopted reading obtains <c>xvf_host</c> as a
 /// pinned, checksum-verified upstream artifact rather than a clone, and the catalog says outright
-/// that "if it does not, this resource disappears". <b>Six</b> resources here are <i>not</i> in
+/// that "if it does not, this resource disappears". <b>Ten</b> resources here are <i>not</i> in
 /// the catalog: <c>agent.device-name</c>, the display name the Fleet Manager assigns at adoption,
 /// which the cross-guide section never enumerated; <c>kiosk.config.albums</c>, which scopes what
 /// the slideshow selects from and which neither guide 9 nor the catalog ever had — a gap the frame
 /// proved by finding no photographs at all; <c>apt.daily-timers.enabled-and-active</c>, the timers
-/// that run the unattended upgrade the catalog only ever configured; and the three
+/// that run the unattended upgrade the catalog only ever configured; the four
+/// <c>firmware.xvf3800.flash.*</c> rungs, which are the operator's later decision to make the
+/// array write steps in the DAG rather than an operation beside it; and the three
 /// <c>unit.fl-agent.*</c> resources, which reconcile the unit that starts the reconciler.
-/// <b>So the shipped count is 86</b>, and the arithmetic is 80 catalog entries plus those six.
+/// <b>So the shipped count is 90</b>, and the arithmetic is 80 catalog entries plus those ten.
 /// </para>
 /// <para>
 /// <b>The two totals are read, never typed.</b> 81 is what <c>CatalogDocument.Parse</c> counts in
-/// the catalog file and what <c>ParityHarnessTests</c> asserts; 86 is <c>graph.Count</c> in
+/// the catalog file and what <c>ParityHarnessTests</c> asserts; 90 is <c>graph.Count</c> in
 /// <c>AgentResourceGraphTests</c>, and the harness's progress ledger reads both back out of those
 /// two files rather than carrying its own copy. The graph exceeding the catalog is legitimate and
 /// is the reason the ledger reports a <c>beyondCatalog</c> figure at all: it is the <i>net</i> —
-/// six resources the catalog does not carry, less the one it carries and this does not — and not a
+/// ten resources the catalog does not carry, less the one it carries and this does not — and not a
 /// count of either set.
 /// </para>
 /// <para>

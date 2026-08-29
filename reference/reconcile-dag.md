@@ -16,7 +16,7 @@ the real catalog — the same `DeviceCatalog.Build` an agent builds at start-up 
 through the same `ResourceGraph`, and renders this file from the result. Nothing here is
 typed by hand, so nothing here can be out of date without a test going red.
 
-The catalog holds **86 resources** in 25 areas, joined by 83 dependency edges.
+The catalog holds **90 resources** in 25 areas, joined by 89 dependency edges.
 
 Two hand-written companions sit beside this one and are not generated:
 [every source of non-determinism, classified](reconcile-determinism.md), which says what can
@@ -50,7 +50,7 @@ It has one real cost, stated rather than hidden: the session and kiosk stack is 
 subject spread across `session`, `labwc`, `unit`, `portal` and `camera`, because that is
 how its ids are spelled.
 
-**Three views, because one picture of 86 nodes is a picture nobody opens twice.** §2 is the
+**Three views, because one picture of 90 nodes is a picture nobody opens twice.** §2 is the
 area map — small enough to take in at a glance, and where the gates are. §3 is the
 numbered running order, which is the plainest statement of what happens when. §4 is one
 small diagram per area that waits on something. §5 is the whole graph in one picture, and
@@ -89,7 +89,7 @@ flowchart TD
   a_camera["camera<br/>1 resource"]
   a_kiosk["kiosk<br/>9 resources"]
   a_tool["tool<br/>1 resource"]
-  a_firmware["firmware<br/>2 resources"]
+  a_firmware["firmware<br/>6 resources"]
   a_gpio["gpio<br/>1 resource"]
   a_eeprom["eeprom<br/>1 resource"]
   a_agent -->|2| a_system
@@ -114,6 +114,7 @@ flowchart TD
   a_agent -->|3| a_app
   a_kiosk --> a_app
   a_tool --> a_firmware
+  a_pkg --> a_firmware
   a_tool --> a_audio
   a_pkg --> a_audio
   a_boot --> a_audio
@@ -204,19 +205,23 @@ is smaller than the one it sits beside.**
 71. `tool.xvf-host.installed`
 72. `firmware.xvf3800.image`
 73. `firmware.xvf3800.recognised` — waits for #71 `tool.xvf-host.installed`
-74. `audio.xvf3800.gpo-x0d31-amp-enable` — waits for #71 `tool.xvf-host.installed`
-75. `audio.mixer.pcm0-playback-switch` — waits for #37 `audio.modprobe.snd-usb-audio-index`
-76. `audio.mixer.pcm1-playback-switch` — waits for #37 `audio.modprobe.snd-usb-audio-index`
-77. `audio.wireplumber.playback-volume` — waits for #13 `pkg.wireplumber`, #31 `boot.autologin.getty-tty1`
-78. `audio.mixer.pcm0-playback-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`, #75 `audio.mixer.pcm0-playback-switch`, #77 `audio.wireplumber.playback-volume`
-79. `audio.mixer.pcm1-playback-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`, #76 `audio.mixer.pcm1-playback-switch`
-80. `audio.mixer.headset-capture-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`
-81. `audio.alsa.stored-state` — waits for #75 `audio.mixer.pcm0-playback-switch`, #76 `audio.mixer.pcm1-playback-switch`, #77 `audio.wireplumber.playback-volume`, #78 `audio.mixer.pcm0-playback-volume`, #79 `audio.mixer.pcm1-playback-volume`, #80 `audio.mixer.headset-capture-volume`
-82. `gpio.button.line` — waits for #30 `user.framelink.supplementary-groups`
-83. `boot.config.camera-auto-detect`
-84. `boot.config.dtoverlay-vc4-kms-v3d-noaudio`
-85. `boot.cmdline.wifi-regdom` — waits for #9 `agent.adoption`
-86. `eeprom.config`
+74. `firmware.xvf3800.authorised` — waits for #72 `firmware.xvf3800.image`, #73 `firmware.xvf3800.recognised`
+75. `firmware.xvf3800.consent` — waits for #74 `firmware.xvf3800.authorised`
+76. `firmware.xvf3800.written` — waits for #23 `pkg.dfu-util`, #75 `firmware.xvf3800.consent`
+77. `firmware.xvf3800.verified` — waits for #76 `firmware.xvf3800.written`
+78. `audio.xvf3800.gpo-x0d31-amp-enable` — waits for #71 `tool.xvf-host.installed`
+79. `audio.mixer.pcm0-playback-switch` — waits for #37 `audio.modprobe.snd-usb-audio-index`
+80. `audio.mixer.pcm1-playback-switch` — waits for #37 `audio.modprobe.snd-usb-audio-index`
+81. `audio.wireplumber.playback-volume` — waits for #13 `pkg.wireplumber`, #31 `boot.autologin.getty-tty1`
+82. `audio.mixer.pcm0-playback-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`, #79 `audio.mixer.pcm0-playback-switch`, #81 `audio.wireplumber.playback-volume`
+83. `audio.mixer.pcm1-playback-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`, #80 `audio.mixer.pcm1-playback-switch`
+84. `audio.mixer.headset-capture-volume` — waits for #37 `audio.modprobe.snd-usb-audio-index`
+85. `audio.alsa.stored-state` — waits for #79 `audio.mixer.pcm0-playback-switch`, #80 `audio.mixer.pcm1-playback-switch`, #81 `audio.wireplumber.playback-volume`, #82 `audio.mixer.pcm0-playback-volume`, #83 `audio.mixer.pcm1-playback-volume`, #84 `audio.mixer.headset-capture-volume`
+86. `gpio.button.line` — waits for #30 `user.framelink.supplementary-groups`
+87. `boot.config.camera-auto-detect`
+88. `boot.config.dtoverlay-vc4-kms-v3d-noaudio`
+89. `boot.cmdline.wifi-regdom` — waits for #9 `agent.adoption`
+90. `eeprom.config`
 
 ---
 
@@ -237,19 +242,19 @@ flowchart LR
   r9 --> r10
 ```
 
-### `boot` — 6 resources, walked between #2 and #85
+### `boot` — 6 resources, walked between #2 and #89
 
 ```mermaid
 flowchart LR
   r2["2 · boot.config.dtoverlay-waveshare-panel"]
   r3["3 · boot.cmdline.fbcon-rotate"]
   r31["31 · boot.autologin.getty-tty1"]
-  r83["83 · boot.config.camera-auto-detect"]
-  r84["84 · boot.config.dtoverlay-vc4-kms-v3d-noaudio"]
-  r85["85 · boot.cmdline.wifi-regdom"]
+  r87["87 · boot.config.camera-auto-detect"]
+  r88["88 · boot.config.dtoverlay-vc4-kms-v3d-noaudio"]
+  r89["89 · boot.cmdline.wifi-regdom"]
   r9(["9 · agent.adoption"])
   r2 --> r3
-  r9 --> r85
+  r9 --> r89
 ```
 
 ### `unit` — 11 resources, walked between #6 and #53
@@ -334,39 +339,39 @@ flowchart LR
   r9 --> r36
 ```
 
-### `audio` — 9 resources, walked between #37 and #81
+### `audio` — 9 resources, walked between #37 and #85
 
 ```mermaid
 flowchart LR
   r37["37 · audio.modprobe.snd-usb-audio-index"]
-  r74["74 · audio.xvf3800.gpo-x0d31-amp-enable"]
-  r75["75 · audio.mixer.pcm0-playback-switch"]
-  r76["76 · audio.mixer.pcm1-playback-switch"]
-  r77["77 · audio.wireplumber.playback-volume"]
-  r78["78 · audio.mixer.pcm0-playback-volume"]
-  r79["79 · audio.mixer.pcm1-playback-volume"]
-  r80["80 · audio.mixer.headset-capture-volume"]
-  r81["81 · audio.alsa.stored-state"]
+  r78["78 · audio.xvf3800.gpo-x0d31-amp-enable"]
+  r79["79 · audio.mixer.pcm0-playback-switch"]
+  r80["80 · audio.mixer.pcm1-playback-switch"]
+  r81["81 · audio.wireplumber.playback-volume"]
+  r82["82 · audio.mixer.pcm0-playback-volume"]
+  r83["83 · audio.mixer.pcm1-playback-volume"]
+  r84["84 · audio.mixer.headset-capture-volume"]
+  r85["85 · audio.alsa.stored-state"]
   r13(["13 · pkg.wireplumber"])
   r31(["31 · boot.autologin.getty-tty1"])
   r71(["71 · tool.xvf-host.installed"])
-  r71 --> r74
-  r37 --> r75
-  r37 --> r76
-  r13 --> r77
-  r31 --> r77
-  r37 --> r78
-  r75 --> r78
-  r77 --> r78
+  r71 --> r78
   r37 --> r79
-  r76 --> r79
   r37 --> r80
-  r78 --> r81
-  r79 --> r81
-  r80 --> r81
-  r75 --> r81
-  r76 --> r81
-  r77 --> r81
+  r13 --> r81
+  r31 --> r81
+  r37 --> r82
+  r79 --> r82
+  r81 --> r82
+  r37 --> r83
+  r80 --> r83
+  r37 --> r84
+  r82 --> r85
+  r83 --> r85
+  r84 --> r85
+  r79 --> r85
+  r80 --> r85
+  r81 --> r85
 ```
 
 ### `cpu` — 1 resource, walked at #40
@@ -504,23 +509,34 @@ flowchart LR
   r60 --> r65
 ```
 
-### `firmware` — 2 resources, walked between #72 and #73
+### `firmware` — 6 resources, walked between #72 and #77
 
 ```mermaid
 flowchart LR
   r72["72 · firmware.xvf3800.image"]
   r73["73 · firmware.xvf3800.recognised"]
+  r74["74 · firmware.xvf3800.authorised"]
+  r75["75 · firmware.xvf3800.consent"]
+  r76["76 · firmware.xvf3800.written"]
+  r77["77 · firmware.xvf3800.verified"]
+  r23(["23 · pkg.dfu-util"])
   r71(["71 · tool.xvf-host.installed"])
   r71 --> r73
+  r72 --> r74
+  r73 --> r74
+  r74 --> r75
+  r75 --> r76
+  r23 --> r76
+  r76 --> r77
 ```
 
-### `gpio` — 1 resource, walked at #82
+### `gpio` — 1 resource, walked at #86
 
 ```mermaid
 flowchart LR
-  r82["82 · gpio.button.line"]
+  r86["86 · gpio.button.line"]
   r30(["30 · user.framelink.supplementary-groups"])
-  r30 --> r82
+  r30 --> r86
 ```
 
 **No diagram for 6 areas:** `journal`, `pkg`, `user`, `mount`, `tool`, `eeprom`. Nothing in them declares a
@@ -531,8 +547,8 @@ position in §3 with nothing gating it.
 
 ## 5. The whole graph in one picture
 
-**This one is dense, and that is the honest description of it.** 72 of the catalog's
-86 resources touch an edge; the other 14 are listed underneath rather than drawn, because a
+**This one is dense, and that is the honest description of it.** 78 of the catalog's
+90 resources touch an edge; the other 12 are listed underneath rather than drawn, because a
 node with no arrows is a row in §3 and not a shape. Boxes group by area. Use §2 and §4
 first — this is here for the times somebody needs the whole thing at once.
 
@@ -546,7 +562,7 @@ flowchart TD
     r2["2 · boot.config.dtoverlay-waveshare-panel"]
     r3["3 · boot.cmdline.fbcon-rotate"]
     r31["31 · boot.autologin.getty-tty1"]
-    r85["85 · boot.cmdline.wifi-regdom"]
+    r89["89 · boot.cmdline.wifi-regdom"]
   end
   subgraph a_unit["unit"]
     r6["6 · unit.fl-agent.content"]
@@ -572,6 +588,7 @@ flowchart TD
     r19["19 · pkg.gstreamer1.0-plugins-base"]
     r20["20 · pkg.gstreamer1.0-libcamera"]
     r21["21 · pkg.gstreamer1.0-pipewire"]
+    r23["23 · pkg.dfu-util"]
     r25["25 · pkg.unattended-upgrades"]
   end
   subgraph a_system["system"]
@@ -594,14 +611,14 @@ flowchart TD
   end
   subgraph a_audio["audio"]
     r37["37 · audio.modprobe.snd-usb-audio-index"]
-    r74["74 · audio.xvf3800.gpo-x0d31-amp-enable"]
-    r75["75 · audio.mixer.pcm0-playback-switch"]
-    r76["76 · audio.mixer.pcm1-playback-switch"]
-    r77["77 · audio.wireplumber.playback-volume"]
-    r78["78 · audio.mixer.pcm0-playback-volume"]
-    r79["79 · audio.mixer.pcm1-playback-volume"]
-    r80["80 · audio.mixer.headset-capture-volume"]
-    r81["81 · audio.alsa.stored-state"]
+    r78["78 · audio.xvf3800.gpo-x0d31-amp-enable"]
+    r79["79 · audio.mixer.pcm0-playback-switch"]
+    r80["80 · audio.mixer.pcm1-playback-switch"]
+    r81["81 · audio.wireplumber.playback-volume"]
+    r82["82 · audio.mixer.pcm0-playback-volume"]
+    r83["83 · audio.mixer.pcm1-playback-volume"]
+    r84["84 · audio.mixer.headset-capture-volume"]
+    r85["85 · audio.alsa.stored-state"]
   end
   subgraph a_cpu["cpu"]
     r40["40 · cpu.governor.performance"]
@@ -649,10 +666,15 @@ flowchart TD
     r71["71 · tool.xvf-host.installed"]
   end
   subgraph a_firmware["firmware"]
+    r72["72 · firmware.xvf3800.image"]
     r73["73 · firmware.xvf3800.recognised"]
+    r74["74 · firmware.xvf3800.authorised"]
+    r75["75 · firmware.xvf3800.consent"]
+    r76["76 · firmware.xvf3800.written"]
+    r77["77 · firmware.xvf3800.verified"]
   end
   subgraph a_gpio["gpio"]
-    r82["82 · gpio.button.line"]
+    r86["86 · gpio.button.line"]
   end
   r2 --> r3
   r6 --> r7
@@ -718,28 +740,34 @@ flowchart TD
   r68 --> r69
   r64 --> r70
   r71 --> r73
-  r71 --> r74
-  r37 --> r75
-  r37 --> r76
-  r13 --> r77
-  r31 --> r77
-  r37 --> r78
-  r75 --> r78
-  r77 --> r78
+  r72 --> r74
+  r73 --> r74
+  r74 --> r75
+  r75 --> r76
+  r23 --> r76
+  r76 --> r77
+  r71 --> r78
   r37 --> r79
-  r76 --> r79
   r37 --> r80
-  r78 --> r81
-  r79 --> r81
-  r80 --> r81
-  r75 --> r81
-  r76 --> r81
-  r77 --> r81
-  r30 --> r82
-  r9 --> r85
+  r13 --> r81
+  r31 --> r81
+  r37 --> r82
+  r79 --> r82
+  r81 --> r82
+  r37 --> r83
+  r80 --> r83
+  r37 --> r84
+  r82 --> r85
+  r83 --> r85
+  r84 --> r85
+  r79 --> r85
+  r80 --> r85
+  r81 --> r85
+  r30 --> r86
+  r9 --> r89
 ```
 
-**Not drawn — 14 resources with no edge in either direction.** They wait on nothing and
+**Not drawn — 12 resources with no edge in either direction.** They wait on nothing and
 nothing waits on them, so their position in §3 is the whole of what there is to say:
 
 - #1 `agent.version`
@@ -747,15 +775,13 @@ nothing waits on them, so their position in §3 is the whole of what there is to
 - #5 `journal.storage-persistent`
 - #14 `pkg.pipewire-alsa`
 - #22 `pkg.libspa-0.2-libcamera.absent`
-- #23 `pkg.dfu-util`
 - #24 `pkg.grim`
 - #32 `mount.tmp.tmpfs`
 - #35 `apt.daily-timers.enabled-and-active`
 - #47 `app.http.local-origin`
-- #72 `firmware.xvf3800.image`
-- #83 `boot.config.camera-auto-detect`
-- #84 `boot.config.dtoverlay-vc4-kms-v3d-noaudio`
-- #86 `eeprom.config`
+- #87 `boot.config.camera-auto-detect`
+- #88 `boot.config.dtoverlay-vc4-kms-v3d-noaudio`
+- #90 `eeprom.config`
 
 ---
 
@@ -763,19 +789,19 @@ nothing waits on them, so their position in §3 is the whole of what there is to
 
 | | |
 |---|---|
-| Resources in the catalog | **86** |
-| Dependency edges | **83** |
-| Resources that declare at least one dependency | **51** |
-| Resources something else waits on | **45** |
-| Resources with no edge in either direction | **14** |
+| Resources in the catalog | **90** |
+| Dependency edges | **89** |
+| Resources that declare at least one dependency | **55** |
+| Resources something else waits on | **51** |
+| Resources with no edge in either direction | **12** |
 | Areas | **25** |
-| Longest chain, in resources | **4** |
+| Longest chain, in resources | **6** |
 
-**The graph is wide, not deep.** The longest chain in it is 4 resources long:
+**The graph is wide, not deep.** The longest chain in it is 6 resources long:
 
-#11 `pkg.labwc` → #42 `labwc.autostart.content` → #43 `labwc.autostart.executable` → #45 `display.dsi2-transform`
+#71 `tool.xvf-host.installed` → #73 `firmware.xvf3800.recognised` → #74 `firmware.xvf3800.authorised` → #75 `firmware.xvf3800.consent` → #76 `firmware.xvf3800.written` → #77 `firmware.xvf3800.verified`
 
-So no resource in this catalog is more than 3 hops from something that gates nothing.
+So no resource in this catalog is more than 5 hops from something that gates nothing.
 Depth is not what the DAG is for here; refusing to attempt doomed work is.
 
 **What most things wait on.** *Waiting on it directly* counts the resources that name it
@@ -789,10 +815,10 @@ stopped acting.
 | 9 | `agent.adoption` | 11 | 13 |
 | 57 | `kiosk.binary.pinned-release` | 6 | 9 |
 | 37 | `audio.modprobe.snd-usb-audio-index` | 5 | 6 |
+| 71 | `tool.xvf-host.installed` | 2 | 6 |
 | 11 | `pkg.labwc` | 3 | 5 |
 | 13 | `pkg.wireplumber` | 2 | 5 |
+| 72 | `firmware.xvf3800.image` | 1 | 4 |
+| 73 | `firmware.xvf3800.recognised` | 1 | 4 |
 | 12 | `pkg.chromium` | 1 | 3 |
-| 15 | `pkg.wlr-randr` | 1 | 3 |
-| 18 | `pkg.gstreamer1.0-tools` | 1 | 3 |
-| 19 | `pkg.gstreamer1.0-plugins-base` | 1 | 3 |
 

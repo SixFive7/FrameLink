@@ -359,6 +359,24 @@ public static class ArrayFlashVoice
     };
 
     /// <summary>The screen a finished write leaves, whichever way it went.</summary>
+    /// <remarks>
+    /// <para>
+    /// <b>It names the restart, because the write is a resource's Act now and every Act crosses a
+    /// reboot</b> (§2.4). Before the flash moved into the graph nothing followed the write, and this
+    /// screen stayed until somebody pressed it or the agent restarted — decision 93's choice, and
+    /// its own account already named an agent restart as the other thing that ends it. What changed
+    /// is that the restart now comes soon rather than eventually, and a screen saying <i>it is
+    /// finished</i> on a frame that is about to reboot without saying so is a surprise this product
+    /// does not otherwise hand people.
+    /// </para>
+    /// <para>
+    /// <b>The line is a prediction and one thing can falsify it</b>: decision 79's reboot floor, or
+    /// another hold, can refuse that reboot. A frame in that state says so in its own narration, so
+    /// the correction reaches the same panel — and the alternative wording, which would have
+    /// described the policy rather than what is about to happen, is not a sentence anybody standing
+    /// in a living room can act on.
+    /// </para>
+    /// </remarks>
     public static ArrayFlashPrompt Finished(bool succeeded, bool answerable, OperatorContact? contact) => new()
     {
         Phase = succeeded ? ArrayFlashPhase.Succeeded : ArrayFlashPhase.Failed,
@@ -367,12 +385,15 @@ public static class ArrayFlashVoice
             ?
             [
                 "It worked, and it is finished.",
+                "This frame will restart itself in a moment, to watch the microphone come back on its own.",
                 "It is now safe to unplug this frame or switch it off, if you need to.",
                 "Nothing else is needed from you.",
             ]
             :
             [
                 "It is now safe to unplug this frame or switch it off.",
+                "This frame will restart itself in a moment. That is part of checking what happened and is not "
+                    + "another attempt at the update.",
                 "The microphone may not work until somebody has looked at it. Nothing you did caused this, and the "
                     + "rest of the frame is unaffected.",
                 ReconcileVoice.ContactLine(contact),
@@ -534,6 +555,26 @@ public sealed class ArrayFlashApproval
         _log = log;
     }
 
+    /// <summary>
+    /// What to do the instant somebody agrees — the budget reset that lets the pass resume.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Without this the frame could never come back from its own question.</b>
+    /// <c>firmware.xvf3800.consent</c> is a gate, so a frame nobody has agreed to a write on stops
+    /// the pass and escalates — and §2.5 rung 2 means an escalated resource is not observed again
+    /// until somebody resets its budget. A household pressing <i>yes</i> would otherwise be agreeing
+    /// to a write on a frame that had stopped listening for the answer.
+    /// </para>
+    /// <para>
+    /// It is §2.5 rung 5's press reaching the same reset path the Fleet Manager's retry reaches,
+    /// which is what decision 72 requires of every surface that offers one. The default does nothing,
+    /// which is correct where there is no loop to reset — the suite, and any catalog built off a
+    /// frame.
+    /// </para>
+    /// </remarks>
+    public Action<string>? Agreed { get; init; }
+
     /// <summary>The authorisation somebody agreed to, or null.</summary>
     public string? ApprovedFor
     {
@@ -615,6 +656,35 @@ public sealed class ArrayFlashApproval
         return true;
     }
 
+    /// <summary>
+    /// Ends the rest window, so the next look asks again — <b>a person has arrived</b>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The trap this closes only appeared once consent became a rung of the graph.</b> The screen
+    /// asks for <see cref="AskWindow"/> and then rests for <see cref="RestWindow"/>, which used to
+    /// be invisible: a resting frame went back to showing photographs and the authorisation simply
+    /// waited. Now <c>firmware.xvf3800.consent</c> has escalated, so a resting frame shows the
+    /// stopped-frame screen naming the consent it is waiting for — and offers <i>try again</i>,
+    /// which resets the attempt budget and produces the identical screen, because nothing woke the
+    /// question. Somebody standing in front of it would have had no way to say yes for six hours.
+    /// </para>
+    /// <para>
+    /// A retry is somebody arriving at the frame, which is the exact condition the rest window
+    /// exists to wait for, so it is reached from the one reset every surface already shares
+    /// (decision 72). It does not clear which authorisation was asked about: that is the question's
+    /// identity, and a different one gets a fresh window of its own in <see cref="Ask"/>.
+    /// </para>
+    /// </remarks>
+    public void Wake()
+    {
+        lock (_gate)
+        {
+            _askingSince = null;
+            _restingUntil = null;
+        }
+    }
+
     /// <summary>Records that this exact write was agreed to, and by what.</summary>
     public void Approve(string authorisation, string how)
     {
@@ -628,6 +698,11 @@ public sealed class ArrayFlashApproval
         }
 
         _log.Info($"The firmware write on this frame was agreed to: {how}.");
+
+        // After the record and outside the lock. The reset walks the journal and logs, and holding
+        // this class's gate across it would put the frame's screen and the reconcile ledger behind
+        // one lock for no reason anybody could name later.
+        Agreed?.Invoke(authorisation);
     }
 
     /// <summary>Takes the affordance currently on screen, whatever it is.</summary>

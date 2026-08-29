@@ -225,6 +225,15 @@ public sealed class AgentHost
         // it has to be able to answer that a *previous* process was writing firmware when it died.
         // It reads its durable marker exactly once, at construction, which is why construction has
         // to happen before anything else could have written one.
+        // Two forward references, both closed below and both named here because the cycle is real
+        // rather than incidental. The catalog's firmware chain needs the flash, and the flash needs
+        // the supervisor's view of a call and the update service's view of a pending restart, which
+        // are built after the catalog. The approval needs the reconcile loop, because agreeing to a
+        // write is what resets the consent gate's budget — and the loop is built from the catalog
+        // that the approval is part of.
+        ArrayFirmwareFlash? arrayFlash = null;
+        ReconcileLoop? reconciler = null;
+
         var flashWindow = new ArrayFlashWindow(store, _clock);
 
         // Decision 91's last interlock, and the only one that is a person. It owns the frame's screen
@@ -232,7 +241,22 @@ public sealed class AgentHost
         // beside the window rather than beside the flash: both the console stage and the browser
         // stage read what it publishes, and the interrupted screen below has to be reachable on a
         // frame where nothing else about the flash ever runs.
-        var flashApproval = new ArrayFlashApproval(hub, _clock, _log);
+        var flashApproval = new ArrayFlashApproval(hub, _clock, _log)
+        {
+            // §2.5 rung 5, on the one screen that offers something other than "try again".
+            // `firmware.xvf3800.consent` is a gate, so a frame nobody has agreed to a write on has
+            // escalated and stopped — and rung 2 means an escalated resource is not observed again
+            // until a person resets it. Without this line the household's yes would land on a frame
+            // that had stopped asking, and the write would never start. It is the same reset the
+            // Fleet Manager's retry reaches, which is what decision 72 requires of every surface.
+            Agreed = _ =>
+            {
+                _log.Info(
+                    "Somebody at this frame agreed to the authorised firmware write, so the consent step's attempt "
+                    + "budget is being reset and the frame will carry the write out on its next pass.");
+                reconciler?.ResetBudget(ArrayFlashConsentResource.ResourceName);
+            },
+        };
 
         if (flashWindow.Interrupted)
         {
@@ -476,6 +500,13 @@ public sealed class AgentHost
                 DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
                 Button = button,
                 Kiosk = kiosk,
+
+                // Decisions 91 and 93, moved into the graph. The catalog holds the six rungs of the
+                // firmware chain and this is what the last two of them act and ask through; the
+                // interlocks themselves never left ArrayFirmwareFlash.
+                ArrayFlash = () => arrayFlash,
+                FlashApproval = flashApproval,
+                FlashWindow = flashWindow,
                 KioskDownload = new HttpKioskDownload(http, _log),
                 XvfHostDownload = new HttpXvfHostDownload(http, _log),
                 Permissions = PosixFilePermissions.Instance,
@@ -507,6 +538,9 @@ public sealed class AgentHost
             DeviceId = identity.DeviceId,
         };
 
+        // Closes the approval's forward reference. From here a household's yes reaches the ledger.
+        reconciler = loop;
+
         // <b>What "try again" means to everything a person can press.</b> Three callers reach it —
         // the button on the repair page, the hold on the panel, and an inbound retry from the Fleet
         // Manager — and decision 72's rule is that they must not come to mean different things, so
@@ -522,6 +556,13 @@ public sealed class AgentHost
         {
             rebootFloor.Forget();
             allowance.Refill();
+
+            // A retry is a person arriving, which is what the firmware question's rest window is
+            // waiting for. Without this a frame that had stopped on `firmware.xvf3800.consent` would
+            // answer every press with the same screen for six hours, because the budget reset and
+            // the question are two different clocks and only one of them was being touched.
+            flashApproval.Wake();
+
             return loop.ResetExhaustedBudgets();
         }
 
@@ -780,7 +821,7 @@ public sealed class AgentHost
         // that cannot be undone by rewriting the card. Built here, last, because it is the only
         // thing that needs both the supervisor's view of whether somebody is on a call and the
         // update service's view of whether this process is about to restart.
-        var arrayFlash = new ArrayFirmwareFlash(new ArrayFlashServices
+        arrayFlash = new ArrayFirmwareFlash(new ArrayFlashServices
         {
             Tool = new XvfHost(HostSystemFiles.Instance, HostProcessRunner.Instance, session),
             Files = HostSystemFiles.Instance,
@@ -841,10 +882,14 @@ public sealed class AgentHost
             new("package-inventory", "tell the Fleet Manager what is installed on this frame", packages.RunAsync(shutdown.Token)),
             new("array-firmware-report", "tell the Fleet Manager which firmware the microphone unit runs", arrayFirmware.RunAsync(shutdown.Token)),
 
-            // Decision 91's other half. It reads one setting a minute and returns; it writes
-            // firmware only when a person has authorised that exact image on this exact frame, and
-            // it spends the authorisation before it starts, so nothing here can ever run twice.
-            new("array-firmware-flash", "carry out a firmware write once a person has authorised one", arrayFlash.RunAsync(shutdown.Token)),
+            // Decision 91's other half, and it no longer writes anything. The write is
+            // `firmware.xvf3800.written`'s Act, in the graph, where §2.4's reboot then proves across
+            // a boot that the array came back on the firmware it was given. What is left here is the
+            // conversation with the person in the room: it reads one setting a minute, puts the
+            // firmware question on the panel when everything else is ready, refreshes it, and takes
+            // it away within seconds of a call starting — three things the reconcile pass cannot do,
+            // because its Observe may have no side effects and it runs every five minutes.
+            new("array-firmware-flash", "ask whoever is at this frame to agree to an authorised firmware write", arrayFlash.RunAsync(shutdown.Token)),
             new("call-button", "turn a press of the button on this frame into a call", button.RunAsync(shutdown.Token)),
 
             // §2.7 item 9's console half. It polls a character device twenty times a second and
