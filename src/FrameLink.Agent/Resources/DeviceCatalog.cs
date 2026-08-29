@@ -153,26 +153,28 @@ public sealed record DeviceCatalogContext
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>M3 is complete: this is the whole catalog.</b> <c>reference/resource-catalog.md</c>
-/// enumerates <b>80</b> resources, of which <b>79 are implementable</b> and all 79 are here.
-/// <c>pkg.git</c> is the one that is not, and it is an exclusion rather than a gap — open
-/// question 3's adopted reading obtains <c>xvf_host</c> as a pinned, checksum-verified upstream
-/// artifact rather than a clone, and the catalog says outright that "if it does not, this resource
-/// disappears". Two resources here are <i>not</i> in the catalog: <c>agent.device-name</c>, the
-/// display name the Fleet Manager assigns at adoption, which the catalog's cross-guide section
-/// never enumerated; and <c>kiosk.config.albums</c>, which scopes what the slideshow selects from
-/// and which neither guide 9 nor the catalog ever had — a gap the frame proved by finding no
-/// photographs at all. <b>So the shipped count is 81</b>, and the arithmetic is 79 catalog entries
-/// plus those two.
+/// <b>M3 is complete: this is the whole catalog, and then some.</b>
+/// <c>reference/resource-catalog.md</c> enumerates <b>81</b> resources, of which <b>80 are
+/// implementable</b> and all 80 are here. <c>pkg.git</c> is the one that is not, and it is an
+/// exclusion rather than a gap — open question 3's adopted reading obtains <c>xvf_host</c> as a
+/// pinned, checksum-verified upstream artifact rather than a clone, and the catalog says outright
+/// that "if it does not, this resource disappears". <b>Six</b> resources here are <i>not</i> in
+/// the catalog: <c>agent.device-name</c>, the display name the Fleet Manager assigns at adoption,
+/// which the cross-guide section never enumerated; <c>kiosk.config.albums</c>, which scopes what
+/// the slideshow selects from and which neither guide 9 nor the catalog ever had — a gap the frame
+/// proved by finding no photographs at all; <c>apt.daily-timers.enabled-and-active</c>, the timers
+/// that run the unattended upgrade the catalog only ever configured; and the three
+/// <c>unit.fl-agent.*</c> resources, which reconcile the unit that starts the reconciler.
+/// <b>So the shipped count is 86</b>, and the arithmetic is 80 catalog entries plus those six.
 /// </para>
 /// <para>
-/// <b>The two totals are read, never typed.</b> 80 is what <c>CatalogDocument.Parse</c> counts in
-/// the catalog file and what <c>ParityHarnessTests</c> asserts; 81 is
-/// <c>graph.Count</c> in <c>AgentResourceGraphTests</c>, and the harness's progress ledger reads
-/// both back out of those two files rather than carrying its own copy. The graph exceeding the
-/// catalog is legitimate and is the reason the ledger reports a <c>beyondCatalog</c> figure at all:
-/// it is the <i>net</i> — two resources the catalog does not carry, less the one it carries and
-/// this does not — and not a count of either set.
+/// <b>The two totals are read, never typed.</b> 81 is what <c>CatalogDocument.Parse</c> counts in
+/// the catalog file and what <c>ParityHarnessTests</c> asserts; 86 is <c>graph.Count</c> in
+/// <c>AgentResourceGraphTests</c>, and the harness's progress ledger reads both back out of those
+/// two files rather than carrying its own copy. The graph exceeding the catalog is legitimate and
+/// is the reason the ledger reports a <c>beyondCatalog</c> figure at all: it is the <i>net</i> —
+/// six resources the catalog does not carry, less the one it carries and this does not — and not a
+/// count of either set.
 /// </para>
 /// <para>
 /// <b>Declaration order is the tie-break</b> in <see cref="ResourceGraph"/>, so the order below
@@ -245,7 +247,29 @@ public static class DeviceCatalog
 
             // Ahead of its catalog slot, so that if anything below goes wrong there is a record of
             // it. A volatile journal is what made the August 2026 failures invisible for days.
-            new JournalStorageResource(context.Files, context.Values),
+            new JournalStorageResource(context.Files, context.Processes, context.SystemControl, context.Values),
+
+            // No position in the catalog document, which never carried these three:
+            // `fl-agent.service` is written once by `fl-agent install` — or by `fl.py deploy` — and
+            // never looked at again, which made it the one systemd unit this product installs that
+            // nothing reconciled, and the one that starts the reconciler.
+            // `reference/outside-the-dag-review.md` item 1, which the operator approved closing,
+            // with a third resource the review did not propose: the enablement, which is the half
+            // whose failure is silent until the boot that does not come back.
+            //
+            // As early as the walk allows, for a reason none of its neighbours have. An escalation
+            // stops the pass (decision 68), so a resource declared late is one that a frame with an
+            // earlier fault never gets acted on — and this is the repair with a deadline. The agent
+            // can rewrite its own unit for exactly as long as it is running; after a reboot into a
+            // broken one there is no agent, no pass, no screen, and nothing left to report that
+            // anything is wrong. Behind the display and the journal on purpose, so the repair can be
+            // watched happening and leaves a record on the card that outlives the frame's ability to
+            // send one. The honest cost of not going further up: `agent.keypair` above it can give
+            // up and stop the pass before this is reached — and by then a person is already involved,
+            // which is the only reason that trade is acceptable.
+            new AgentUnitResource(context.Files, context.SystemControl),
+            new AgentUnitEnabledResource(context.SystemControl),
+            new AgentUnitRunningResource(context.SystemControl),
 
             // Position 5, the root of everything the Fleet Manager supplies a value for
             // (decision 34).

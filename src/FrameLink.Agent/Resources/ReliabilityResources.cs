@@ -680,7 +680,7 @@ public sealed class UnattendedUpgradesPolicyResource : IResource
 public readonly record struct AptTimerState(string Unit, string Enablement, string Activity)
 {
     /// <summary>The enablement word that means the timer comes back after a reboot.</summary>
-    public const string EnabledState = "enabled";
+    public const string EnabledState = SystemdUnits.EnabledState;
 
     /// <summary>The activity word that means the timer is armed right now.</summary>
     public const string ActiveState = "active";
@@ -704,12 +704,12 @@ public readonly record struct AptTimerState(string Unit, string Enablement, stri
 
     /// <summary>Whether an enablement word is one of systemd's two masked spellings.</summary>
     /// <remarks>
-    /// Both spellings, because <c>masked-runtime</c> is a mask written under <c>/run</c> and
-    /// behaves identically for the only question asked of it here: <c>systemctl enable</c> refuses
-    /// against it. Reading only the first spelling would send the agent into the
-    /// enable-fails-three-times loop for exactly the masks that are temporary.
+    /// Kept as a member of this type because the timers are read through it, and delegating
+    /// rather than restating the two spellings because <see cref="SystemdUnits.IsMasked"/> is now
+    /// asked the same question by the journal daemon and by the agent's own unit. A predicate
+    /// copied into three files is three chances to drop <c>masked-runtime</c> in two of them.
     /// </remarks>
-    public static bool IsMasked(string enablement) => enablement is "masked" or "masked-runtime";
+    public static bool IsMasked(string enablement) => SystemdUnits.IsMasked(enablement);
 
     /// <summary>What one unit looks like on a frame that is receiving security updates.</summary>
     public static string Desired(string unit) => $"{unit} is {EnabledState} and {ActiveState}";
@@ -903,32 +903,14 @@ public sealed class AptDailyTimersResource : IResource
         + string.Join(' ', masked)
         + "' run by a person puts it back";
 
-    /// <summary>
-    /// One <c>systemctl</c> question, reduced to the line that answers it.
-    /// </summary>
+    /// <summary>One <c>systemctl</c> question, reduced to the line that answers it.</summary>
     /// <remarks>
-    /// <b>The text, not the exit code.</b> <c>is-enabled</c> exits non-zero for <c>disabled</c>,
-    /// for <c>masked</c> and for a unit that does not exist alike, so the exit code cannot tell
-    /// those three apart and the word systemd printed can. Anything unrecognised travels verbatim
-    /// rather than being collapsed: <see cref="SystemControlResult.Output"/> is standard output
-    /// followed by standard error, so a frame with no such unit puts systemd's own sentence about
-    /// it into the delta instead of a word this code invented.
+    /// <see cref="SystemdUnits.AnswerAsync"/> carries the reasoning, and carries it once: the
+    /// text is read and never the exit code, because <c>is-enabled</c> exits non-zero for
+    /// <c>disabled</c>, for <c>masked</c> and for a unit that does not exist alike.
     /// </remarks>
-    private async Task<string> AnswerAsync(string question, string unit, CancellationToken cancellationToken)
-    {
-        var result = await _systemControl.RunAsync([question, unit], cancellationToken).ConfigureAwait(false);
-
-        foreach (var raw in result.Output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length > 0)
-            {
-                return line;
-            }
-        }
-
-        return "no answer from systemctl";
-    }
+    private Task<string> AnswerAsync(string question, string unit, CancellationToken cancellationToken) =>
+        SystemdUnits.AnswerAsync(_systemControl, question, unit, cancellationToken);
 }
 
 /// <summary>

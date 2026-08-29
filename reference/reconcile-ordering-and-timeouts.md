@@ -20,13 +20,13 @@ sits in files untouched since 16 August.
 ## 1. Is the resource graph's execution order deterministic?
 
 **Yes. Completely, and by construction rather than by accident.** Two runs of the same build on
-the same frame visit the 83 resources in exactly the same order, every pass, every boot.
+the same frame visit the 86 resources in exactly the same order, every pass, every boot.
 
 Four facts hold it in place, and all four are in the code:
 
 1. **The catalog is a hand-written list literal, not a scan.** `DeviceCatalog.Build`
-   (`src/FrameLink.Agent/Resources/DeviceCatalog.cs:217-357`) returns a collection expression —
-   83 constructor calls in a fixed textual order, spliced with four sub-builders
+   (`src/FrameLink.Agent/Resources/DeviceCatalog.cs:219-390`) returns a collection expression —
+   86 constructor calls in a fixed textual order, spliced with four sub-builders
    (`PackageCatalog.Build`, `KioskStack`, `AudioCatalog.Build`, `AppConfigCatalog.Build`). There
    is no reflection, no assembly scan, no dependency-injection container and no
    `Dictionary`/`HashSet` enumeration anywhere in the construction path. The sub-builders are

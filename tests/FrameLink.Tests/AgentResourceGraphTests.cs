@@ -223,7 +223,16 @@ public sealed class AgentResourceGraphTests
         // running: a frame whose apt-daily.timer was disabled reported green for ever and silently
         // stopped taking security updates. Unlike the recognition gate this one is an ordinary
         // resource — observing it is a status query and `systemctl enable --now` plainly works.
-        Assert.Equal(83, graph.Count);
+        // 86 since the agent brought its own unit into the graph. Every systemd unit this product
+        // installs was reconciled except fl-agent.service, the one that starts the reconciler:
+        // written once by `fl-agent install` and never audited again, so a unit from an old
+        // installer survives for the life of the card while an update replaces only the binary.
+        // `reference/outside-the-dag-review.md` item 1 asked for two resources and the operator
+        // approved three; the third is the enablement, which is the half whose failure is
+        // invisible until the boot that does not come back, after which nothing is left to report
+        // it. All three are repairable only while the agent is running, which is why they are
+        // declared as early in the walk as anything that is not the display or the journal.
+        Assert.Equal(86, graph.Count);
         Assert.Contains(ArrayRecognitionResource.ResourceName, graph.Ordered.Select(resource => resource.Name));
         Assert.True(graph.Find(ArrayRecognitionResource.ResourceName)!.IsGate);
 
@@ -339,7 +348,21 @@ public sealed class AgentResourceGraphTests
         // upgrade. The document enumerates the apt *configuration* it inherited from guide 12 and
         // stops there; the timers were left to the stock image, which is exactly the gap
         // `reference/outside-the-dag-review.md` item 39 found and the operator approved closing.
-        var extra = new[] { "agent.device-name", "kiosk.config.albums", AptDailyTimersResource.ResourceName };
+        var extra = new[]
+        {
+            "agent.device-name",
+            "kiosk.config.albums",
+            AptDailyTimersResource.ResourceName,
+
+            // The agent's own unit: its content, its enablement, and whether the service systemd
+            // is running is the one that file describes. The document enumerates every unit this
+            // product installs except the one that starts the agent, which is the gap
+            // `reference/outside-the-dag-review.md` item 1 found and the operator approved
+            // closing.
+            AgentUnitResource.ResourceName,
+            AgentUnitEnabledResource.ResourceName,
+            AgentUnitRunningResource.ResourceName,
+        };
 
         var document = ResourceCatalogDocument.Ids();
         Assert.Equal(81, document.Count);

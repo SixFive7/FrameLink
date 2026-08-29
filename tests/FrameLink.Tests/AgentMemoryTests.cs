@@ -165,6 +165,7 @@ public sealed class AgentMemoryTests
         // operator's value means writing the catalog default over it and rebooting to prove that,
         // then doing the whole thing again when the server comes back.
         using var system = new TemporaryFiles();
+        var journald = new FakeJournald(system.Files);
         using var files = new TemporaryStore();
         var clock = new ManualClock();
 
@@ -173,7 +174,7 @@ public sealed class AgentMemoryTests
 
         using (var provisioning = new ReconcileHarness(
             Fast,
-            new JournalStorageResource(system.Files, FleetValues.From(first.Settings))))
+            new JournalStorageResource(system.Files, journald, journald, FleetValues.From(first.Settings))))
         {
             await provisioning.ConvergeAsync();
         }
@@ -184,7 +185,7 @@ public sealed class AgentMemoryTests
         var second = new AgentMemory(files.Store, new RecordingLog(), clock);
         using var afterReboot = new ReconcileHarness(
             Fast,
-            new JournalStorageResource(system.Files, FleetValues.From(second.Settings)));
+            new JournalStorageResource(system.Files, journald, journald, FleetValues.From(second.Settings)));
 
         var outcome = await afterReboot.ConvergeAsync();
 
@@ -199,11 +200,14 @@ public sealed class AgentMemoryTests
         // The counterfactual, so the test above cannot pass for the wrong reason. This is the
         // measured behaviour before the memory existed.
         using var system = new TemporaryFiles();
+        var journald = new FakeJournald(system.Files);
 
         using (var provisioning = new ReconcileHarness(
             Fast,
             new JournalStorageResource(
                 system.Files,
+                journald,
+                journald,
                 FleetValues.From(new Dictionary<string, string>(StringComparer.Ordinal)
                 {
                     [JournalStorageResource.SettingKey] = "128M",
@@ -212,7 +216,9 @@ public sealed class AgentMemoryTests
             await provisioning.ConvergeAsync();
         }
 
-        using var afterReboot = new ReconcileHarness(Fast, new JournalStorageResource(system.Files, FleetValues.None));
+        using var afterReboot = new ReconcileHarness(
+            Fast,
+            new JournalStorageResource(system.Files, journald, journald, FleetValues.None));
         await afterReboot.ConvergeAsync();
 
         Assert.Single(afterReboot.Boundary.Crossings);

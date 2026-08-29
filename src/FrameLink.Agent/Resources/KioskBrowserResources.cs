@@ -773,28 +773,14 @@ public sealed class ChromiumKioskRunningResource : IResource
     /// One <c>Property=value</c> line out of a <c>systemctl show</c> answer, or null.
     /// </summary>
     /// <remarks>
-    /// Kept beside <see cref="MainPidIn"/> rather than shared with
-    /// <see cref="ConsoleAutologinResource.ActiveStateIn"/>'s private reader, because the two
-    /// resources ask different managers different questions and a shared parser would be one type
-    /// coupling them for the sake of nine lines.
+    /// Kept as a member here because this resource's callers read it, and delegating rather than
+    /// holding a second body because <c>unit.fl-agent.running-matches-content</c> now asks the
+    /// <i>system</i> manager for the same shape of answer. The parsing is the same either way —
+    /// <c>systemctl show</c> renders one <c>Property=value</c> line per property whichever manager
+    /// is answering — so what would have been coupled by sharing is nothing, and what is avoided is
+    /// two readers that can drift.
     /// </remarks>
-    public static string? PropertyIn(string shown, string name)
-    {
-        ArgumentNullException.ThrowIfNull(shown);
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-
-        var prefix = name + "=";
-
-        foreach (var line in shown.Split('\n'))
-        {
-            if (line.StartsWith(prefix, StringComparison.Ordinal))
-            {
-                return line[prefix.Length..].Trim() is { Length: > 0 } value ? value : null;
-            }
-        }
-
-        return null;
-    }
+    public static string? PropertyIn(string shown, string name) => SystemdUnits.PropertyIn(shown, name);
 
     /// <summary>
     /// A bounded rendering of an argument vector, for the observation that reports a mismatch.

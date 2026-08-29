@@ -60,11 +60,6 @@ public static class UnitInstaller
         ArgumentException.ThrowIfNullOrWhiteSpace(unitPath);
 
         var unit = ReadUnit();
-        var directory = Path.GetDirectoryName(unitPath);
-        if (!string.IsNullOrEmpty(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
 
         // Idempotent by construction: writing identical content produces an identical file, and
         // `systemctl enable` on an already-enabled unit is a no-op.
@@ -114,15 +109,30 @@ public static class UnitInstaller
     /// </para>
     /// <para>
     /// A failure before the rename leaves a stale staging file and does not touch the unit, which
-    /// is the trade this shape exists to make: the next install truncates the staging file, and
-    /// the unit systemd already loaded is still the whole one it had. It runs today only from
-    /// <c>fl-agent install</c>, with a person at the terminal to see the exception — which is an
-    /// argument about who is watching, not about what the file is left as, and it does not
-    /// survive the next caller.
+    /// is the trade this shape exists to make: the next write truncates the staging file, and the
+    /// unit systemd already loaded is still the whole one it had.
+    /// </para>
+    /// <para>
+    /// <b>It has two callers now, and that is why it is public.</b> <c>fl-agent install</c> is the
+    /// original, run by a person at a terminal; <c>unit.fl-agent.content</c> is the second, run by
+    /// the reconcile loop on a frame with nobody watching. Sharing this one write is the point —
+    /// the resource that repairs the unit and the verb that first installs it produce identical
+    /// bytes through an identical stage-flush-rename, so they cannot disagree about either. A
+    /// second implementation inside the resource would have been a second chance to write the one
+    /// file whose partial write costs the frame its agent.
     /// </para>
     /// </remarks>
-    private static async Task WriteUnitAsync(string unitPath, string unit, CancellationToken cancellationToken)
+    public static async Task WriteUnitAsync(string unitPath, string unit, CancellationToken cancellationToken)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(unitPath);
+        ArgumentNullException.ThrowIfNull(unit);
+
+        var directory = Path.GetDirectoryName(unitPath);
+        if (!string.IsNullOrEmpty(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
         var staging = unitPath + StagingSuffix;
 
         await using (var file = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None))
