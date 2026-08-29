@@ -20,13 +20,13 @@ sits in files untouched since 16 August.
 ## 1. Is the resource graph's execution order deterministic?
 
 **Yes. Completely, and by construction rather than by accident.** Two runs of the same build on
-the same frame visit the 82 resources in exactly the same order, every pass, every boot.
+the same frame visit the 83 resources in exactly the same order, every pass, every boot.
 
 Four facts hold it in place, and all four are in the code:
 
 1. **The catalog is a hand-written list literal, not a scan.** `DeviceCatalog.Build`
    (`src/FrameLink.Agent/Resources/DeviceCatalog.cs:217-357`) returns a collection expression —
-   82 constructor calls in a fixed textual order, spliced with four sub-builders
+   83 constructor calls in a fixed textual order, spliced with four sub-builders
    (`PackageCatalog.Build`, `KioskStack`, `AudioCatalog.Build`, `AppConfigCatalog.Build`). There
    is no reflection, no assembly scan, no dependency-injection container and no
    `Dictionary`/`HashSet` enumeration anywhere in the construction path. The sub-builders are
@@ -454,7 +454,7 @@ answer" — they schedule the waiting rather than end it.**
 3. **Build-time validation.** Duplicate ids, dangling dependencies and cycles all throw at
    construction with an actionable message (`ResourceGraph.cs:64-88,182-192`). A cycle names the
    whole stuck set rather than "found a back edge" (`:107-111`).
-4. **Edit safety.** The catalog is 82 constructor calls across five files. The sort is what makes
+4. **Edit safety.** The catalog is 83 constructor calls across five files. The sort is what makes
    `cpu.governor` land after its unit and its enablement *whatever order somebody edits the list
    into* — the test asserts precisely that (`AgentResourceGraphTests.cs:227-233`).
 
@@ -775,3 +775,20 @@ call, which is the case it now defends against.
 this session, so the Linux half of the process-tree behaviour — including the orphan case that
 Windows handles and Linux cannot — is reasoned from the kernel's reparenting rule and the .NET
 implementation, not measured.
+
+---
+
+## Correction, 2026-08-29
+
+**The count above was 82 when the previous correction was written and is 83.**
+`apt.daily-timers.enabled-and-active` landed as the answer to
+[`outside-the-dag-review.md`](outside-the-dag-review.md) item 39 — the frame reconciled apt's
+configuration while nothing asserted that the two systemd timers consuming it were still enabled
+and running, so a frame whose `apt-daily.timer` had been disabled or masked reported a fully green
+apt block and silently stopped receiving security updates. It declares no dependency, so it
+changes no edge and no order: it is declared at position 32, beside the two apt configuration
+resources it completes, and the walk order is still the declaration order verbatim.
+
+Only the three resource counts are corrected here. Every file-and-line citation in this document
+still stands as the previous correction left it — verified against the tree of 2026-08-24 and
+stale by line number since, which is why each one also names its identifier.

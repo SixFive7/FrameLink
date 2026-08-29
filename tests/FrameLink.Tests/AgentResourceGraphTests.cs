@@ -217,7 +217,13 @@ public sealed class AgentResourceGraphTests
         // gate — IResource.IsGate — so it costs no attempts and no reboots on its way there, which
         // is the objection decision 90 raised against firmware in the graph and the reason it can
         // be answered now.
-        Assert.Equal(82, graph.Count);
+        // 83 since the apt timers came in. `reference/outside-the-dag-review.md` item 39 is the one
+        // entry in that review with no recommendation attached, and the gap it named is that the
+        // frame reconciles apt's configuration while nothing asserts the timers that consume it are
+        // running: a frame whose apt-daily.timer was disabled reported green for ever and silently
+        // stopped taking security updates. Unlike the recognition gate this one is an ordinary
+        // resource — observing it is a status query and `systemctl enable --now` plainly works.
+        Assert.Equal(83, graph.Count);
         Assert.Contains(ArrayRecognitionResource.ResourceName, graph.Ordered.Select(resource => resource.Name));
         Assert.True(graph.Find(ArrayRecognitionResource.ResourceName)!.IsGate);
 
@@ -328,7 +334,12 @@ public sealed class AgentResourceGraphTests
         // decision it took: measured on the mule 2026-08-16, a frame whose Immich account owns no
         // assets and sees photos only through a shared album selected nothing, for ever, and said
         // so about seven times a second.
-        var extra = new[] { "agent.device-name", "kiosk.config.albums" };
+        //
+        // `apt.daily-timers.enabled-and-active` — the two systemd timers that run the unattended
+        // upgrade. The document enumerates the apt *configuration* it inherited from guide 12 and
+        // stops there; the timers were left to the stock image, which is exactly the gap
+        // `reference/outside-the-dag-review.md` item 39 found and the operator approved closing.
+        var extra = new[] { "agent.device-name", "kiosk.config.albums", AptDailyTimersResource.ResourceName };
 
         var document = ResourceCatalogDocument.Ids();
         Assert.Equal(81, document.Count);

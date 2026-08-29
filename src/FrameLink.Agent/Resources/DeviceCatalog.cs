@@ -301,6 +301,16 @@ public static class DeviceCatalog
             new AptAutoUpgradesResource(context.Files, context.Processes, context.Values),
             new UnattendedUpgradesPolicyResource(context.Files, context.Processes, context.Values),
 
+            // No position of its own in the catalog document, which never had this entry: the two
+            // resources above reconcile apt's *configuration*, and nothing asserted that the timers
+            // which consume it are still running. A frame whose apt-daily.timer had been disabled or
+            // masked reported a fully green apt block and silently stopped receiving security
+            // updates — `reference/outside-the-dag-review.md` item 39, which the operator approved
+            // closing. Declared here because it is read beside the two it completes; it takes no
+            // edge from them, so this placement is reading order and nothing else, and it moves
+            // nothing that was already here.
+            new AptDailyTimersResource(context.SystemControl),
+
             new HostnameResource(context.Files, context.Processes, context.Values, context.FallbackHostname),
 
             // Guide 4 step 1, which the catalog schedules here rather than with the rest of the

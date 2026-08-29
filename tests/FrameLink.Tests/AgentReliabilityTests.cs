@@ -259,6 +259,227 @@ public sealed class AgentReliabilityTests
     }
 
     [Fact]
+    public async Task Both_apt_timers_have_to_be_enabled_and_active_before_the_frame_is_taking_security_updates()
+    {
+        // The gap `reference/outside-the-dag-review.md` item 39 names: the two resources above
+        // reconcile apt's configuration, and a frame whose timers had been switched off satisfied
+        // both of them while never installing another fix. All four of the states below are frames
+        // that report a perfect apt configuration.
+        var systemd = new FakeTimerUnits();
+        var resource = new AptDailyTimersResource(systemd);
+
+        Assert.True((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        // One of the two is enough to stop the frame receiving updates, and it is the case a check
+        // that looked at only the first timer — or let the last answer overwrite the verdict —
+        // would call healthy.
+        systemd.Set(AptDailyTimersResource.UpgradeTimer, "disabled", "inactive");
+        var half = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.False(half.InSync);
+        Assert.Contains("apt-daily-upgrade.timer is disabled and inactive", half.Observed, StringComparison.Ordinal);
+        Assert.Contains("apt-daily.timer is enabled and active", half.Observed, StringComparison.Ordinal);
+
+        // The mirror image, so neither position in the pair is the only one being read.
+        systemd.Set(AptDailyTimersResource.UpgradeTimer, "enabled", "active");
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "disabled", "inactive");
+        Assert.False((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        // Enabled and not running: it will fire again after the next restart and not before, which
+        // on a frame that reboots when the reconciler tells it to can be a very long time.
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "enabled", "inactive");
+        var idle = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.False(idle.InSync);
+        Assert.Contains("apt-daily.timer is enabled and inactive", idle.Observed, StringComparison.Ordinal);
+
+        // And the state that most resembles success: enabled under /run, which is a tmpfs. It is
+        // armed right now, it reads as enabled to anything asking for a boolean, and it is gone at
+        // the next boot — so accepting it would put back exactly the silent stop being fixed here.
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "enabled-runtime", "active");
+        var runtime = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+        Assert.False(runtime.InSync);
+        Assert.Contains("apt-daily.timer is enabled-runtime and active", runtime.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Arming_the_timers_enables_and_starts_them_in_one_call_and_the_verify_agrees()
+    {
+        var systemd = new FakeTimerUnits();
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "disabled", "inactive");
+        systemd.Set(AptDailyTimersResource.UpgradeTimer, "disabled", "inactive");
+
+        var resource = new AptDailyTimersResource(systemd);
+        Assert.False((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+
+        var action = await resource.ActAsync(TestContext.Current.CancellationToken);
+
+        // `--now` and not a bare `enable`: enable alone writes the timers.target want and leaves
+        // the frame not running the timer until something restarts it.
+        Assert.Contains("enable --now apt-daily.timer", systemd.Commands);
+        Assert.Contains("enable --now apt-daily-upgrade.timer", systemd.Commands);
+        Assert.Contains("systemctl enable --now apt-daily.timer", action.Change, StringComparison.Ordinal);
+        Assert.Contains("security fixes", action.Gloss, StringComparison.Ordinal);
+
+        // Observe is the Verify (§2.3), and it is reading a model that the enable genuinely
+        // changed rather than a canned second answer.
+        Assert.True((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);
+    }
+
+    [Fact]
+    public async Task A_masked_timer_is_named_in_the_delta_with_the_unmask_and_is_never_enabled_around()
+    {
+        // Masking points the unit at /dev/null and `systemctl enable` refuses against it, so an Act
+        // that tried anyway would spend three attempts and three reboots to reach an escalation
+        // whose delta said only that the timer is not enabled. The mask is somebody's deliberate
+        // change; this resource reports it and does not reverse it.
+        var systemd = new FakeTimerUnits();
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "masked", "inactive");
+
+        var resource = new AptDailyTimersResource(systemd);
+        var observation = await resource.ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("apt-daily.timer is masked and inactive", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("systemctl unmask apt-daily.timer", observation.Observed, StringComparison.Ordinal);
+        Assert.Contains("deliberate override", observation.Observed, StringComparison.Ordinal);
+
+        var action = await resource.ActAsync(TestContext.Current.CancellationToken);
+
+        // The healthy half of the pair is still repaired. Refusing the whole Act because one unit
+        // is masked would leave a second, ordinary fault sitting behind the first one.
+        Assert.DoesNotContain("enable --now apt-daily.timer", systemd.Commands);
+        Assert.Contains("enable --now apt-daily-upgrade.timer", systemd.Commands);
+        Assert.Contains("left masked", action.Change, StringComparison.Ordinal);
+        Assert.Contains("only a person", action.Gloss, StringComparison.Ordinal);
+
+        // masked-runtime is the same refusal written under /run, and reading only the first
+        // spelling would send the agent into the enable-fails-every-time loop for half of them.
+        Assert.True(AptTimerState.IsMasked("masked-runtime"));
+        Assert.False(AptTimerState.IsMasked("disabled"));
+    }
+
+    [Fact]
+    public async Task A_timer_that_is_not_on_the_frame_at_all_reports_systemds_own_sentence_about_it()
+    {
+        // `is-enabled` exits non-zero for disabled, for masked and for a unit that does not exist
+        // alike, so the exit code cannot tell them apart. Anything unrecognised has to travel
+        // verbatim rather than being collapsed into a word this code invented.
+        var systemd = new FakeTimerUnits();
+        systemd.Remove(AptDailyTimersResource.UpgradeTimer);
+
+        var observation = await new AptDailyTimersResource(systemd)
+            .ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(observation.InSync);
+        Assert.Contains("No such file or directory", observation.Observed, StringComparison.Ordinal);
+
+        // And a systemctl that answers nothing at all — the shape a service manager that has
+        // stopped responding produces — says so rather than being read as an empty state name.
+        var silent = await new AptDailyTimersResource(new RecordingSystemControl())
+            .ObserveAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(silent.InSync);
+        Assert.Contains("no answer from systemctl", silent.Observed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_timer_resource_declares_no_edge_and_sits_with_the_other_apt_resources()
+    {
+        // Read through the interface, because both members below are interface defaults the
+        // resource deliberately does not override — which is the assertion.
+        IResource resource = new AptDailyTimersResource(new RecordingSystemControl());
+
+        // The catalog's dash, and not an omission. The timers ship with apt, are on every frame,
+        // and `systemctl enable --now` succeeds against them whatever apt's configuration says, so
+        // there is no prerequisite whose absence could make this fail confusingly — which is the
+        // whole job of DependsOn. An edge on apt.auto-upgrades-enabled would also be actively
+        // harmful: a dependent of a resource that is not in sync is Blocked, so a frame whose
+        // 20auto-upgrades could not be read would hide a masked timer behind a blocked row, one
+        // silent stop concealing another.
+        Assert.Empty(resource.DependsOn);
+
+        // Not a gate: observing is a status query and `systemctl enable --now` plainly works, which
+        // is exactly the distinction IResource.IsGate draws.
+        Assert.False(resource.IsGate);
+
+        using var files = new TemporaryFiles();
+        var order = DeviceCatalog.BuildGraph(AgentResourceGraphTests.Context(files))
+            .Ordered
+            .Select(item => item.Name)
+            .ToList();
+
+        Assert.True(order.IndexOf(AptAutoUpgradesResource.ResourceName)
+            < order.IndexOf(AptDailyTimersResource.ResourceName));
+        Assert.True(order.IndexOf(UnattendedUpgradesPolicyResource.ResourceName)
+            < order.IndexOf(AptDailyTimersResource.ResourceName));
+        Assert.True(order.IndexOf(AptDailyTimersResource.ResourceName)
+            < order.IndexOf(HostnameResource.ResourceName));
+    }
+
+    [Fact]
+    public async Task Switched_off_timers_converge_across_the_reboot_the_ladder_takes()
+    {
+        var systemd = new FakeTimerUnits();
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "disabled", "inactive");
+        systemd.Set(AptDailyTimersResource.UpgradeTimer, "disabled", "inactive");
+
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = TimeSpan.Zero, AttemptBudget = 3 },
+            new AptDailyTimersResource(systemd));
+
+        var outcome = await harness.ConvergeAsync();
+
+        // §2.4: every resource reboots, and the verify that matters is the one on the far side of
+        // it. This converges rather than escalating, and it crosses the boundary to do it.
+        Assert.Equal(PassResult.Converged, outcome.Result);
+        Assert.NotEmpty(harness.Boundary.Crossings);
+        Assert.Equal(
+            ResourceStatusKind.InSync,
+            ReconcileHarness.StatusOf(outcome, AptDailyTimersResource.ResourceName).Kind);
+    }
+
+    [Fact]
+    public async Task A_masked_timer_reaches_a_person_with_the_command_that_fixes_it()
+    {
+        var systemd = new FakeTimerUnits();
+        systemd.Set(AptDailyTimersResource.RefreshTimer, "masked", "inactive");
+        systemd.Set(AptDailyTimersResource.UpgradeTimer, "masked", "inactive");
+
+        using var harness = new ReconcileHarness(
+            new ReconcileOptions { Countdown = TimeSpan.Zero, AttemptBudget = 3 },
+            new AptDailyTimersResource(systemd));
+
+        var outcome = await harness.ConvergeAsync();
+        var status = ReconcileHarness.StatusOf(outcome, AptDailyTimersResource.ResourceName);
+
+        // It still walks the ladder to a person, because a frame that is not receiving security
+        // updates is a fault however deliberately it was caused. What §2.5 requires is that the
+        // delta reaching that person names the cause and the command rather than the symptom.
+        Assert.True(status.Kind.HasGivenUp());
+        Assert.Contains("systemctl unmask", status.Delta!, StringComparison.Ordinal);
+
+        // §2.7's two registers, both on the row: the plain half says what stopped happening rather
+        // than what a timer is, and the technical half is the exact expected-versus-observed.
+        Assert.Equal(
+            "This frame has stopped looking for its own security fixes, so it is not getting them any more.",
+            status.Detected);
+        Assert.Contains("apt-daily.timer is enabled and active", status.Delta!, StringComparison.Ordinal);
+        Assert.Contains("apt-daily.timer is masked and inactive", status.Delta!, StringComparison.Ordinal);
+
+        // Both masked names both, in one unmask a person can paste, rather than repeating a
+        // singular sentence twice or naming only the first one it found.
+        Assert.Contains(
+            "apt-daily.timer and apt-daily-upgrade.timer are masked",
+            status.Delta!,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "systemctl unmask apt-daily.timer apt-daily-upgrade.timer",
+            status.Delta!,
+            StringComparison.Ordinal);
+        Assert.StartsWith("Both of this frame's daily checks", status.Gloss!, StringComparison.Ordinal);
+        Assert.DoesNotContain(systemd.Commands, command => command.StartsWith("enable ", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task A_lost_keypair_is_refused_rather_than_regenerated()
     {
         using var files = new TemporaryFiles();
@@ -644,4 +865,97 @@ public sealed class AgentReliabilityTests
             Assert.Contains($"{pair.Key}={pair.Value}", block, StringComparison.Ordinal);
         }
     }
+}
+
+/// <summary>
+/// systemd's timer half, modelled rather than scripted.
+/// </summary>
+/// <remarks>
+/// <para>
+/// A table of canned answers cannot produce the fault <see cref="AptDailyTimersResource"/> exists
+/// to catch, because the whole question is whether an <c>enable</c> that was issued actually
+/// changed what the next <c>is-enabled</c> reports. So this holds unit state: <c>enable --now</c>
+/// really moves a unit to enabled and active, a masked unit really refuses it and stays masked —
+/// which is systemd's own behaviour and the reason the Act reads the enablement before acting on
+/// it — and a unit that is not on the frame answers in systemd's own words rather than in a word
+/// this suite invented.
+/// </para>
+/// <para>
+/// It answers <c>is-enabled</c>, <c>is-active</c> and <c>enable</c> and nothing else. Anything
+/// further would be modelling systemd rather than the two questions this resource asks of it.
+/// </para>
+/// </remarks>
+internal sealed class FakeTimerUnits : ISystemControl
+{
+    private readonly Dictionary<string, (string Enablement, string Activity)> _units = new(StringComparer.Ordinal);
+
+    /// <summary>Both apt timers as a stock Debian image ships them.</summary>
+    public FakeTimerUnits()
+    {
+        foreach (var timer in AptDailyTimersResource.Timers)
+        {
+            _units[timer] = (AptTimerState.EnabledState, AptTimerState.ActiveState);
+        }
+    }
+
+    /// <summary>Every argument vector this has been asked to run, in order.</summary>
+    public List<string> Commands { get; } = [];
+
+    /// <summary>Puts a unit into a given state.</summary>
+    public void Set(string unit, string enablement, string activity) => _units[unit] = (enablement, activity);
+
+    /// <summary>Takes a unit off the frame entirely.</summary>
+    public void Remove(string unit) => _units.Remove(unit);
+
+    public Task<SystemControlResult> RunAsync(
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(arguments);
+        Commands.Add(string.Join(' ', arguments));
+
+        var unit = arguments[^1];
+        var known = _units.TryGetValue(unit, out var state);
+
+        switch (arguments[0])
+        {
+            case "is-enabled":
+                // systemctl says this on standard error and exits 1; SystemControlResult.Output is
+                // output and error together, so the sentence is what the resource reads.
+                return Answer(
+                    known && string.Equals(state.Enablement, AptTimerState.EnabledState, StringComparison.Ordinal),
+                    known ? state.Enablement : $"Failed to get unit file state for {unit}: No such file or directory");
+
+            case "is-active":
+                // `is-active` on a unit that does not exist prints `inactive` and exits 3, which is
+                // why enablement is the half that can tell a missing unit from a disabled one.
+                return Answer(
+                    known && string.Equals(state.Activity, AptTimerState.ActiveState, StringComparison.Ordinal),
+                    known ? state.Activity : "inactive");
+
+            case "enable":
+                if (!known)
+                {
+                    return Answer(false, $"Failed to enable unit: Unit file {unit} does not exist.");
+                }
+
+                if (AptTimerState.IsMasked(state.Enablement))
+                {
+                    // The refusal that makes the mask worth telling apart at all: enable does not
+                    // undo a mask, and the unit is still masked afterwards.
+                    return Answer(false, $"Failed to enable unit: Unit file {unit} is masked.");
+                }
+
+                _units[unit] = (
+                    AptTimerState.EnabledState,
+                    arguments.Contains("--now") ? AptTimerState.ActiveState : state.Activity);
+                return Answer(true, string.Empty);
+
+            default:
+                return Answer(true, string.Empty);
+        }
+    }
+
+    private static Task<SystemControlResult> Answer(bool succeeded, string output) =>
+        Task.FromResult(new SystemControlResult(succeeded, output));
 }

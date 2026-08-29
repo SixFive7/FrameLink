@@ -665,6 +665,273 @@ public sealed class UnattendedUpgradesPolicyResource : IResource
 }
 
 /// <summary>
+/// What systemd says about one of the two apt timers.
+/// </summary>
+/// <param name="Unit">The unit name, as systemd knows it.</param>
+/// <param name="Enablement"><c>systemctl is-enabled</c>'s answer, verbatim.</param>
+/// <param name="Activity"><c>systemctl is-active</c>'s answer, verbatim.</param>
+/// <remarks>
+/// <b>Both words are carried unparsed.</b> systemd has a dozen spellings for the first and eight
+/// for the second, and only one of each is the good one — so a type that reduced them to a boolean
+/// would report <c>enabled-runtime</c>, <c>static</c> and <c>Failed to get unit file state for
+/// apt-daily.timer</c> as one indistinguishable "no", which is exactly the flattening that leaves
+/// a delta useless to the person who has to act on it.
+/// </remarks>
+public readonly record struct AptTimerState(string Unit, string Enablement, string Activity)
+{
+    /// <summary>The enablement word that means the timer comes back after a reboot.</summary>
+    public const string EnabledState = "enabled";
+
+    /// <summary>The activity word that means the timer is armed right now.</summary>
+    public const string ActiveState = "active";
+
+    /// <summary>
+    /// Whether the timer is armed now <i>and</i> will still be armed after the next boot.
+    /// </summary>
+    /// <remarks>
+    /// <b><c>enabled-runtime</c> is deliberately not accepted.</b> It is systemd's word for an
+    /// enablement written under <c>/run</c>, which is a tmpfs: the timer looks enabled to anything
+    /// reading a boolean and is gone at the next boot. That is the precise shape of the fault this
+    /// resource exists to catch — a frame that reports green and quietly stops receiving fixes —
+    /// so the one state that most resembles success is the one the comparison has to reject.
+    /// </remarks>
+    public bool InSync =>
+        string.Equals(Enablement, EnabledState, StringComparison.Ordinal)
+        && string.Equals(Activity, ActiveState, StringComparison.Ordinal);
+
+    /// <summary>Whether somebody pointed this unit at <c>/dev/null</c>.</summary>
+    public bool Masked => IsMasked(Enablement);
+
+    /// <summary>Whether an enablement word is one of systemd's two masked spellings.</summary>
+    /// <remarks>
+    /// Both spellings, because <c>masked-runtime</c> is a mask written under <c>/run</c> and
+    /// behaves identically for the only question asked of it here: <c>systemctl enable</c> refuses
+    /// against it. Reading only the first spelling would send the agent into the
+    /// enable-fails-three-times loop for exactly the masks that are temporary.
+    /// </remarks>
+    public static bool IsMasked(string enablement) => enablement is "masked" or "masked-runtime";
+
+    /// <summary>What one unit looks like on a frame that is receiving security updates.</summary>
+    public static string Desired(string unit) => $"{unit} is {EnabledState} and {ActiveState}";
+
+    /// <summary>The two words in the form an operator reads in a delta.</summary>
+    public string Describe() => $"{Unit} is {Enablement} and {Activity}";
+}
+
+/// <summary>
+/// <c>apt.daily-timers.enabled-and-active</c> — the timers that actually run the unattended
+/// upgrade.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>The two resources above reconcile a policy that nothing checked was ever executed.</b>
+/// <see cref="AptAutoUpgradesResource"/> asserts that the <c>APT::Periodic</c> switches are on and
+/// <see cref="UnattendedUpgradesPolicyResource"/> asserts which origins may install themselves,
+/// and both of those are read by <c>/usr/lib/apt/apt.systemd.daily</c> — a script that runs when
+/// systemd starts it and at no other time. A frame whose <c>apt-daily.timer</c> had been disabled
+/// or masked therefore had a perfectly converged, fully green apt configuration, reported itself
+/// healthy on every pass, and silently never received another security update. It is a Linux
+/// machine on the internet in somebody's living room, and <i>silently</i> is the whole of the
+/// fault.
+/// </para>
+/// <para>
+/// <b>Two timers, one resource, because they are only useful as a pair.</b>
+/// <c>apt-daily.timer</c> refreshes the package lists and <c>apt-daily-upgrade.timer</c> installs
+/// from them. A frame with only the first downloads a list of the fixes it is not applying; a
+/// frame with only the second installs from an index nothing refreshes. Neither half is a state
+/// this product ever wants to sit in, so splitting them would produce two rows that are only ever
+/// red together or green together, and would double what an operator reads to learn one thing.
+/// </para>
+/// <para>
+/// <b>A resource and not a gate, because observing is a status query and acting plainly works.</b>
+/// <c>systemctl is-enabled</c> and <c>is-active</c> are local reads that always have an answer,
+/// and <c>systemctl enable --now</c> is the whole repair — which is the distinction
+/// <see cref="IResource.IsGate"/> draws: a gate is a thing with no Act that could ever converge
+/// it, and this has one that converges it on the first attempt.
+/// </para>
+/// <para>
+/// <b>A masked timer is somebody's decision, and this resource does not overrule it.</b> Masking
+/// points the unit at <c>/dev/null</c>, and no <c>systemctl enable</c> undoes that — enable fails
+/// outright against a masked unit. So the Act reads the enablement first, leaves a masked timer
+/// alone, and names the <c>systemctl unmask</c> a person has to run; the alternative is three
+/// identical failed attempts, three reboots, and an escalation whose delta says only that the
+/// timer is not enabled. The resource still walks the ladder to a person, because a frame that is
+/// not receiving security updates is a fault however deliberately it was caused. What changes is
+/// that the sentence reaching the person names the cause and the command instead of the symptom.
+/// </para>
+/// <para>
+/// <b>It arms the carrier and never the policy, including when the operator has switched updates
+/// off.</b> With both <c>APT::Periodic</c> switches at <c>0</c> the timers still fire and
+/// <c>apt.systemd.daily</c> does nothing — the same inert shape the package ships in. So there is
+/// one Act here rather than an Act and its inverse, and
+/// <see cref="AptAutoUpgradesResource.SettingKey"/> stays the single place the operator's answer
+/// is expressed. Two resources that could each turn automatic updates off would be two places to
+/// look, and one of them would eventually be wrong.
+/// </para>
+/// <para>
+/// <b>No dependency at all, which is the catalog's <c>—</c> and is deliberate rather than an
+/// omission.</b>
+/// The obvious edge is on <c>apt.auto-upgrades-enabled</c>, and it is wrong twice over. It is
+/// wrong mechanically — the timers ship with <c>apt</c>, are on every frame, and
+/// <c>systemctl enable --now</c> succeeds against them whatever apt's configuration says, so
+/// there is nothing here that could fail confusingly for want of a prerequisite, which is what
+/// <see cref="IResource.DependsOn"/> exists to prevent. And it is wrong in the direction that
+/// matters: a dependent of a resource that is not in sync is marked
+/// <see cref="ResourceStatusKind.Blocked"/>, so a frame whose <c>20auto-upgrades</c> could not be
+/// read would hide a masked timer behind a blocked row — one silent stop concealing another,
+/// which is the exact failure mode this resource was added to end.
+/// </para>
+/// </remarks>
+public sealed class AptDailyTimersResource : IResource
+{
+    /// <summary>The catalog id.</summary>
+    public const string ResourceName = "apt.daily-timers.enabled-and-active";
+
+    /// <summary>The timer that refreshes the package lists.</summary>
+    public const string RefreshTimer = "apt-daily.timer";
+
+    /// <summary>The timer that installs what the origins policy allows.</summary>
+    public const string UpgradeTimer = "apt-daily-upgrade.timer";
+
+    private readonly ISystemControl _systemControl;
+
+    /// <summary>Creates the resource.</summary>
+    public AptDailyTimersResource(ISystemControl systemControl)
+    {
+        ArgumentNullException.ThrowIfNull(systemControl);
+        _systemControl = systemControl;
+    }
+
+    /// <summary>Both timers, in the order they run.</summary>
+    public static IReadOnlyList<string> Timers { get; } = [RefreshTimer, UpgradeTimer];
+
+    /// <inheritdoc/>
+    public string Name => ResourceName;
+
+    /// <inheritdoc/>
+    public string Detected => "This frame has stopped looking for its own security fixes, so it is not getting them any more.";
+
+    /// <inheritdoc/>
+    public string WhyItMatters => "It sits on the internet all day with nobody logging in to it, and those fixes are what keep it safe.";
+
+    /// <summary>What both timers look like on a frame that is receiving security updates.</summary>
+    public static string DesiredState() =>
+        AptTimerState.Desired(RefreshTimer) + "; " + AptTimerState.Desired(UpgradeTimer);
+
+    /// <inheritdoc/>
+    public async ValueTask<ResourceObservation> ObserveAsync(CancellationToken cancellationToken)
+    {
+        var described = new List<string>(Timers.Count);
+        var masked = new List<string>(Timers.Count);
+        var stopped = false;
+
+        foreach (var timer in Timers)
+        {
+            var state = new AptTimerState(
+                timer,
+                await AnswerAsync("is-enabled", timer, cancellationToken).ConfigureAwait(false),
+                await AnswerAsync("is-active", timer, cancellationToken).ConfigureAwait(false));
+
+            described.Add(state.Describe());
+
+            if (state.Masked)
+            {
+                masked.Add(timer);
+            }
+
+            // Every timer is read and every one of them has to be right. A frame where exactly one
+            // has stopped is the interesting case, and it is the one a check that stopped at the
+            // first answer — or overwrote its verdict with the last — would report as healthy.
+            if (!state.InSync)
+            {
+                stopped = true;
+            }
+        }
+
+        var observed = string.Join("; ", described);
+
+        return new ResourceObservation(
+            !stopped,
+            DesiredState(),
+            masked.Count == 0 ? observed : observed + " — " + MaskNote(masked));
+    }
+
+    /// <inheritdoc/>
+    public async ValueTask<ResourceAction> ActAsync(CancellationToken cancellationToken)
+    {
+        var changes = new List<string>(Timers.Count);
+        var masked = 0;
+
+        foreach (var timer in Timers)
+        {
+            var enablement = await AnswerAsync("is-enabled", timer, cancellationToken).ConfigureAwait(false);
+
+            if (AptTimerState.IsMasked(enablement))
+            {
+                masked++;
+                changes.Add($"{timer} left masked: reversing a mask is the decision of whoever made it, not this agent's");
+                continue;
+            }
+
+            // `enable` writes the timers.target want that survives the reboot, and `--now` starts
+            // it in the same call so the frame is fixed before §2.4's reboot rather than by it.
+            // The reboot is still what proves it, which is why Observe is also the Verify.
+            var result = await _systemControl
+                .RunAsync(["enable", "--now", timer], cancellationToken)
+                .ConfigureAwait(false);
+
+            changes.Add(result.Succeeded
+                ? $"systemctl enable --now {timer}"
+                : $"systemctl enable --now {timer} (refused: {result.Output})");
+        }
+
+        return new ResourceAction(string.Join(" · ", changes), Gloss(masked));
+    }
+
+    /// <summary>The plain half, which differs only by how much of it a person has to do.</summary>
+    private static string Gloss(int masked) => masked switch
+    {
+        0 => "Switching this frame's daily check for security fixes back on, and starting it now rather than waiting for the next restart.",
+        1 => "Switching one of this frame's two daily checks for security fixes back on. The other was switched off deliberately by somebody with access to this frame, and only a person can put that one back.",
+        _ => "Both of this frame's daily checks for security fixes were switched off deliberately by somebody with access to it, and only a person can put them back.",
+    };
+
+    /// <summary>The sentence that turns "not enabled" into something a person can act on.</summary>
+    private static string MaskNote(List<string> masked) =>
+        (masked.Count == 1 ? $"{masked[0]} is masked" : $"{string.Join(" and ", masked)} are masked")
+        + ", which is a deliberate override that 'systemctl enable' cannot undo; only 'systemctl unmask "
+        + string.Join(' ', masked)
+        + "' run by a person puts it back";
+
+    /// <summary>
+    /// One <c>systemctl</c> question, reduced to the line that answers it.
+    /// </summary>
+    /// <remarks>
+    /// <b>The text, not the exit code.</b> <c>is-enabled</c> exits non-zero for <c>disabled</c>,
+    /// for <c>masked</c> and for a unit that does not exist alike, so the exit code cannot tell
+    /// those three apart and the word systemd printed can. Anything unrecognised travels verbatim
+    /// rather than being collapsed: <see cref="SystemControlResult.Output"/> is standard output
+    /// followed by standard error, so a frame with no such unit puts systemd's own sentence about
+    /// it into the delta instead of a word this code invented.
+    /// </remarks>
+    private async Task<string> AnswerAsync(string question, string unit, CancellationToken cancellationToken)
+    {
+        var result = await _systemControl.RunAsync([question, unit], cancellationToken).ConfigureAwait(false);
+
+        foreach (var raw in result.Output.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length > 0)
+            {
+                return line;
+            }
+        }
+
+        return "no answer from systemctl";
+    }
+}
+
+/// <summary>
 /// Reading apt's <i>effective</i> configuration, which is the only version worth comparing.
 /// </summary>
 /// <remarks>
