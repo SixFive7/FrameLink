@@ -1,7 +1,21 @@
 root = true
 
+# ---------------------------------------------------------------------------
+# Line endings. LF everywhere, mirroring `* text=auto eol=lf` in .gitattributes.
+#
+# This has to sit under [*]. It used to be declared only under [*.{sh,bash}],
+# which covered none of the C#, Python, TypeScript, Svelte, JSON or markdown
+# that actually drifted to CRLF — and CRLF drift is invisible to git, because
+# a CRLF working tree cleans back to the committed LF blob and `git status`
+# reports nothing. .gitattributes decides what git stores; this decides what
+# an editor, `dotnet format` and prettier write back, which is the path the
+# drift actually took. LineEndingPolicyTests is the gate that catches whatever
+# gets past both.
+# ---------------------------------------------------------------------------
+
 [*]
 charset = utf-8
+end_of_line = lf
 indent_style = space
 indent_size = 4
 insert_final_newline = true
@@ -10,8 +24,13 @@ trim_trailing_whitespace = true
 [*.{json,jsonc,yml,yaml,svelte,ts,js,mjs,css,html,xml,csproj,props,targets,slnx}]
 indent_size = 2
 
-[*.{sh,bash}]
-end_of_line = lf
+# The single exception, and the same one .gitattributes carves out with
+# `*.bat`/`*.cmd text eol=crlf`: cheap insurance for older cmd.exe hosts.
+# Required to be CRLF, not merely tolerated — the suite checks this direction
+# too, so an LF fl.cmd fails exactly as a CRLF .cs file does.
+
+[*.{bat,cmd}]
+end_of_line = crlf
 
 [*.cs]
 csharp_style_namespace_declarations = file_scoped:warning
