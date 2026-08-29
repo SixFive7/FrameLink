@@ -633,13 +633,13 @@ internal sealed class UnwritableStore : IStateStore
 
     public string? ReadText(string name) => _inner.ReadText(name);
 
-    public void WriteSecret(string name, ReadOnlySpan<byte> content) => throw new IOException("No space left on device.");
-
     public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) => throw new IOException("No space left on device.");
 
     public void WriteText(string name, string content) => throw new IOException("No space left on device.");
 
     public void Delete(string name) => _inner.Delete(name);
+
+    public bool TryRename(string name, string newName) => throw new IOException("No space left on device.");
 
     public string PathOf(string name) => _inner.PathOf(name);
 }

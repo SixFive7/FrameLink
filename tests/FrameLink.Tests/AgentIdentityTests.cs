@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Security.Cryptography;
 using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Identity;
@@ -96,13 +97,19 @@ public sealed class AgentIdentityTests
         // different device — with nobody told. §3.3 makes identity permanent, so the honest answer
         // is to stop.
         using var temporary = new TemporaryStore();
-        temporary.Store.WriteSecret(DeviceKeyStore.KeyFileName, "this is not a PKCS#8 key"u8);
+        temporary.Store.WriteSecretAtomic(DeviceKeyStore.KeyFileName, "this is not a PKCS#8 key"u8);
         var before = temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName)!;
 
         Assert.ThrowsAny<CryptographicException>(() =>
             DeviceKeyStore.LoadOrCreate(temporary.Store, NullLog.Instance));
 
         Assert.Equal(before, temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName));
+
+        // And nothing was set aside. The first-boot recovery moves a key it has just
+        // written; a key that was already on the card when the call began is out of its
+        // reach, and a rejected file appearing here would be the proof it had stopped
+        // being.
+        Assert.False(temporary.Store.Exists(DeviceKeyStore.RejectedKeyFileName));
     }
 
     [Fact]
@@ -291,6 +298,240 @@ public sealed class AgentIdentityTests
         Assert.DoesNotContain("generated on first boot", log.Transcript, StringComparison.Ordinal);
     }
 
+    // -----------------------------------------------------------------------------------------
+    // A first-boot key that fails its own read-back is set aside, and only that key ever is
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void A_key_that_fails_its_own_read_back_is_set_aside_and_a_fresh_identity_is_minted()
+    {
+        // The frame this is for: a card that took the first write badly on the very first boot.
+        // Before, that frame threw on every boot forever and needed somebody to drive to it and
+        // delete a file. The key it refuses to keep was generated seconds earlier, has never been
+        // sent to a Fleet Manager and appears in no record anywhere, so replacing it orphans
+        // nothing — which is the entire reason this one case may be repaired and a load failure
+        // may not.
+        using var temporary = new TemporaryStore();
+        var log = new RecordingLog();
+        var attempts = 0;
+        var onlyTheFirstWrite = new DamagingStore(
+            temporary.Store,
+            bytes => attempts++ == 0 ? bytes[..(bytes.Length / 2)] : bytes);
+
+        using var identity = DeviceKeyStore.LoadOrCreate(onlyTheFirstWrite, log);
+
+        // A usable identity, and the file holds exactly it.
+        Assert.Equal(19, identity.DeviceId.Length);
+        using var reread = ECDsa.Create();
+        reread.ImportPkcs8PrivateKey(temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName), out _);
+        Assert.Equal(identity.PublicKeyBase64, Convert.ToBase64String(reread.ExportSubjectPublicKeyInfo()));
+
+        // Loudly. A frame that quietly changed identity is the failure §3.3 is about, so the
+        // journal carries both the refusal and the fact that a second key was minted.
+        Assert.Contains("Fail:", log.Transcript, StringComparison.Ordinal);
+        Assert.Contains("Warn:", log.Transcript, StringComparison.Ordinal);
+        Assert.Contains(
+            temporary.Store.PathOf(DeviceKeyStore.RejectedKeyFileName),
+            log.Transcript,
+            StringComparison.Ordinal);
+
+        // And still nothing derived from a private key anywhere in it.
+        var stored = temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName)!;
+        Assert.DoesNotContain(Convert.ToBase64String(stored), log.Transcript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_key_that_was_set_aside_is_kept_byte_for_byte_under_a_name_nothing_reads()
+    {
+        // Evidence, not cleanup. Deleting the rejected key would let the frame come up and would
+        // destroy the only record of what the card did with a write it said it had accepted; a
+        // copy would put a second private key on the volume. A rename preserves the bytes without
+        // duplicating them, which is why it is a rename.
+        using var temporary = new TemporaryStore();
+        var attempts = 0;
+        var damaged = "not the key that was generated"u8.ToArray();
+        var onlyTheFirstWrite = new DamagingStore(
+            temporary.Store,
+            bytes => attempts++ == 0 ? damaged : bytes);
+
+        using var identity = DeviceKeyStore.LoadOrCreate(onlyTheFirstWrite, NullLog.Instance);
+
+        Assert.Equal(damaged, temporary.Store.ReadBytes(DeviceKeyStore.RejectedKeyFileName));
+        Assert.NotEqual(damaged, temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName));
+        Assert.Equal(19, identity.DeviceId.Length);
+    }
+
+    [Fact]
+    public void The_rejected_key_is_a_sibling_of_the_key_so_setting_it_aside_stays_on_one_filesystem()
+    {
+        // The same argument the staging write rests on, and it has to hold here too: a rename
+        // across a mount point is a copy and a delete, which is neither atomic nor a way to keep
+        // the original bytes. PathOf refuses any name that could leave the root, so the two names
+        // are always in one directory.
+        using var temporary = new TemporaryStore();
+
+        var key = temporary.Store.PathOf(DeviceKeyStore.KeyFileName);
+        var rejected = temporary.Store.PathOf(DeviceKeyStore.RejectedKeyFileName);
+
+        Assert.Equal(Path.GetDirectoryName(key), Path.GetDirectoryName(rejected));
+        Assert.Equal(temporary.Root, Path.GetDirectoryName(rejected));
+        Assert.StartsWith(DeviceKeyStore.KeyFileName, DeviceKeyStore.RejectedKeyFileName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_second_key_that_will_not_read_back_is_refused_rather_than_overwriting_the_first()
+    {
+        // Exactly one recovery, and what bounds it is the shape of the code rather than a
+        // counter: the second attempt is made outside the catch, so its own failure has nowhere
+        // to be caught and leaves as the plain refusal. A card producing a second unreadable key
+        // has a fault a third key will not fix, and the first rejection is the more useful of
+        // the two to keep.
+        using var temporary = new TemporaryStore();
+        var log = new RecordingLog();
+        var written = new List<byte[]>();
+        var alwaysDamaged = new DamagingStore(
+            temporary.Store,
+            bytes =>
+            {
+                var damaged = bytes[..8];
+                written.Add(damaged);
+                return damaged;
+            });
+
+        Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(alwaysDamaged, log));
+
+        // Exactly two attempts: the first, and the one recovery it is allowed.
+        Assert.Equal(2, written.Count);
+
+        // And what was kept is the first failure, not the last one.
+        Assert.Equal(written[0], temporary.Store.ReadBytes(DeviceKeyStore.RejectedKeyFileName));
+        Assert.Equal(written[1], temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName));
+
+        // The refusal that leaves is the second failure said plainly, with no suggestion that
+        // anything was repaired — a frame that reaches here is stopped, exactly as it was
+        // before any of this existed.
+        Assert.Contains("does not read back as a key", log.Transcript, StringComparison.Ordinal);
+        Assert.DoesNotContain("on the second attempt", log.Transcript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_frame_that_already_has_a_rejected_key_is_given_no_second_recovery()
+    {
+        // How the frame reaches this: it set a key aside once, and later somebody — a person, a
+        // repair script — deleted device.key, so the next boot is a first boot again. If that key
+        // also fails to read back, the recovery is refused outright: the rejected file already
+        // there is the record of the original failure and is worth more than a second copy of the
+        // same symptom, and a frame failing this twice needs a person rather than a third key.
+        using var temporary = new TemporaryStore();
+        var log = new RecordingLog();
+        var attempts = 0;
+        temporary.Store.WriteSecretAtomic(
+            DeviceKeyStore.RejectedKeyFileName, "the key this frame set aside long ago"u8);
+
+        var alwaysDamaged = new DamagingStore(
+            temporary.Store,
+            bytes =>
+            {
+                attempts++;
+                return bytes[..8];
+            });
+
+        Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(alwaysDamaged, log));
+
+        // One attempt, no recovery, and the original evidence untouched.
+        Assert.Equal(1, attempts);
+        Assert.Equal(
+            "the key this frame set aside long ago"u8.ToArray(),
+            temporary.Store.ReadBytes(DeviceKeyStore.RejectedKeyFileName));
+        Assert.Contains(
+            "already holds a key this frame set aside once before",
+            log.Transcript,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_write_the_store_kept_nothing_of_sets_nothing_aside_and_mints_nothing_new()
+    {
+        // A store that accepted the bytes and kept none of them is the card failing rather than
+        // the key, and a second write onto it would only be a second key nobody has. There is
+        // also nothing left to preserve, so there is nothing here for this recovery to do.
+        using var temporary = new TemporaryStore();
+        var log = new RecordingLog();
+        var attempts = 0;
+        var swallowing = new DamagingStore(
+            temporary.Store,
+            _ =>
+            {
+                attempts++;
+                return null;
+            });
+
+        Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(swallowing, log));
+
+        Assert.Equal(1, attempts);
+        Assert.False(temporary.Store.Exists(DeviceKeyStore.RejectedKeyFileName));
+        Assert.False(temporary.Store.Exists(DeviceKeyStore.KeyFileName));
+        Assert.Contains("nothing to set aside", log.Transcript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void A_key_that_fails_to_load_is_refused_even_on_a_frame_that_once_set_one_aside()
+    {
+        // The distinction, asserted where it would actually be lost: on a frame that has already
+        // been through the recovery once. A later boot finds a key it cannot read — the card
+        // rotting under an identity the Fleet Manager knows, a fingerprint somebody wrote on a
+        // label — and the answer is still to stop. Nothing is renamed, nothing is minted, and the
+        // rejected file from the first boot is not disturbed either.
+        using var temporary = new TemporaryStore();
+        var attempts = 0;
+        var onlyTheFirstWrite = new DamagingStore(
+            temporary.Store,
+            bytes => attempts++ == 0 ? bytes[..16] : bytes);
+
+        using (var first = DeviceKeyStore.LoadOrCreate(onlyTheFirstWrite, NullLog.Instance))
+        {
+            Assert.Equal(19, first.DeviceId.Length);
+        }
+
+        var rejectedBefore = temporary.Store.ReadBytes(DeviceKeyStore.RejectedKeyFileName)!;
+
+        // Now the adopted key rots on the card, exactly as a damaged key would.
+        temporary.Store.WriteSecretAtomic(DeviceKeyStore.KeyFileName, "this used to be a key"u8);
+        var keyBefore = temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName)!;
+
+        Assert.ThrowsAny<CryptographicException>(() =>
+            DeviceKeyStore.LoadOrCreate(temporary.Store, NullLog.Instance));
+
+        Assert.Equal(keyBefore, temporary.Store.ReadBytes(DeviceKeyStore.KeyFileName));
+        Assert.Equal(rejectedBefore, temporary.Store.ReadBytes(DeviceKeyStore.RejectedKeyFileName));
+    }
+
+    [Fact]
+    public void The_load_path_is_handed_the_bytes_and_not_the_store()
+    {
+        // The enforcement itself, asserted rather than described. What keeps the first-boot
+        // recovery away from a key that merely fails to load is not a comment and not a flag: the
+        // load path is its own method and is never given an IStateStore, so no edit inside it can
+        // rename, delete or rewrite anything without first widening this signature — which is a
+        // change a reader can see, and one this test refuses.
+        var load = typeof(DeviceKeyStore).GetMethod(
+            "Load",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.True(
+            load is not null,
+            "DeviceKeyStore.Load is gone or was renamed. It is the load path, and the reason it is "
+            + "a method of its own is that it must not be able to reach the store. Find whatever "
+            + "replaced it and assert the same thing about that.");
+
+        Assert.DoesNotContain(
+            typeof(IStateStore),
+            load!.GetParameters().Select(parameter => parameter.ParameterType));
+    }
+
     /// <summary>
     /// A store that keeps something other than the bytes it was handed — the card half of a bad
     /// write, which is the only half a process cannot produce by crashing itself.
@@ -322,14 +563,14 @@ public sealed class AgentIdentityTests
 
         public string? ReadText(string name) => _inner.ReadText(name);
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content) => Damage(name, content, _inner.WriteSecret);
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) =>
             Damage(name, content, _inner.WriteSecretAtomic);
 
         public void WriteText(string name, string content) => _inner.WriteText(name, content);
 
         public void Delete(string name) => _inner.Delete(name);
+
+        public bool TryRename(string name, string newName) => _inner.TryRename(name, newName);
 
         public string PathOf(string name) => _inner.PathOf(name);
 

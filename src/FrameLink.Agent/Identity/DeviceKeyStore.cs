@@ -14,11 +14,21 @@ public static class DeviceKeyStore
     public const string KeyFileName = "device.key";
 
     /// <summary>
+    /// Where a first-boot key that failed its own read-back is kept, for a person.
+    /// </summary>
+    /// <remarks>
+    /// A sibling of <see cref="KeyFileName"/> inside the same state directory, so setting one
+    /// aside is a <c>rename(2)</c> within one filesystem and the bytes that came off the card are
+    /// preserved exactly rather than copied. Nothing reads this file. It exists to be looked at.
+    /// </remarks>
+    public const string RejectedKeyFileName = KeyFileName + ".rejected";
+
+    /// <summary>
     /// Returns this device's identity, creating it if the frame has never booted before.
     /// </summary>
     /// <exception cref="CryptographicException">
     /// The key file exists but cannot be parsed, or the key this call has just written does not
-    /// read back as the key it generated.
+    /// read back as the key it generated and could not be set aside.
     /// </exception>
     /// <remarks>
     /// <para>
@@ -49,9 +59,22 @@ public static class DeviceKeyStore
     /// <c>fsync</c> inside the atomic write is what addresses that half.
     /// </para>
     /// <para>
-    /// A failed read-back leaves the unusable file exactly where it is. Deleting it would let the
-    /// next boot mint a fresh identity, and choosing that would be choosing to repair a key
-    /// invisibly — the one thing this class refuses to do.
+    /// <b>The two failures this method answers differently, and the line between them.</b> A key
+    /// that fails its own read-back <i>seconds after being generated</i> has never been outside
+    /// this process: no handshake has carried it, no Fleet Manager has recorded it, no label
+    /// bears its fingerprint. Nothing anywhere refers to it, so nothing is orphaned by replacing
+    /// it — and refusing to would leave a frame that will not come up until somebody drives to it
+    /// and deletes a file by hand. That key is set aside as <see cref="RejectedKeyFileName"/> and
+    /// a fresh identity is minted, loudly. A key that fails to <i>load</i> on a later boot is the
+    /// opposite case in every respect: it may well be the identity this frame is adopted under,
+    /// so it is refused, exactly as before.
+    /// </para>
+    /// <para>
+    /// That line is drawn by the shape of the code rather than by this paragraph. This method
+    /// forks once, on whether the file was there when the call began, and the two sides are
+    /// different methods taking different arguments: <see cref="Load"/> is handed the bytes and
+    /// <b>not the store</b>, so nothing reachable from the load path can rename, delete or
+    /// rewrite anything — see its own remarks.
     /// </para>
     /// <para>
     /// Nothing derived from the private key reaches <paramref name="log"/>. The fingerprint
@@ -66,29 +89,98 @@ public static class DeviceKeyStore
 
         store.EnsureReady();
 
+        // The one fork, and the only place either path is entered. Reaching CreateOnFirstBoot at
+        // all is proof that this call found no key file, so the file its recovery sets aside can
+        // only ever be one this same call has just written.
         var existing = store.ReadBytes(KeyFileName);
-        if (existing is not null)
-        {
-            var key = ECDsa.Create();
-            try
-            {
-                key.ImportPkcs8PrivateKey(existing, out _);
-            }
-            catch
-            {
-                key.Dispose();
-                throw;
-            }
-            finally
-            {
-                CryptographicOperations.ZeroMemory(existing);
-            }
+        return existing is not null
+            ? Load(existing, log)
+            : CreateOnFirstBoot(store, log);
+    }
 
-            var loaded = DeviceKey.From(key);
-            log.Info($"Device identity loaded: {loaded.DeviceId}");
-            return loaded;
+    /// <summary>
+    /// Imports a key file that was already on the card when the call began, or throws.
+    /// </summary>
+    /// <remarks>
+    /// <b>It is handed the bytes and not the store, and that is what enforces the refusal.</b> A
+    /// key that fails to import here may be the identity this frame was adopted under — recorded
+    /// in a Fleet Manager, printed on a label, sitting in somebody's device list — and §3.3 makes
+    /// that permanent. There is no version of "recover" that is right for it, so this method is
+    /// given nothing to recover with: no <see cref="IStateStore"/>, therefore no rename, no
+    /// delete and no write, whatever a later edit inside it reaches for. Widening this signature
+    /// is the change that would undo it, and it is a change a reader can see rather than a
+    /// convention a reader has to know.
+    /// </remarks>
+    private static DeviceKey Load(byte[] existing, IAgentLog log)
+    {
+        var key = ECDsa.Create();
+        try
+        {
+            key.ImportPkcs8PrivateKey(existing, out _);
+        }
+        catch
+        {
+            key.Dispose();
+            throw;
+        }
+        finally
+        {
+            CryptographicOperations.ZeroMemory(existing);
         }
 
+        var loaded = DeviceKey.From(key);
+        log.Info($"Device identity loaded: {loaded.DeviceId}");
+        return loaded;
+    }
+
+    /// <summary>
+    /// Mints the frame's first identity, with a single attempt at recovery behind it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>One recovery per call, and it is the shape of the method that says so.</b> The second
+    /// <see cref="MintAndVerify"/> is outside the <c>catch</c>, so its own failure has nowhere
+    /// to be caught and leaves through the same refusal a load failure would. There is no loop
+    /// here to bound and no counter to get wrong: a card that will not keep a key produces one
+    /// rejected file, one further attempt, and then a frame that stops and says so.
+    /// </para>
+    /// <para>
+    /// <b>One recovery per frame, and that is the rejected file.</b> Across boots the bound is
+    /// <see cref="RejectedKeyFileName"/> itself: a second key cannot be set aside while the
+    /// first one is still there, because <see cref="IStateStore.TryRename"/> will not replace
+    /// it. So the evidence of the one time a frame regenerated its identity is permanent, and
+    /// a frame that reaches this state twice needs a person rather than a third key.
+    /// </para>
+    /// </remarks>
+    private static DeviceKey CreateOnFirstBoot(IStateStore store, IAgentLog log)
+    {
+        DeviceKey identity;
+
+        try
+        {
+            identity = MintAndVerify(store);
+        }
+        catch (CryptographicException rejected)
+        {
+            if (!TrySetAsideRejectedKey(store, log, rejected))
+            {
+                throw;
+            }
+
+            var replacement = MintAndVerify(store);
+            log.Warn(
+                "Device identity generated on first boot, on the second attempt: "
+                + replacement.DeviceId);
+            return replacement;
+        }
+
+        log.Info($"Device identity generated on first boot: {identity.DeviceId}");
+        return identity;
+    }
+
+    /// <summary>Generates a keypair, writes it atomically and proves the file holds it.</summary>
+    private static DeviceKey MintAndVerify(IStateStore store)
+    {
         var created = DeviceIdentity.CreateKeyPair();
         var pkcs8 = created.ExportPkcs8PrivateKey();
         try
@@ -113,8 +205,76 @@ public static class DeviceKeyStore
             throw;
         }
 
-        log.Info($"Device identity generated on first boot: {identity.DeviceId}");
         return identity;
+    }
+
+    /// <summary>
+    /// Moves a just-written key that failed its read-back to <see cref="RejectedKeyFileName"/>,
+    /// and says whether a fresh identity may now be minted.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Called from exactly one place — the write-and-verify failure inside
+    /// <see cref="CreateOnFirstBoot"/>, which is itself only reachable when
+    /// <see cref="LoadOrCreate"/> found no key file at all. The file this moves is therefore
+    /// always one the same call wrote moments earlier.
+    /// </para>
+    /// <para>
+    /// Every answer of <see langword="false"/> leaves the frame exactly as the old behaviour left
+    /// it: the caller rethrows the original refusal, the file stays where it is, and no second
+    /// identity exists. The three of them are the three ways this recovery is not the right
+    /// answer — there is nothing to set aside, an earlier rejection is already recorded, or the
+    /// store would not move the file.
+    /// </para>
+    /// <para>
+    /// The path is what reaches the journal and never the content, because the file being set
+    /// aside is a private key whether or not it is a damaged one.
+    /// </para>
+    /// </remarks>
+    private static bool TrySetAsideRejectedKey(
+        IStateStore store,
+        IAgentLog log,
+        CryptographicException rejected)
+    {
+        var path = store.PathOf(KeyFileName);
+        var rejectedPath = store.PathOf(RejectedKeyFileName);
+
+        if (!store.Exists(KeyFileName))
+        {
+            // The store took the bytes and kept none of them, so there is nothing to preserve and
+            // a second attempt would be a second write onto whatever swallowed the first. That is
+            // the card failing rather than the key, and a new identity is not an answer to it.
+            log.Fail(
+                $"The device key written to {path} is not there when it is read back, so there is "
+                + "nothing to set aside and no second identity has been generated.");
+            return false;
+        }
+
+        if (store.Exists(RejectedKeyFileName))
+        {
+            // §3.3 permanence at the outer edge: one automatic regeneration in a frame's life. A
+            // frame producing a second unreadable key on a first boot has a fault a third key
+            // will not fix, and the first rejection is the more useful of the two to keep.
+            log.Fail(
+                $"{rejectedPath} already holds a key this frame set aside once before. Refusing to "
+                + "overwrite it or to generate a third identity — this frame needs a person.");
+            return false;
+        }
+
+        if (!store.TryRename(KeyFileName, RejectedKeyFileName))
+        {
+            log.Fail(
+                $"{path} could not be moved to {rejectedPath}, so it has been left where it is and "
+                + "no second identity has been generated.");
+            return false;
+        }
+
+        log.Fail($"The device key this frame just generated did not read back: {rejected.Message}");
+        log.Warn(
+            "That key was never sent to a Fleet Manager and was never reported anywhere, so it has "
+            + $"been moved to {rejectedPath} and a new identity is being generated in its place. "
+            + "Keep that file: it is the evidence of what this card did with a write it accepted.");
+        return true;
     }
 
     /// <summary>

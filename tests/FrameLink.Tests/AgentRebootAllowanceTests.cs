@@ -269,10 +269,6 @@ public sealed class AgentRebootAllowanceTests
 
         public string? ReadText(string name) => throw new IOException("Input/output error");
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content)
-        {
-        }
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content)
         {
         }
@@ -284,6 +280,8 @@ public sealed class AgentRebootAllowanceTests
         public void Delete(string name)
         {
         }
+
+        public bool TryRename(string name, string newName) => false;
 
         public string PathOf(string name) => $"{Root}/{name}";
     }
@@ -307,13 +305,13 @@ public sealed class AgentRebootAllowanceTests
 
         public string? ReadText(string name) => _content;
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content) => throw Readonly();
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) => throw Readonly();
 
         public void WriteText(string name, string content) => throw Readonly();
 
         public void Delete(string name) => throw Readonly();
+
+        public bool TryRename(string name, string newName) => throw Readonly();
 
         public string PathOf(string name) => $"{Root}/{name}";
 
@@ -341,8 +339,6 @@ public sealed class AgentRebootAllowanceTests
 
         public string? ReadText(string name) => _content;
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content) => Writes++;
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) => Writes++;
 
         public void WriteText(string name, string content) => Writes++;
@@ -350,6 +346,8 @@ public sealed class AgentRebootAllowanceTests
         public void Delete(string name)
         {
         }
+
+        public bool TryRename(string name, string newName) => false;
 
         public string PathOf(string name) => $"{Root}/{name}";
     }

@@ -504,7 +504,7 @@ public sealed class AgentReliabilityTests
         var identity = "AAAA-BBBB-CCCC-DDDD";
         var resource = new AgentKeypairResource(files.Store, files.Files, () => identity);
 
-        files.Store.WriteSecret(DeviceKeyStore.KeyFileName, "not a real key"u8);
+        files.Store.WriteSecretAtomic(DeviceKeyStore.KeyFileName, "not a real key"u8);
 
         // First pass records the fingerprint, which is what makes the comparison possible at all.
         Assert.False((await resource.ObserveAsync(TestContext.Current.CancellationToken)).InSync);

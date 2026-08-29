@@ -387,13 +387,13 @@ public sealed class AgentLoopRestartTests
 
         public string? ReadText(string name) => null;
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content) => throw Refused();
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) => throw Refused();
 
         public void WriteText(string name, string content) => throw Refused();
 
         public void Delete(string name) => throw Refused();
+
+        public bool TryRename(string name, string newName) => throw Refused();
 
         public string PathOf(string name) => $"{Root}/{name}";
 

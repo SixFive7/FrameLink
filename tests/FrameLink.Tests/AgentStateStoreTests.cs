@@ -165,6 +165,98 @@ public sealed class AgentStateStoreTests
     }
 
     // -----------------------------------------------------------------------------------------
+    // Nothing on the interface writes a file the old way any more
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void The_store_offers_no_write_that_a_power_cut_could_leave_half_finished()
+    {
+        // WriteSecret was the last plain overwrite on this interface. It had no callers left once
+        // the device key moved onto the atomic path, and a method that is still there is a method
+        // the next person reaches for by name — so it is gone, and this is what keeps it gone.
+        // Both survivors stage, flush and rename; the only thing they still differ on is the mode.
+        var writes = typeof(IStateStore)
+            .GetMethods()
+            .Select(method => method.Name)
+            .Where(name => name.StartsWith("Write", StringComparison.Ordinal))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(
+            [nameof(IStateStore.WriteSecretAtomic), nameof(IStateStore.WriteText)],
+            writes);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Setting a file aside: the same bytes, a new name, and never on top of something
+    // -----------------------------------------------------------------------------------------
+
+    [Fact]
+    public void A_file_that_is_set_aside_keeps_its_bytes_and_frees_the_name_it_had()
+    {
+        // What a rename buys over read-and-write-elsewhere: the bytes are preserved rather than
+        // copied, so a file being kept as evidence is the file, and the old name is free at the
+        // same instant the new one is taken.
+        using var files = new TemporaryStore();
+        files.Store.WriteSecretAtomic("device.key", "half a key"u8);
+
+        Assert.True(files.Store.TryRename("device.key", "device.key.rejected"));
+
+        Assert.Equal("half a key"u8.ToArray(), files.Store.ReadBytes("device.key.rejected"));
+        Assert.False(files.Store.Exists("device.key"));
+    }
+
+    [Fact]
+    public void Setting_a_file_aside_never_replaces_what_is_already_under_the_new_name()
+    {
+        // The refusal is the point of the method. Whatever is already there is the record of an
+        // earlier failure, and a later failure is never worth more than the first one — so this
+        // answers false and leaves both files exactly as they were, rather than overwriting the
+        // one thing a person would want to look at.
+        using var files = new TemporaryStore();
+        files.Store.WriteSecretAtomic("device.key", "the second bad key"u8);
+        files.Store.WriteSecretAtomic("device.key.rejected", "the first bad key"u8);
+
+        Assert.False(files.Store.TryRename("device.key", "device.key.rejected"));
+
+        Assert.Equal("the first bad key"u8.ToArray(), files.Store.ReadBytes("device.key.rejected"));
+        Assert.Equal("the second bad key"u8.ToArray(), files.Store.ReadBytes("device.key"));
+    }
+
+    [Fact]
+    public void Setting_aside_a_file_that_is_not_there_is_an_answer_rather_than_a_throw()
+    {
+        // The caller that has just watched a write vanish has to be able to tell "nothing was
+        // moved" from "the move failed", because those are different faults with different
+        // responses. An exception here would collapse them.
+        using var files = new TemporaryStore();
+        files.Store.EnsureReady();
+
+        Assert.False(files.Store.TryRename("device.key", "device.key.rejected"));
+        Assert.False(files.Store.Exists("device.key.rejected"));
+    }
+
+    [Fact]
+    public void Both_names_in_a_rename_are_siblings_so_it_cannot_cross_a_filesystem()
+    {
+        // Structural rather than checked, exactly as it is for the staging write: PathOf refuses
+        // anything that could leave the root, so a rename is always within one directory and
+        // therefore a real rename(2) rather than the copy-and-delete File.Move falls back to
+        // across a mount point.
+        using var files = new TemporaryStore();
+        files.Store.WriteSecretAtomic("device.key", "bytes"u8);
+
+        Assert.Equal(
+            Path.GetDirectoryName(files.Store.PathOf("device.key")),
+            Path.GetDirectoryName(files.Store.PathOf("device.key.rejected")));
+
+        Assert.Throws<ArgumentException>(
+            () => files.Store.TryRename("device.key", "../device.key.rejected"));
+        Assert.Throws<ArgumentException>(
+            () => files.Store.TryRename("device.key", "elsewhere/device.key.rejected"));
+    }
+
+    // -----------------------------------------------------------------------------------------
     // An unreadable journal is a fault, and absent is not unreadable
     // -----------------------------------------------------------------------------------------
 
@@ -462,14 +554,14 @@ public sealed class AgentStateStoreTests
 
         public string? ReadText(string name) => throw new IOException("Input/output error");
 
-        public void WriteSecret(string name, ReadOnlySpan<byte> content) => _inner.WriteSecret(name, content);
-
         public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) =>
             _inner.WriteSecretAtomic(name, content);
 
         public void WriteText(string name, string content) => _inner.WriteText(name, content);
 
         public void Delete(string name) => _inner.Delete(name);
+
+        public bool TryRename(string name, string newName) => _inner.TryRename(name, newName);
 
         public string PathOf(string name) => _inner.PathOf(name);
     }

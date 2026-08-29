@@ -340,6 +340,56 @@ public sealed class LiveKitConfigurationTests
     }
 
     [Fact]
+    public void The_configuration_is_staged_beside_itself_and_renamed_into_place()
+    {
+        // FileMode.Create truncates the target and then writes it, which on this file opens two
+        // windows: a power cut inside it leaves a document LiveKit refuses to parse — and a
+        // configuration it cannot parse is a call server that does not start, not one that starts
+        // degraded — and a reader that opens the file during it sees half of one. The bytes
+        // therefore go to a sibling and reach the real name by rename(2). The stale sibling an
+        // interrupted write would have left is consumed by the next one.
+        using var workspace = new TempWorkspace();
+        var options = Options(Path.Combine(workspace.Root, "livekit"));
+        var credential = new LiveKitCredential("APIkey", "secret", DateTimeOffset.UnixEpoch);
+        var staging = options.ConfigPath + LiveKitConfigFile.StagingSuffix;
+
+        Directory.CreateDirectory(options.Directory);
+        File.WriteAllText(staging, "port: 78");
+
+        Assert.True(LiveKitConfigFile.Write(options, credential));
+
+        Assert.False(File.Exists(staging));
+        Assert.Equal(Path.GetDirectoryName(options.ConfigPath), Path.GetDirectoryName(staging));
+        Assert.Equal(LiveKitConfigFile.Render(options, credential), File.ReadAllText(options.ConfigPath));
+    }
+
+    [Fact]
+    public void A_write_that_cannot_even_start_leaves_the_last_good_configuration_exactly_as_it_was()
+    {
+        // The half the rename buys that the fsync never did. Writing in place destroyed the
+        // working configuration the moment anything went wrong with the new one; staging means a
+        // failure before the rename cannot touch the live file at all. The failure is produced by
+        // putting a directory where the staging file wants to be.
+        using var workspace = new TempWorkspace();
+        var options = Options(Path.Combine(workspace.Root, "livekit"));
+        var credential = new LiveKitCredential("APIkey", "secret", DateTimeOffset.UnixEpoch);
+
+        Assert.True(LiveKitConfigFile.Write(options, credential));
+        var before = File.ReadAllBytes(options.ConfigPath);
+
+        Directory.CreateDirectory(options.ConfigPath + LiveKitConfigFile.StagingSuffix);
+
+        var failure = Record.Exception(
+            () => LiveKitConfigFile.Write(options, credential with { Secret = "a-rotated-secret" }));
+
+        Assert.True(
+            failure is IOException or UnauthorizedAccessException,
+            $"Expected the blocked staging path to fail the write; got {failure?.GetType().Name ?? "no exception"}.");
+
+        Assert.Equal(before, File.ReadAllBytes(options.ConfigPath));
+    }
+
+    [Fact]
     public async Task The_key_and_secret_are_generated_once_and_survive_a_restart()
     {
         // §3.2: "LiveKit's key and secret are generated automatically." Generated, and then

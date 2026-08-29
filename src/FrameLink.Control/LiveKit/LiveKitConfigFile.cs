@@ -82,6 +82,9 @@ public static class LiveKitConfigFile
     /// </remarks>
     public const UnixFileMode SecretFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
+    /// <summary>Suffix of the file the configuration is staged into before it is renamed.</summary>
+    public const string StagingSuffix = ".new";
+
     /// <summary>Renders the configuration for one credential and one set of options.</summary>
     public static string Render(LiveKitOptions options, LiveKitCredential credential)
     {
@@ -123,6 +126,39 @@ public static class LiveKitConfigFile
     /// Writes the configuration if it is not already exactly this, and says whether it did.
     /// </summary>
     /// <returns>True when the file on disk changed, which is the caller's cue to restart LiveKit.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Staged beside itself and renamed into place, rather than rewritten where it lies.</b>
+    /// <see cref="FileMode.Create"/> truncates the target first, which opens two windows on a
+    /// file this one: a power cut inside it leaves a configuration LiveKit refuses to parse — and
+    /// LiveKit treats a bad configuration as a reason not to start, so that is the call server
+    /// down rather than degraded — and a reader that opens the file during it sees half a
+    /// document with no way to tell. <c>rename(2)</c> closes both: the path is either wholly the
+    /// old file or wholly the new one, at every instant, for every observer. The
+    /// <c>fsync</c> before it is the other half, and it was already here.
+    /// </para>
+    /// <para>
+    /// <b>The staging file is the one that carries the mode</b>, because it is the file that
+    /// holds the signing secret for the whole length of the write; a 0600 target fed by a
+    /// world-readable staging file is world-readable in practice. The mode travels with the inode
+    /// through the rename, so the target has it the instant it appears, and it is restated
+    /// afterwards on the path the file actually has.
+    /// </para>
+    /// <para>
+    /// <b>Self-contained on purpose.</b> The agent's equivalent is a method on its state store,
+    /// which owns a root directory, a permissions seam and a name check; none of those exist on
+    /// this side of the wire and inventing them for one file would be the larger change. What is
+    /// shared is the argument, not the code — including the one that makes the rename safe: the
+    /// staging name is <see cref="LiveKitOptions.ConfigPath"/> with a suffix appended, so the two
+    /// names are in one directory by construction and this cannot become the copy-and-delete
+    /// <c>File.Move</c> falls back to across a mount point.
+    /// </para>
+    /// <para>
+    /// A crash between the write and the rename leaves a stale staging file beside the real one.
+    /// Nothing reads it, it carries the same mode as the file it was going to become, and the
+    /// next write that changes anything truncates it.
+    /// </para>
+    /// </remarks>
     public static bool Write(LiveKitOptions options, LiveKitCredential credential)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -153,6 +189,8 @@ public static class LiveKitConfigFile
 
         Directory.CreateDirectory(options.Directory);
 
+        var staging = options.ConfigPath + StagingSuffix;
+
         // Created restricted, then written. Creating it world-readable and tightening afterwards
         // leaves a window in which the secret is on disk and readable, which is exactly the kind
         // of window that only ever matters once.
@@ -168,11 +206,17 @@ public static class LiveKitConfigFile
             streamOptions.UnixCreateMode = SecretFileMode;
         }
 
-        using (var file = new FileStream(options.ConfigPath, streamOptions))
+        using (var file = new FileStream(staging, streamOptions))
         {
             file.Write(Encoding.UTF8.GetBytes(rendered));
             file.Flush(flushToDisk: true);
         }
+
+        // On the staging file, before it becomes the real one. UnixCreateMode is masked by the
+        // process umask, so it is a floor rather than a promise, and this is the promise.
+        Restrict(staging);
+
+        File.Move(staging, options.ConfigPath, overwrite: true);
 
         Restrict(options.ConfigPath);
         return true;

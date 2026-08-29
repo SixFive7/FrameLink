@@ -28,9 +28,6 @@ public interface IStateStore
     /// <summary>Reads <paramref name="name"/> as UTF-8 text, or <see langword="null"/> if absent.</summary>
     string? ReadText(string name);
 
-    /// <summary>Writes <paramref name="content"/> as an owner-only file (<c>0600</c>).</summary>
-    void WriteSecret(string name, ReadOnlySpan<byte> content);
-
     /// <summary>
     /// Writes <paramref name="content"/> as an owner-only file (<c>0600</c>) that a power cut
     /// cannot leave half-written.
@@ -75,6 +72,31 @@ public interface IStateStore
 
     /// <summary>Removes <paramref name="name"/> if present.</summary>
     void Delete(string name);
+
+    /// <summary>
+    /// Renames <paramref name="name"/> to <paramref name="newName"/> without ever replacing an
+    /// existing file, and says whether it happened.
+    /// </summary>
+    /// <returns>
+    /// <see langword="true"/> when the rename took place; <see langword="false"/> when
+    /// <paramref name="name"/> is not there, or when <paramref name="newName"/> already is.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// The one operation here that moves a file instead of writing one, and it exists so a file
+    /// can be set aside <i>as evidence</i> — the same bytes, under a name nothing reads. Reading
+    /// it and writing it back somewhere else would do neither job: it duplicates the content it
+    /// is meant to preserve, and it leaves an instant where both names hold it or neither does.
+    /// </para>
+    /// <para>
+    /// <b>Refusing to overwrite is the whole point of the method, not a convenience on it.</b>
+    /// Something already sitting under <paramref name="newName"/> is the record of an earlier
+    /// failure, and a later failure is never worth more than the first one. An answer of
+    /// <see langword="false"/> is therefore a real outcome a caller has to handle out loud, not
+    /// an error to retry past.
+    /// </para>
+    /// </remarks>
+    bool TryRename(string name, string newName);
 
     /// <summary>Absolute path of <paramref name="name"/> inside the store.</summary>
     string PathOf(string name);
@@ -162,23 +184,6 @@ public sealed class FileStateStore : IStateStore
     }
 
     /// <inheritdoc/>
-    public void WriteSecret(string name, ReadOnlySpan<byte> content)
-    {
-        EnsureReady();
-        var path = PathOf(name);
-
-        // Create the file empty and lock it down *before* the secret is written into it, so
-        // there is no window in which the bytes exist under a wider mode.
-        using (var stream = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
-        {
-            _permissions.Restrict(path, SecretMode);
-            stream.Write(content);
-        }
-
-        _permissions.Restrict(path, SecretMode);
-    }
-
-    /// <inheritdoc/>
     public void WriteSecretAtomic(string name, ReadOnlySpan<byte> content) =>
         WriteAtomic(name, content, SecretMode);
 
@@ -219,11 +224,12 @@ public sealed class FileStateStore : IStateStore
 
         using (var stream = new FileStream(staging, FileMode.Create, FileAccess.Write, FileShare.None))
         {
-            // Locked down before the bytes exist, exactly as WriteSecret does it. The staging file
-            // holds the whole content for as long as the write takes, so it is the file that has to
-            // carry the mode — a 0600 target fed by a 0644 staging file is 0644 in practice. That
-            // is load-bearing for a secret and merely correct for ordinary state, which is the
-            // reason one implementation can serve both.
+            // Locked down before the bytes exist, so there is no instant in which they are on
+            // the card under a wider mode. The staging file holds the whole content for as long
+            // as the write takes, so it is the file that has to carry the mode — a 0600 target
+            // fed by a 0644 staging file is 0644 in practice. That is load-bearing for a secret
+            // and merely correct for ordinary state, which is the reason one implementation can
+            // serve both.
             _permissions.Restrict(staging, mode);
             stream.Write(content);
 
@@ -256,6 +262,38 @@ public sealed class FileStateStore : IStateStore
         {
             File.Delete(path);
         }
+    }
+
+    /// <inheritdoc/>
+    /// <remarks>
+    /// <para>
+    /// Both names go through <see cref="PathOf"/>, so both are direct children of
+    /// <see cref="Root"/> — one directory, therefore one filesystem, therefore the
+    /// <c>rename(2)</c> this needs rather than the copy-and-delete <c>File.Move</c> falls back to
+    /// across a mount point. It is the same argument the staging write rests on, and it holds
+    /// here for the same reason: nothing reachable through this interface can name a path outside
+    /// the root.
+    /// </para>
+    /// <para>
+    /// The existence check and the move cannot be made one operation from managed code, so the
+    /// platform is asked to refuse as well: <c>overwrite: false</c> means a target that appeared
+    /// in between costs this call an exception rather than costing the operator the file. The
+    /// check is what turns the ordinary case into an answer; the flag is what makes the answer
+    /// safe.
+    /// </para>
+    /// </remarks>
+    public bool TryRename(string name, string newName)
+    {
+        var from = PathOf(name);
+        var to = PathOf(newName);
+
+        if (!File.Exists(from) || File.Exists(to))
+        {
+            return false;
+        }
+
+        File.Move(from, to, overwrite: false);
+        return true;
     }
 
     /// <inheritdoc/>

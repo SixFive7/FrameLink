@@ -416,6 +416,87 @@ public sealed class AgentSystemdUnitTests
     }
 
     [Fact]
+    public async Task The_unit_is_staged_beside_itself_and_renamed_into_place()
+    {
+        // A plain overwrite truncates the target and then writes it, and the target here is the
+        // file that starts the agent. A power cut inside that window leaves half a unit, which is
+        // a frame that boots without the one process that could have repaired it. So the bytes go
+        // to a sibling and reach the real name by rename(2), and the stale sibling a previous
+        // interrupted install would have left is simply consumed by the next one.
+        var directory = Path.Combine(Path.GetTempPath(), "fl-agent-tests", Guid.NewGuid().ToString("N"));
+        var unitPath = Path.Combine(directory, "fl-agent.service");
+        var staging = unitPath + UnitInstaller.StagingSuffix;
+        var systemControl = new RecordingSystemControl();
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(
+                staging, "[Unit]\nDescription=half a un", TestContext.Current.CancellationToken);
+
+            Assert.True(await UnitInstaller.InstallAsync(
+                systemControl, NullLog.Instance, unitPath, TestContext.Current.CancellationToken));
+
+            // Gone because it was renamed, not because anything deleted it.
+            Assert.False(File.Exists(staging));
+            Assert.Equal(directory, Path.GetDirectoryName(staging));
+
+            // Byte for byte the embedded resource: routing the write through a staging file had
+            // to change where the bytes go and nothing about what they are, and a byte-order mark
+            // or a substituted character is exactly what a new encoder would introduce.
+            Assert.Equal(
+                EmbeddedUnitBytes(),
+                await File.ReadAllBytesAsync(unitPath, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task A_write_that_cannot_even_start_leaves_the_unit_systemd_already_has()
+    {
+        // The failure the old File.WriteAllTextAsync could not survive: it truncated first, so a
+        // write that failed at all destroyed the working unit that was there. Staging means a
+        // failure before the rename cannot reach the target. The failure is produced by putting a
+        // directory where the staging file wants to be, which is the cheapest way to make one
+        // FileStream throw.
+        var directory = Path.Combine(Path.GetTempPath(), "fl-agent-tests", Guid.NewGuid().ToString("N"));
+        var unitPath = Path.Combine(directory, "fl-agent.service");
+        var systemControl = new RecordingSystemControl();
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            await File.WriteAllTextAsync(
+                unitPath,
+                "[Unit]\nDescription=the unit this frame is running\n",
+                TestContext.Current.CancellationToken);
+
+            Directory.CreateDirectory(unitPath + UnitInstaller.StagingSuffix);
+
+            var failure = await Record.ExceptionAsync(() => UnitInstaller.InstallAsync(
+                systemControl, NullLog.Instance, unitPath, TestContext.Current.CancellationToken));
+
+            Assert.True(
+                failure is IOException or UnauthorizedAccessException,
+                $"Expected the blocked staging path to fail the write; got {failure?.GetType().Name ?? "no exception"}.");
+
+            Assert.Equal(
+                "[Unit]\nDescription=the unit this frame is running\n",
+                await File.ReadAllTextAsync(unitPath, TestContext.Current.CancellationToken));
+
+            // And systemd was never told to reload a unit that was never written.
+            Assert.Empty(systemControl.Commands);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void The_exit_code_for_an_update_restart_is_distinguishable_from_an_ordinary_stop()
     {
         // So that a restart caused by an update is legible in `systemctl status` rather than
