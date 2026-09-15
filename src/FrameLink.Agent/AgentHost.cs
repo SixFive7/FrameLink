@@ -480,49 +480,65 @@ public sealed class AgentHost
         // restarts — never hand it fresh ones.
         var allowance = new RebootAllowance(store, _log, reconcileOptions.AttemptBudget);
 
+        var catalog = DeviceCatalog.BuildGraph(new DeviceCatalogContext
+        {
+            Files = systemFiles,
+            Store = store,
+            Processes = HostProcessRunner.Instance,
+            SystemControl = new SystemdControl(),
+            Display = display,
+            Session = session,
+            Origin = origin,
+            Channel = channel,
+            Boot = boot,
+            Clock = _clock,
+            Log = _log,
+            Values = values,
+            FleetAnswer = () => _fleetAnswer,
+            DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
+            Button = button,
+            Kiosk = kiosk,
+
+            // Decisions 91 and 93, moved into the graph. The catalog holds the six rungs of the
+            // firmware chain and this is what the last two of them act and ask through; the
+            // interlocks themselves never left ArrayFirmwareFlash.
+            ArrayFlash = () => arrayFlash,
+            FlashApproval = flashApproval,
+            FlashWindow = flashWindow,
+            KioskDownload = new HttpKioskDownload(http, _log),
+            XvfHostDownload = new HttpXvfHostDownload(http, _log),
+            Permissions = PosixFilePermissions.Instance,
+
+            // §2.8's root. The served version is whatever the out-of-band check last learned,
+            // which the hub already holds, and converging is that same check brought forward —
+            // the resource asks, the hourly loop does, and correctness never depends on the ask
+            // arriving.
+            RunningVersion = AgentBuild.Version,
+            ServedVersion = () => hub.Current.ServedAgentVersion,
+            ConvergeVersion = updates.TriggerNow,
+
+            // §2.9. Read live rather than captured, so `agent.keypair` compares against what
+            // this process is running as at the moment it looks.
+            DeviceId = () => identity.DeviceId,
+        });
+
+        // <b>The ledger is state, the catalog is code, and an update replaces only one of them.</b>
+        // §2.1 keeps this directory through every version change, which is what makes the attempt
+        // ladder durable — and what leaves a frame carrying rows for things the build under it no
+        // longer has. Measured 2026-08-30: a rollback restored the code and not the state, the older
+        // build read a stopped row for a resource it had never heard of, and it correctly refused to
+        // act on anything until somebody removed the row by hand over SSH. Reverting the container
+        // tag is the documented recovery from a bad release, so it has to be able to recover a frame
+        // rather than only a binary.
+        //
+        // Before the loops start, because the first pass reads the ledger to decide whether this
+        // frame does anything at all (decision 68), and a repair that lands after that question has
+        // been asked is a repair that arrives a pass late — every pass.
+        journal.DropUnknown(LedgerIdsOf(catalog), _clock.UtcNow);
+
         var loop = new ReconcileLoop(new ReconcileServices
         {
-            Graph = DeviceCatalog.BuildGraph(new DeviceCatalogContext
-            {
-                Files = systemFiles,
-                Store = store,
-                Processes = HostProcessRunner.Instance,
-                SystemControl = new SystemdControl(),
-                Display = display,
-                Session = session,
-                Origin = origin,
-                Channel = channel,
-                Boot = boot,
-                Clock = _clock,
-                Log = _log,
-                Values = values,
-                FleetAnswer = () => _fleetAnswer,
-                DesiredDeviceName = () => Volatile.Read(ref _desiredDeviceName),
-                Button = button,
-                Kiosk = kiosk,
-
-                // Decisions 91 and 93, moved into the graph. The catalog holds the six rungs of the
-                // firmware chain and this is what the last two of them act and ask through; the
-                // interlocks themselves never left ArrayFirmwareFlash.
-                ArrayFlash = () => arrayFlash,
-                FlashApproval = flashApproval,
-                FlashWindow = flashWindow,
-                KioskDownload = new HttpKioskDownload(http, _log),
-                XvfHostDownload = new HttpXvfHostDownload(http, _log),
-                Permissions = PosixFilePermissions.Instance,
-
-                // §2.8's root. The served version is whatever the out-of-band check last learned,
-                // which the hub already holds, and converging is that same check brought forward —
-                // the resource asks, the hourly loop does, and correctness never depends on the ask
-                // arriving.
-                RunningVersion = AgentBuild.Version,
-                ServedVersion = () => hub.Current.ServedAgentVersion,
-                ConvergeVersion = updates.TriggerNow,
-
-                // §2.9. Read live rather than captured, so `agent.keypair` compares against what
-                // this process is running as at the moment it looks.
-                DeviceId = () => identity.DeviceId,
-            }),
+            Graph = catalog,
             Interlock = interlock,
             Journal = journal,
             Boot = boot,
@@ -1079,6 +1095,76 @@ public sealed class AgentHost
         }
 
         return await StandByAsync(ExitCodes.Unrecoverable).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <b>Every loop this build supervises, by the name its ledger row carries.</b> The second copy
+    /// of the list <see cref="RunAsync"/> builds, and the only one anything outside that method can
+    /// read.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// It exists because <see cref="LedgerIdsOf"/> needs the names <i>before</i> the loops are
+    /// started, and the list that holds them cannot be built without starting them — each entry
+    /// calls the loop's <c>RunAsync</c>. A second copy of a list is a liability, so
+    /// <c>AgentLoopLifetimeTests</c> reads this file and asserts the two agree, name for name and in
+    /// order: the comment above that list once said "twelve" while it held fourteen, through two
+    /// commits, which is how a fifteenth came to be missing from it without anybody noticing.
+    /// </para>
+    /// <para>
+    /// <b>These are ledger ids in every sense that matters, and they are not in the catalog.</b> A
+    /// loop that ends is recorded as <c>agent.loop.&lt;name&gt;</c> against §2.5's same budget of
+    /// three, and nothing in the DAG has that id — the walk renders such a row through its orphan
+    /// path on purpose. So a build that pruned its ledger against the catalog alone would throw away
+    /// the loop ladder's durable half on every boot.
+    /// </para>
+    /// </remarks>
+    public static IReadOnlyList<string> SupervisedLoops { get; } =
+    [
+        "console-stage",
+        "control-link",
+        "status-reporter",
+        "self-update",
+        "reconcile",
+        "supervision",
+        "browser-stage",
+        "screen-handover",
+        "package-inventory",
+        "array-firmware-report",
+        "array-firmware-flash",
+        "call-button",
+        "panel-touch",
+        "immich-kiosk",
+        "local-origin",
+    ];
+
+    /// <summary>
+    /// Every ledger id this build can act on: <paramref name="catalog"/>'s resources, and its own
+    /// supervised loops.
+    /// </summary>
+    /// <remarks>
+    /// <b>The whole of what "this build knows" means</b>, composed where the build is composed and
+    /// handed to <see cref="ReconcileJournal.DropUnknown"/>, which is deliberately given ids rather
+    /// than a rule — the journal has no business knowing that a loop's ledger id has a prefix, and
+    /// this method has no business knowing what dropping one costs.
+    /// </remarks>
+    public static IReadOnlySet<string> LedgerIdsOf(ResourceGraph catalog)
+    {
+        ArgumentNullException.ThrowIfNull(catalog);
+
+        var known = new HashSet<string>(catalog.Count + SupervisedLoops.Count, StringComparer.Ordinal);
+
+        foreach (var resource in catalog.Ordered)
+        {
+            known.Add(resource.Name);
+        }
+
+        foreach (var loop in SupervisedLoops)
+        {
+            known.Add(AgentLoopFailures.ResourceFor(loop));
+        }
+
+        return known;
     }
 
     /// <summary>

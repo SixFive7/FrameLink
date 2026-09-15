@@ -145,6 +145,39 @@ public sealed record ResourceLedgerEntry
     public string? Gloss { get; init; }
 }
 
+/// <summary>
+/// Ledger rows a build dropped because it had nothing to act on them with — kept beside the
+/// journal so that discarding state is never the same as losing it.
+/// </summary>
+/// <remarks>
+/// <para>
+/// <b>Why this file exists at all.</b> The drop is a repair: a row naming something this build has
+/// no catalog entry and no loop for can never be observed, acted on, converged or cleared by
+/// anything the frame does on its own, and a <i>stopped</i> one of those holds the whole frame
+/// (decision 68). Dropping it is what gives a bad release's rollback its documented recovery back.
+/// But the row is also the only record of what the frame was complaining about when the build
+/// changed under it, and a post-mortem that has to start with "we deleted that" is a post-mortem
+/// with a hole in it.
+/// </para>
+/// <para>
+/// <b>The build that dropped them is stamped, and it is the interesting half.</b> The ids alone do
+/// not say what happened; <c>agent.loop.reconcile, dropped by 0.4.2</c> does, because whoever reads
+/// it can go and look at what 0.4.2's catalog and loop list were. The time is the frame's own, so
+/// it can be lined up against the journal.
+/// </para>
+/// </remarks>
+public sealed record DroppedLedgerRows
+{
+    /// <summary>When the drop happened, by the frame's clock.</summary>
+    public required DateTimeOffset DroppedUtc { get; init; }
+
+    /// <summary>The build that did it — the one whose catalog did not name them.</summary>
+    public required string Build { get; init; }
+
+    /// <summary>The rows, exactly as they were on disk.</summary>
+    public required IReadOnlyList<ResourceLedgerEntry> Rows { get; init; }
+}
+
 /// <summary>Everything the loop persists under <c>/var/lib/fl-agent</c>.</summary>
 public sealed record ReconcileJournalState
 {
@@ -258,6 +291,26 @@ public sealed class ReconcileJournal
     /// </remarks>
     public const string UnreadableFileName = FileName + ".unreadable";
 
+    /// <summary>
+    /// File the ledger rows a build could not act on are kept in, after it dropped them.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A sibling of the journal, and deliberately a <c>.json</c> of its own rather than
+    /// <see cref="UnreadableFileName"/>'s suffix style: those are bytes this frame <i>failed</i> to
+    /// read and may not be JSON at all, while this is a document this build composed and can
+    /// promise the shape of. Somebody with an SSH session can put <c>jq</c> on it.
+    /// </para>
+    /// <para>
+    /// <b>Latest wins, for the same reason the unreadable copy does.</b> A drop happens when the
+    /// build under a frame changes, so the interesting copy is the one that explains the state the
+    /// frame is in now; an unbounded family of timestamped files on a card that may be full is its
+    /// own fault. The build and the time are inside the file, so the copy that is there always says
+    /// which change produced it.
+    /// </para>
+    /// </remarks>
+    public const string DroppedFileName = "reconcile-journal.dropped.json";
+
     private readonly IStateStore _store;
     private readonly IAgentLog _log;
     private readonly Lock _gate = new();
@@ -281,6 +334,9 @@ public sealed class ReconcileJournal
 
     /// <summary>Where the bytes of an unreadable journal are kept.</summary>
     public string UnreadablePath => _store.PathOf(UnreadableFileName);
+
+    /// <summary>Where dropped ledger rows are kept.</summary>
+    public string DroppedPath => _store.PathOf(DroppedFileName);
 
     /// <summary>
     /// Whether the state being served came from a journal that was there and could not be read.
@@ -357,6 +413,113 @@ public sealed class ReconcileJournal
             _state = next;
             Write(next);
             return next;
+        }
+    }
+
+    /// <summary>
+    /// <b>Drops every ledger row naming something this build cannot act on</b>, keeping a copy of
+    /// what went beside the journal. Called once, at startup, before the first pass.
+    /// </summary>
+    /// <param name="known">
+    /// Every ledger id this build can act on — its catalog's resources and its own supervised
+    /// loops. Ids rather than a rule, so the one place that knows what this build is made of is the
+    /// place that composes it.
+    /// </param>
+    /// <param name="droppedUtc">The frame's own clock, for the kept copy.</param>
+    /// <returns>The rows that were dropped, in ledger order, or empty.</returns>
+    /// <remarks>
+    /// <para>
+    /// <b>The gap this closes, measured on 2026-08-30.</b> Escalations are durable and the binary
+    /// is not. Rolling the agent back replaces the code and leaves the ledger, so the older build
+    /// came up, read a stopped row for a resource it had never heard of, and correctly refused to
+    /// act on anything — and stayed that way. Reverting the container tag is the documented
+    /// recovery from a bad release; it restored the code and not the state, and the remedy was SSH
+    /// and hand-edited JSON on a frame in somebody's home.
+    /// </para>
+    /// <para>
+    /// <b>The other half of this already existed.</b> <see cref="ReconcileLoop"/>'s resume forgets a
+    /// <see cref="PendingApply"/> whose resource the catalog no longer has, for exactly this reason
+    /// and with exactly this reasoning — there is nothing to verify and nothing to claim. The
+    /// ledger was the half nobody had done, and the ledger is the half that stops the frame.
+    /// </para>
+    /// <para>
+    /// <b>A downgrade and a rename are not distinguishable from here, and the safer reading is what
+    /// this does.</b> An unknown id means one thing for certain — the ledger outlived the build that
+    /// wrote it — and two things that cannot be told apart: a build that genuinely no longer has
+    /// that resource, and a build that has it under a different name. Nothing in a row says which;
+    /// there is no rename map, no version stamp on rows, and the delta reads identically either way.
+    /// So the question is answered by what the two mistakes cost. Keeping a row this build cannot
+    /// act on holds the frame at a rung nothing it does will ever clear, which is the measured
+    /// failure. Dropping a row whose subject still exists under a new name loses the <i>memory</i> of
+    /// a fault and never the fault: every resource here is level-triggered (§2.2), so a fault that
+    /// is still real is found again by the very next pass, costing a fresh ladder bounded by
+    /// <see cref="RebootAllowance"/> and by decision 79's floor. The memory is what goes, the copy
+    /// beside the journal is where it goes, and a bounded re-diagnosis is cheaper than a frame
+    /// nothing can recover.
+    /// </para>
+    /// <para>
+    /// <b>What <paramref name="known"/> has to contain is the reason this takes ids at all.</b> The
+    /// catalog is not the whole of what a build can act on: <c>agent.loop.&lt;name&gt;</c> rows are
+    /// written by the host's own supervision and are in no catalog, by design — they ride the walk's
+    /// orphan path precisely because nothing in the graph has that id. A prune that read the graph
+    /// alone would therefore delete the loop ladder's durable half on every boot, which is the
+    /// journal-wiped-before-every-boot case <see cref="RebootAllowance"/> exists to <i>survive</i>
+    /// rather than to <i>rely on</i>, and it would discard an escalation for a loop that still
+    /// exists — the one form of this that is a real fault being thrown away.
+    /// </para>
+    /// <para>
+    /// <b>The copy is written first and is never worth refusing the repair over.</b> A card that
+    /// will not take the copy will not take the journal either, so refusing to drop would trade a
+    /// lost diagnostic for a frame that stays stopped — and the drop would not persist anyway. It is
+    /// said loudly instead, exactly as <see cref="Quarantine"/> is.
+    /// </para>
+    /// </remarks>
+    public IReadOnlyList<ResourceLedgerEntry> DropUnknown(IReadOnlySet<string> known, DateTimeOffset droppedUtc)
+    {
+        ArgumentNullException.ThrowIfNull(known);
+
+        lock (_gate)
+        {
+            EnsureLoaded();
+
+            var kept = new List<ResourceLedgerEntry>(_state.Ledger.Count);
+            List<ResourceLedgerEntry>? dropped = null;
+
+            foreach (var entry in _state.Ledger)
+            {
+                if (known.Contains(entry.Resource))
+                {
+                    kept.Add(entry);
+                }
+                else
+                {
+                    (dropped ??= []).Add(entry);
+                }
+            }
+
+            if (dropped is null)
+            {
+                return [];
+            }
+
+            var copied = Keep(dropped, droppedUtc);
+
+            _state = _state with { Ledger = kept };
+            Write(_state);
+
+            var named = string.Join(
+                ", ",
+                dropped.Select(entry =>
+                    $"{entry.Resource} (attempts {entry.Attempts}, escalations {entry.Escalations})"));
+
+            _log.Fail(
+                $"The reconcile journal at {Path} held {dropped.Count} row(s) naming things this build has no "
+                + $"catalog entry and no loop for: {named}. They have been dropped, because this build can "
+                + "neither observe them nor act on them, so nothing it does would ever clear them — and a row "
+                + "that has given up stops this frame for as long as it is there"
+                + (copied ? $". What they said is kept at {DroppedPath}." : $", and they could not be kept at {DroppedPath}."));
+
+            return dropped;
         }
     }
 
@@ -535,6 +698,33 @@ public sealed class ReconcileJournal
             + (kept ? $" — the bytes it found are kept at {UnreadablePath}." : "."));
 
         return new ReconcileJournalState();
+    }
+
+    /// <summary>Keeps <paramref name="dropped"/> beside the journal, and says whether it landed.</summary>
+    private bool Keep(IReadOnlyList<ResourceLedgerEntry> dropped, DateTimeOffset droppedUtc)
+    {
+        try
+        {
+            _store.WriteText(
+                DroppedFileName,
+                JsonSerializer.Serialize(
+                    new DroppedLedgerRows
+                    {
+                        DroppedUtc = droppedUtc,
+                        Build = AgentBuild.Version,
+                        Rows = dropped,
+                    },
+                    AgentJson.Default.DroppedLedgerRows));
+
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Worth a try and never worth a throw, and never worth withholding the repair over: see
+            // DropUnknown's remarks. The rows are named in the log line either way.
+            _log.Warn($"The dropped ledger rows could not be kept at {DroppedPath}: {exception.Message}");
+            return false;
+        }
     }
 
     private bool Quarantine(string text)

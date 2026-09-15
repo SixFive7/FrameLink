@@ -22,6 +22,7 @@ namespace FrameLink.Agent;
     WriteIndented = true)]
 [JsonSerializable(typeof(ControlEndpoints))]
 [JsonSerializable(typeof(ReconcileJournalState))]
+[JsonSerializable(typeof(DroppedLedgerRows))]
 [JsonSerializable(typeof(BootTrialState))]
 [JsonSerializable(typeof(AgentMemoryState))]
 [JsonSerializable(typeof(PageMessage))]
