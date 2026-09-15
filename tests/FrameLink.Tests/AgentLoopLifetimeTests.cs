@@ -1,5 +1,7 @@
 using FrameLink.Agent;
+using FrameLink.Agent.Hosting;
 using FrameLink.Agent.Reconcile;
+using FrameLink.Agent.State;
 
 namespace FrameLink.Tests;
 
@@ -108,6 +110,196 @@ public sealed class AgentLoopLifetimeTests
         await shutdown.CancelAsync();
 
         Assert.Null(await AgentHost.FirstToEndAsync(running, shutdown.Token));
+    }
+
+    [Fact]
+    public async Task A_verify_reboot_is_the_loop_standing_down_rather_than_the_loop_dying()
+    {
+        // <b>Measured on a real frame, 2026-08-30.</b> §2.4's reboot is asked for by this loop, and
+        // the loop then returns so the machine can go down — with the agent's shutdown token
+        // unsignalled, because nothing is stopping the agent. The host's one test for a legitimate
+        // ending therefore said "death", and the frame counted a ladder attempt for doing exactly
+        // what §2.4 asks of it.
+        using var store = new TemporaryStore();
+        using var shutdown = new CancellationTokenSource();
+        var boundary = new RestartingBoundary();
+        var loop = RealLoop(store.Store, boundary, new RecordingLog(), new ManualClock(), new MutableBootIdentity(),
+            new ScriptedResource("panel", "want", "have-not"));
+
+        var task = loop.RunAsync(shutdown.Token);
+        await task;
+
+        // The machine really was asked to go down: this is the reboot the loop returned to allow.
+        Assert.Single(boundary.Crossings);
+        Assert.Equal("panel", boundary.Crossings[0].Resource);
+
+        var running = new List<AgentHost.AgentLoop>
+        {
+            new("console-stage", "paint the screen", Task.Delay(Timeout.Infinite, shutdown.Token)),
+            new("reconcile", "keep every setting on this frame as it should be", task, loop.StandDown),
+        };
+
+        var ended = await AgentHost.FirstToEndAsync(running, shutdown.Token);
+
+        // It still <i>ended</i>, and the supervision still sees it end — the fix is not an
+        // exemption. What changed is that the loop now says why, in advance and in its own words.
+        Assert.NotNull(ended);
+        Assert.Equal("reconcile", ended!.Name);
+        Assert.Equal("it returned while the agent was still running", AgentHost.DescribeEnd(ended));
+        Assert.Equal(ReconcileLoop.RestartingToProveAChange, AgentHost.StoodDown(ended));
+
+        await shutdown.CancelAsync();
+    }
+
+    [Fact]
+    public async Task Three_verify_reboots_on_one_card_stand_down_three_times_and_count_nothing()
+    {
+        // The measured cascade itself: on first contact with a frame, `unit.fl-agent.content` found
+        // genuine drift, acted, and crossed the reboot — three times. Three verify-reboots became
+        // three counted loop deaths and the frame escalated on `agent.loop.reconcile attempts=3
+        // escalations=1`, which is a frame stopped for working correctly.
+        //
+        // One card and one machine across three processes, which is what makes it a cascade: the
+        // boot id advances because the machine really rebooted, the resource is the same object
+        // because a system value survives a reboot, and each process gets its own loop and its own
+        // journal object exactly as a frame does.
+        using var store = new TemporaryStore();
+        using var shutdown = new CancellationTokenSource();
+        var boundary = new RestartingBoundary();
+        var boot = new MutableBootIdentity();
+        var clock = new ManualClock();
+
+        // Put back after every verify, so each boot finds real drift again and crosses again — the
+        // shape the measured frame was in. The conflict threshold is lifted out of the way because
+        // decision 78's ladder is a different subject from this one.
+        var resource = new ScriptedResource("unit.fl-agent.content", "want", "have-not") { PutBackAfterVerify = true };
+        var options = Options with { ConflictThreshold = 10 };
+
+        for (var process = 0; process < 3; process++)
+        {
+            var loop = RealLoop(store.Store, boundary, new RecordingLog(), clock, boot, options, resource);
+            var task = loop.RunAsync(shutdown.Token);
+            await task;
+
+            var ended = new AgentHost.AgentLoop("reconcile", "keep every setting as it should be", task, loop.StandDown);
+
+            Assert.Equal(ReconcileLoop.RestartingToProveAChange, AgentHost.StoodDown(ended));
+            Assert.Equal(process + 1, boundary.Crossings.Count);
+
+            // The machine goes down and comes back, which is the whole reason the loop returned.
+            boot.Advance();
+        }
+
+        // <b>Nothing was counted against the loop</b>, on the card, after three of them. The ledger
+        // holds what the resource is doing and not one word about the loop that was doing it.
+        var journal = new ReconcileJournal(store.Store, new RecordingLog());
+
+        Assert.DoesNotContain(
+            journal.Read().Ledger,
+            entry => entry.Resource.StartsWith(AgentLoopFailures.LedgerPrefix, StringComparison.Ordinal));
+
+        // And the frame is not stopped, which is the part a household would have seen.
+        var after = RealLoop(store.Store, boundary, new RecordingLog(), clock, boot, options, resource);
+        Assert.False(after.HasStopped);
+    }
+
+    [Fact]
+    public async Task A_loop_that_declared_a_stand_down_and_then_threw_is_a_death_anyway()
+    {
+        // The declaration is a claim about a return. A loop that said it was standing down and then
+        // faulted made a claim about a return that never happened, and a throw is a death whatever
+        // was said before it — otherwise one sentence spoken early would cover every later failure
+        // of the loop that spoke it.
+        using var shutdown = new CancellationTokenSource();
+        var standDown = new LoopStandDown();
+        standDown.Declare(ReconcileLoop.RestartingToProveAChange);
+
+        var faulted = new AgentHost.AgentLoop(
+            "reconcile",
+            "keep every setting as it should be",
+            Task.FromException(new InvalidOperationException("the reconcile loop died")),
+            standDown);
+
+        Assert.Null(AgentHost.StoodDown(faulted));
+
+        var cancelled = new AgentHost.AgentLoop(
+            "reconcile",
+            "keep every setting as it should be",
+            Task.FromCanceled(new CancellationToken(canceled: true)),
+            standDown);
+
+        Assert.Null(AgentHost.StoodDown(cancelled));
+
+        // And the ordinary shape it is meant to cover still reads as deliberate, so the assertions
+        // above are about the task's ending rather than about the declaration being ignored.
+        var stood = new AgentHost.AgentLoop("reconcile", "keep every setting as it should be", Task.CompletedTask, standDown);
+        Assert.Equal(ReconcileLoop.RestartingToProveAChange, AgentHost.StoodDown(stood));
+
+        await shutdown.CancelAsync();
+    }
+
+    [Fact]
+    public void A_loop_that_ends_without_declaring_anything_is_a_death_even_with_somewhere_to_declare_it()
+    {
+        // Carrying a stand-down is not the same as having used one. Fourteen loops carry none at
+        // all; the fifteenth carries one and uses it on exactly one path.
+        var silent = new AgentHost.AgentLoop("local-origin", "serve the repair screen", Task.CompletedTask, new LoopStandDown());
+        Assert.Null(AgentHost.StoodDown(silent));
+
+        var none = new AgentHost.AgentLoop("local-origin", "serve the repair screen", Task.CompletedTask);
+        Assert.Null(AgentHost.StoodDown(none));
+
+        // First word wins, so nothing later can overwrite the reason the loop gave at the moment it
+        // decided.
+        var standDown = new LoopStandDown();
+        standDown.Declare("the first reason");
+        standDown.Declare("the second reason");
+        Assert.Equal("the first reason", standDown.Because);
+    }
+
+    [Fact]
+    public async Task The_loop_declares_nothing_when_the_agent_is_the_thing_that_stopped()
+    {
+        // Shutdown already states itself, in the token every loop holds. A second source of truth
+        // about one fact is how the two come to disagree — so the reconcile loop says nothing on
+        // the way out of an ordinary stop, and the host reads the token exactly as it always did.
+        using var store = new TemporaryStore();
+        using var shutdown = new CancellationTokenSource();
+        var clock = new ManualClock();
+        var loop = RealLoop(store.Store, new RestartingBoundary(), new RecordingLog(), clock, new MutableBootIdentity(),
+            new ScriptedResource("panel", "want", "want"));
+
+        clock.OnDelay = _ => shutdown.Cancel();
+
+        await loop.RunAsync(shutdown.Token);
+
+        Assert.Null(loop.StandDown.Because);
+        Assert.Null(AgentHost.StoodDown(
+            new AgentHost.AgentLoop("reconcile", "keep every setting as it should be", Task.CompletedTask, loop.StandDown)));
+    }
+
+    [Fact]
+    public void The_agent_asks_whether_the_loop_stood_down_before_it_counts_a_loop_death()
+    {
+        // The wiring, which every test above would pass without. `AgentHost.RunAsync` is four
+        // hundred lines of composition against real Linux surfaces and has never been constructible
+        // in the suite, so a host that built the reconcile loop's `AgentLoop` without its
+        // stand-down — or that asked about it after recording the failure — would leave the measured
+        // defect exactly as it was while this file stayed green.
+        var host = File.ReadAllText(Path.Combine(
+            GuiFreshnessTests.RepositoryRoot(), "src", "FrameLink.Agent", "AgentHost.cs"));
+
+        Assert.Contains("loop.RunAsync(shutdown.Token), loop.StandDown)", host, StringComparison.Ordinal);
+
+        var asked = host.IndexOf("StoodDown(ended)", StringComparison.Ordinal);
+        var counted = host.IndexOf("AgentLoopFailures.Record(", StringComparison.Ordinal);
+
+        Assert.True(asked > 0, "AgentHost never asks whether the loop that ended had stood down.");
+        Assert.True(counted > 0, "AgentHost no longer records a loop death at all.");
+        Assert.True(
+            asked < counted,
+            "AgentHost records the loop death before it asks whether the ending was deliberate, so "
+            + "every verify-reboot is still counted as the reconcile loop dying.");
     }
 
     [Fact]
@@ -307,5 +499,65 @@ public sealed class AgentLoopLifetimeTests
         Assert.Equal(
             FrameLink.Protocol.LoopStateNames.Escalated,
             harness.Telemetry.Reports[^1].LoopState);
+    }
+
+    /// <summary>
+    /// A loop over <paramref name="store"/> whose reboot boundary is the caller's.
+    /// </summary>
+    /// <remarks>
+    /// Not <see cref="ReconcileHarness"/>, and the difference is the whole point: that harness
+    /// crosses the boundary <i>inside the process</i> and answers <see cref="RebootCrossing.Crossed"/>,
+    /// which is the one answer a frame never gives. §2.4's return-so-the-machine-can-go-down path is
+    /// only reachable through a boundary that answers <see cref="RebootCrossing.Restarting"/>.
+    /// </remarks>
+    private static ReconcileLoop RealLoop(
+        IStateStore store,
+        IRebootBoundary reboots,
+        IAgentLog log,
+        ManualClock clock,
+        MutableBootIdentity boot,
+        params IResource[] resources) =>
+        RealLoop(store, reboots, log, clock, boot, Options, resources);
+
+    private static ReconcileLoop RealLoop(
+        IStateStore store,
+        IRebootBoundary reboots,
+        IAgentLog log,
+        ManualClock clock,
+        MutableBootIdentity boot,
+        ReconcileOptions options,
+        params IResource[] resources) =>
+        new(new ReconcileServices
+        {
+            Graph = new ResourceGraph(resources),
+            Journal = new ReconcileJournal(store, log),
+            Boot = boot,
+            Reboots = reboots,
+            Countdown = new RebootCountdown(clock),
+            Telemetry = new RecordingTelemetry(),
+            Hub = new AgentStatusHub(AgentStatusFactory.Starting()),
+            Clock = clock,
+            Log = log,
+            Options = options,
+        })
+        {
+            DeviceId = "TEST-DEVI-CEID-0001",
+        };
+
+    /// <summary>
+    /// The boundary a frame actually has: it takes the request, reports that the machine is going
+    /// down, and restarts nothing.
+    /// </summary>
+    private sealed class RestartingBoundary : IRebootBoundary
+    {
+        public List<RebootRequest> Crossings { get; } = [];
+
+        public Task<RebootOutcome> CrossAsync(RebootRequest request, CancellationToken cancellationToken)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+
+            Crossings.Add(request);
+            return Task.FromResult(new RebootOutcome(RebootCrossing.Restarting));
+        }
     }
 }

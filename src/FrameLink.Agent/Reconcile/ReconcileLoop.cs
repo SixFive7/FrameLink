@@ -197,6 +197,18 @@ public sealed class ReconcileLoop
     /// </remarks>
     public const string SilentAuthority = "the Fleet Manager";
 
+    /// <summary>
+    /// What this loop declares before it returns to let §2.4's reboot happen.
+    /// </summary>
+    /// <remarks>
+    /// <b>The sentence is the whole mechanism, not a log line that accompanies one.</b> It is what
+    /// <see cref="StandDown"/> carries and what the host reads to tell this return apart from the
+    /// loop dying — so it is a fact stated by the code that caused it, written where a person can
+    /// read it, rather than an inference somebody downstream makes from a clock.
+    /// </remarks>
+    public const string RestartingToProveAChange =
+        "this frame is restarting to prove a change it has just made";
+
     private readonly ReconcileServices _services;
     private readonly Link.Backoff _retry;
     private string _deviceId = "unknown";
@@ -219,6 +231,16 @@ public sealed class ReconcileLoop
         get => _deviceId;
         set => _deviceId = value ?? "unknown";
     }
+
+    /// <summary>
+    /// What this loop says about its own ending, for the host that supervises it.
+    /// </summary>
+    /// <remarks>
+    /// Empty until <see cref="RunAsync"/> returns because §2.4's reboot is under way — the one
+    /// ending of this loop that is not a failure and cannot be told from one by timing. See
+    /// <see cref="LoopStandDown"/>, which is where the whole of that reasoning lives.
+    /// </remarks>
+    public LoopStandDown StandDown { get; } = new();
 
     /// <summary>
     /// Whether this device has stopped reconciling and is waiting for a person (§2.5 rung 4).
@@ -465,6 +487,22 @@ public sealed class ReconcileLoop
 
             if (EndsTheLoop(outcome.Result))
             {
+                if (outcome.Result is PassResult.Restarting)
+                {
+                    // <b>The one ending of this loop that is not a failure and has no token to say
+                    // so.</b> The agent is not stopping — the machine is going down, at this loop's
+                    // own request — so the host's shutdown test is false and every one of these
+                    // returns used to be counted as the reconcile loop dying (measured 2026-08-30:
+                    // three verify-reboots, three counted deaths, a frame escalated on
+                    // agent.loop.reconcile for doing exactly what §2.4 asks). Declared here, before
+                    // the return, because a statement made after it is a statement nobody can read.
+                    //
+                    // PassResult.Cancelled is deliberately not declared: that is the agent stopping,
+                    // which the shutdown token already states, and a second source of truth about
+                    // one fact is how the two come to disagree.
+                    StandDown.Declare(RestartingToProveAChange);
+                }
+
                 return;
             }
 

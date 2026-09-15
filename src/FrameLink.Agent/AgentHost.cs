@@ -870,7 +870,11 @@ public sealed class AgentHost
             // whole of a frame's uptime. It sends nothing while nothing changes.
             new("status-reporter", "keep the Fleet Manager's picture of this frame current", reporter.RunAsync(shutdown.Token)),
             new("self-update", "check hourly for the version this fleet serves", updates.RunAsync(shutdown.Token)),
-            new("reconcile", "keep every setting on this frame as it should be", loop.RunAsync(shutdown.Token)),
+            // The one loop that carries a stand-down, because it is the only one that ends a
+            // process on purpose: §2.4's verify-reboot is asked for by this loop, and the return
+            // that lets it happen is not the loop dying. Without the fourth argument that return
+            // reads as a death — measured, three times on one frame, on 2026-08-30.
+            new("reconcile", "keep every setting on this frame as it should be", loop.RunAsync(shutdown.Token), loop.StandDown),
             new("supervision", "keep the product running once it is up", supervisor.RunAsync(shutdown.Token)),
             new("browser-stage", "make sure the panel is never blank", BrowserStageLoopAsync(browser, shutdown.Token)),
 
@@ -934,6 +938,43 @@ public sealed class AgentHost
         {
             // Asked to stop, or standing aside for a new binary.
             return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Success;
+        }
+
+        // The tail both endings below share: stand by until the machine goes down or somebody stops
+        // the unit, then give the surviving loops their ordinary shutdown path.
+        async Task<int> StandByAsync(int exitCode)
+        {
+            try
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, shutdown.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Somebody pressed a button, systemd stopped the unit, the machine is going down for
+                // the restart asked for above, or an update is standing this process aside.
+            }
+
+            // The surviving loops each own something — a browser session, a child process, a socket,
+            // a GPIO claim — and this is the one path that used to leave them to process death. It
+            // costs nothing on the way to a reboot, and it is what stops a shutdown from being a
+            // kill.
+            await SettleAsync(running).ConfigureAwait(false);
+
+            return restart.Requested ? ExitCodes.RestartToApplyUpdate : exitCode;
+        }
+
+        // <b>The second legitimate ending, and the one that used to read as a death.</b> §2.4's
+        // reboot is asked for by the reconcile loop, so the loop returns while the agent's own
+        // shutdown token is unsignalled — the agent is not stopping, the machine is going down. The
+        // loop says so itself, before it returns, and this is where that sentence is believed: no
+        // ledger row, no attempt spent, no second reboot asked for on top of the one already queued.
+        // Nothing else changes, because everything that had to be said about this pass was published
+        // by the pass before it crossed.
+        if (StoodDown(ended) is { Length: > 0 } declared)
+        {
+            _log.Info($"The '{ended.Name}' loop stood down: {declared}.");
+
+            return await StandByAsync(ExitCodes.Success).ConfigureAwait(false);
         }
 
         // A loop ended while the agent was still running. <b>Returning counts, not only
@@ -1037,22 +1078,7 @@ public sealed class AgentHost
             await AnnounceAsync(decided.Verdict).ConfigureAwait(false);
         }
 
-        try
-        {
-            await Task.Delay(Timeout.InfiniteTimeSpan, shutdown.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            // Somebody pressed a button, systemd stopped the unit, the machine is going down for the
-            // restart asked for above, or an update is standing this process aside.
-        }
-
-        // The surviving loops each own something — a browser session, a child process, a socket, a
-        // GPIO claim — and this is the one path that used to leave them to process death. It costs
-        // nothing on the way to a reboot, and it is what stops a shutdown from being a kill.
-        await SettleAsync(running).ConfigureAwait(false);
-
-        return restart.Requested ? ExitCodes.RestartToApplyUpdate : ExitCodes.Unrecoverable;
+        return await StandByAsync(ExitCodes.Unrecoverable).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -1069,7 +1095,40 @@ public sealed class AgentHost
     /// running" — which is the same shape §2.5 rung 2 records for every other failure.
     /// </param>
     /// <param name="Task">The running loop.</param>
-    public sealed record AgentLoop(string Name, string Purpose, Task Task);
+    /// <param name="StandDown">
+    /// Where this loop states, in its own words and before it returns, that an ending was
+    /// deliberate — or null for a loop that has no such ending. Only the reconcile loop has one
+    /// today, because only it ends a process on purpose (§2.4's reboot); see
+    /// <see cref="LoopStandDown"/> and <see cref="StoodDown"/>.
+    /// </param>
+    public sealed record AgentLoop(string Name, string Purpose, Task Task, LoopStandDown? StandDown = null);
+
+    /// <summary>
+    /// Why <paramref name="loop"/>'s ending was deliberate, or <see langword="null"/> — it was a
+    /// death.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Two facts, and the second is what keeps a declaration from covering a death.</b> The
+    /// loop has to have said so — <see cref="LoopStandDown.Because"/>, written before it returned —
+    /// <i>and</i> its task has to have actually run to completion. A loop that declared a
+    /// stand-down and then threw on the way out made a claim about a return that never happened,
+    /// and a throw is a death whatever was said before it. <see cref="TaskStatus.Faulted"/> and
+    /// <see cref="TaskStatus.Canceled"/> therefore both fall through to the ladder, exactly as they
+    /// did before any of this existed.
+    /// </para>
+    /// <para>
+    /// Read only after the task has ended — which is the only place it is called from, because
+    /// <see cref="FirstToEndAsync"/> has already awaited it. That await is also what publishes the
+    /// declaration to this thread, so no lock and no timing assumption is involved on either side.
+    /// </para>
+    /// </remarks>
+    public static string? StoodDown(AgentLoop loop)
+    {
+        ArgumentNullException.ThrowIfNull(loop);
+
+        return loop.Task.Status == TaskStatus.RanToCompletion ? loop.StandDown?.Because : null;
+    }
 
     /// <summary>
     /// Waits for the first loop to end, and says whether that ending was a failure.
@@ -1099,13 +1158,21 @@ public sealed class AgentHost
     /// watching at all.
     /// </para>
     /// <para>
-    /// <b>The one legitimate ending is shutdown, and it is distinguished explicitly rather than by
-    /// timing.</b> Every loop returns when the agent is stopping, so the question this asks after
-    /// the first one ends is whether the agent's own shutdown token has been signalled — a fact,
-    /// not a race. The other case that used to end a loop legitimately was
-    /// <c>ScreenHandover</c> returning on a machine with no virtual terminals, which is every run
-    /// off a frame; it now waits for cancellation instead of returning, so there is exactly one
-    /// rule and no exceptions to it.
+    /// <b>Two endings are legitimate, and both are facts rather than timings.</b> The first is the
+    /// one this asks about: every loop returns when the agent is stopping, so after the first one
+    /// ends the question is whether the agent's own shutdown token has been signalled — a fact, not
+    /// a race. The other case that used to end a loop legitimately was <c>ScreenHandover</c>
+    /// returning on a machine with no virtual terminals, which is every run off a frame; it now
+    /// waits for cancellation instead of returning, so nothing rests on a loop looking finished.
+    /// </para>
+    /// <para>
+    /// <b>The second is a stand-down, and the caller asks about it rather than this method</b>
+    /// (<see cref="StoodDown"/>). §2.4's verify-reboot is asked for by the reconcile loop, which
+    /// then returns so the machine can go down — with the shutdown token unsignalled, because the
+    /// agent is not being stopped. The split is not tidiness: a shutdown means all fifteen loops are
+    /// unwinding and the right thing to do is wait for them, while a stand-down means one loop
+    /// stepped aside and the other fourteen are still running, so the caller waits for the machine
+    /// instead. Two endings, two decisions, one of them made here and one of them made there.
     /// </para>
     /// <para>
     /// It does not cancel anything. The caller decides what an ending means — stand down and let
