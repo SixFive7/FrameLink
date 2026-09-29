@@ -37,7 +37,7 @@ The short version, before the evidence:
   zero binary bytes, and is the only option that reaches the photographs as well.
 
 This is reference material, not a build guide: the seven-block step structure of
-[CLAUDE.md §2.1](../CLAUDE.md) does not apply here. The link and honesty rules do.
+[AGENTS.md §2.1](../AGENTS.md) does not apply here. The link and honesty rules do.
 
 ---
 

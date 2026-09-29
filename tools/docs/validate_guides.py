@@ -1,4 +1,4 @@
-"""Structural validator for docs/*.md against CLAUDE.md section 2.
+"""Structural validator for docs/*.md against AGENTS.md section 2.
 
 Checks, per guide:
   1. Exactly one markdown heading in the file, and it is the H1 (2.1, 2.6).
@@ -91,7 +91,7 @@ for path in sorted(DOCS.glob("*.md")):
         problems.append(f"{name}{'' if n is None else f':{n}'} - {msg}")
 
     headings = [(i + 1, l) for i, l in enumerate(lines) if HEADING_RE.match(l) and not fenced[i]]
-    # CLAUDE.md section 2.1 permits guides 1 and 2 exactly one structural heading each, because
+    # AGENTS.md section 2.1 permits guides 1 and 2 exactly one structural heading each, because
     # their steps are an ordinary numbered list rather than badge titles. This validator predates
     # that allowance and reported both files as failures for a week; two permanent false failures
     # are worse than none, because a check nobody can ever get to zero is a check people stop

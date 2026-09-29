@@ -2,7 +2,7 @@
 
 The enumeration of every atomic device setting extracted from build guides 3–12, as required by
 [version2.md Appendix B item 1](../version2.md). This is reference material, not a build guide:
-the seven-block step structure of [CLAUDE.md §2.1](../CLAUDE.md) does not apply here.
+the seven-block step structure of [AGENTS.md §2.1](../AGENTS.md) does not apply here.
 
 ---
 

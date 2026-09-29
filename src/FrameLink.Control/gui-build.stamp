@@ -41,7 +41,7 @@ a91503baebdf6737589e1f6dde2ba977be4936ecdd081ff317adcc61c2bf1f61  gui/src/lib/de
 95018919396bead2b6a9b10503ae39ab5b7ccc82945a86acfbc7558f844a63bc  gui/src/lib/design/fonts.css
 badee050cc4f48de9c722999fe74c69ce57015d5dc35bf3049c27a4ffe179e86  gui/src/lib/design/motion.ts
 184bdac71701ec38be3e41340b31f217b0745c2466aab76244ca607b5e13ffc1  gui/src/lib/design/theme.svelte.ts
-8d9cc5cc2957dd5a203411c9c0d2cfc0dc2842a5927ff5f488d227f5d0a631c4  gui/src/lib/design/tokens.css
+7d38f912bb9146d0c0946cc8cb0194c72e9b3d8f53e03f4d115860bbc30aedbc  gui/src/lib/design/tokens.css
 49c11e7337479af79beebb48660d81f47b9853d255b450b0ee781432c90b55df  gui/src/lib/format.ts
 51c6fbd97ba848a5f8f3c1e899fa1193403696d803643dd838d89b8428303067  gui/src/lib/packages.ts
 4786fce3cb777c8aaa3603d5f16317801b1161d54ebdaf19edb3f298aceb2d29  gui/src/lib/presence.ts

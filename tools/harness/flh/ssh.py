@@ -1,6 +1,6 @@
 """Paramiko wrapper for every command the harness runs on the mule.
 
-CLAUDE.md section 1.3 names paramiko as the sanctioned tool for remote execution, and section 1.2 makes
+AGENTS.md section 1.3 names paramiko as the sanctioned tool for remote execution, and section 1.2 makes
 the password handling non-negotiable:
 
 * the password comes from ``FL_PW`` and nowhere else;
@@ -153,7 +153,7 @@ class Mule:
 
         ``get_pty=False`` deliberately: a PTY merges stderr into stdout and injects
         carriage returns, which corrupts anything the harness wants to compare byte for
-        byte (CLAUDE.md section 1.4).
+        byte (AGENTS.md section 1.4).
         """
         started = time.monotonic()
         _, stdout, stderr = self._client.exec_command(command, get_pty=False, timeout=timeout)
@@ -386,7 +386,7 @@ def connect(*, host: str = MULE_HOST, user: str = MULE_USER, timeout: float = 15
         raise HarnessError(
             f"paramiko is not importable: {exc}",
             exit_code=4,
-            remedy="CLAUDE.md section 1.3 lists paramiko 4.x as already installed on this workstation.",
+            remedy="AGENTS.md section 1.3 lists paramiko 4.x as already installed on this workstation.",
         ) from exc
 
     client = paramiko.SSHClient()

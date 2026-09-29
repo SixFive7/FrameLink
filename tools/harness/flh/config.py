@@ -9,7 +9,7 @@ Required, and never defaulted:
 
     FL_PW           SSH password for the mule.
 
-                    CLAUDE.md section 1.2 is binding and absolute: the password is supplied
+                    AGENTS.md section 1.2 is binding and absolute: the password is supplied
                     per-session through this variable only. It is never written to a file,
                     a log, a shell history, a config, a keychain or a default value, and
                     there is no key-based fallback. Every mule-touching subcommand checks

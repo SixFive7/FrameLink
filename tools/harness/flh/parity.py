@@ -7,7 +7,7 @@ reference** as the first of the three. This module is that state diff's eyes; th
 
 The split, and why it is where it is
 ------------------------------------
-Reaching the frame is paramiko's job (CLAUDE.md section 1.3) and therefore Python's. Deciding what
+Reaching the frame is paramiko's job (AGENTS.md section 1.3) and therefore Python's. Deciding what
 an observation *means* is a comparison against 929 package versions, twenty-nine captured
 blocks and an expected-difference ledger - and the answer to "is this package version newer"
 already exists, in ``src/FrameLink.Control/PackageDrift.cs``, where the Fleet Manager computes
@@ -30,7 +30,7 @@ Read-only, and unprivileged by default
 --------------------------------------
 Every probe is an inspection command: ``cat``, ``grep``, ``dpkg-query``, ``systemctl
 list-unit-files``, ``amixer``, ``findmnt``, ``ip``. Nothing here writes to the frame, so
-CLAUDE.md section 1.8 needs no authorisation for any of it - and a parity check that changed the
+AGENTS.md section 1.8 needs no authorisation for any of it - and a parity check that changed the
 thing it was measuring would be worthless anyway.
 
 One probe genuinely cannot be unprivileged: the array reports its firmware version only to a

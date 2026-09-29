@@ -2,7 +2,7 @@
 
 Why hand-rolled rather than Pillow: the framebuffer path exists precisely for the state
 where the mule is a bare Trixie install with no compositor, and adding a workstation
-dependency (CLAUDE.md section 1.3 discourages new installs, and every one becomes an inherited
+dependency (AGENTS.md section 1.3 discourages new installs, and every one becomes an inherited
 persistent mutation) to decode four bytes per pixel is a poor trade. PNG's baseline
 encoding is a zlib stream of filter-0 scanlines and three chunks; ``zlib`` and ``struct``
 are both in the standard library, so this is about forty lines and no install.

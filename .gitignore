@@ -30,3 +30,7 @@ SESSION-STATE.md
 # produced on the way to a finding rather than as the finding. The findings
 # themselves belong in reference/ or docs/ and are committed there.
 .work/
+
+# Instructions live in AGENTS.md; a CLAUDE.md makes Claude Code skip it
+CLAUDE.md
+CLAUDE.local.md

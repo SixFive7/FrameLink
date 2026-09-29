@@ -108,7 +108,7 @@ public sealed class ParityHarnessTests
     {
         // Crude on purpose. It cannot prove a command is read-only, but it can prove nobody has
         // quietly added an `apt install` or a `sed -i` to something a parity check runs against a
-        // frame it is meant to be measuring rather than changing (CLAUDE.md §1.8).
+        // frame it is meant to be measuring rather than changing (AGENTS.md §1.8).
         string[] forbidden =
         [
             "apt ", "apt-get", "dpkg -i", "sed -i", "tee ", "rm ", "mv ", "cp ", "install ",

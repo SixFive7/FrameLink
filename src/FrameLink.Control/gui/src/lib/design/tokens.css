@@ -6,7 +6,7 @@
 	This file is the design system. version2.md §7.4 asks for a palette, a type scale and a
 	motion language "defined and documented in the repo, then applied consistently" across
 	*both* surfaces — the Fleet Manager console and the frame's own screens — with no
-	toned-down variant for the device. CLAUDE.md §3 forbids new markdown outside docs/ and
+	toned-down variant for the device. AGENTS.md §3 forbids new markdown outside docs/ and
 	research/, so the documentation lives here, in the artifact that is actually loaded.
 
 	The on-device UI will be built against these tokens later. Copy this file; do not fork it.

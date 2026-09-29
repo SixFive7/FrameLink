@@ -18,7 +18,7 @@
 # harness was not running the same service as a frame provisioned by the agent.
 #
 # Deploy rewrites the file only when the content differs, so a repeat deploy performs no
-# daemon-reload and no restart (CLAUDE.md 0.1).
+# daemon-reload and no restart (AGENTS.md 0.1).
 
 [Unit]
 Description=FrameLink Agent

@@ -131,7 +131,7 @@ _READ_ME_FIRST = [
     "whatever it was changing is unverified - which matters most for `deploy` and `power`, "
     "the two subcommands that change something outside this repository.",
     "Credentials are supplied inline per session and never stored, logged or defaulted "
-    "(CLAUDE.md section 1.2). The environment block names which variable unlocks what; it "
+    "(AGENTS.md section 1.2). The environment block names which variable unlocks what; it "
     "holds no values and must never be made to.",
 ]
 
@@ -1126,7 +1126,7 @@ _ORIENTATION: dict[str, str] = {
         "bebf34c)."
     ),
     "repoRules": (
-        "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, "
+        "AGENTS.md - binding operational rules. Section 1.2 on credentials is absolute, "
         "section 1.8 requires explicit per-class authorisation before any mutation of the mule."
     ),
     "harness": (
@@ -1242,7 +1242,7 @@ def _resource_ledger() -> dict[str, Any]:
 def _environment() -> dict[str, Any]:
     """Hosts, credentials by name, and the measurements other timeouts are set against.
 
-    Credential **values** never appear here, in any form, ever (CLAUDE.md section 1.2). What
+    Credential **values** never appear here, in any form, ever (AGENTS.md section 1.2). What
     appears is the variable name, what it unlocks and where to get one, which is what a
     session that has just started actually lacks.
     """
@@ -1321,7 +1321,7 @@ def _environment() -> dict[str, Any]:
             },
         ],
         "credentialRule": (
-            "CLAUDE.md section 1.2, absolute: supplied in-session by environment variable only. "
+            "AGENTS.md section 1.2, absolute: supplied in-session by environment variable only. "
             "Never a file, a log, a shell history, a config, a keychain or a default. Never "
             "echoed, never summarised back, never written into this file."
         ),

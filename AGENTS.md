@@ -2,6 +2,10 @@
 
 Operational rules for any Claude Code agent working in this repository. These are **binding**, not suggestions. Read top to bottom before making changes.
 
+## Subfolder instructions
+
+Before working in a subfolder, read any AGENTS.md from that folder up to the repo root that you haven't seen yet. Claude Code attaches them only when a file there is read: https://github.com/anthropics/claude-code/tree/main/mods/agents-md#where-it-still-differs-from-claudemd
+
 ---
 
 ## 0. Operating principles
@@ -326,7 +330,7 @@ Rules:
 - `research/` holds pre-decision exploration. It is historical reference; do not rewrite it unless a decision changes.
 - `README.md` is the project index. It points at every build guide currently in `docs/` and holds the bill of materials. Update it whenever a guide is renamed, added, or removed.
 - Do not create new markdown files outside `docs/` and `research/` unless explicitly asked.
-- Never edit `CLAUDE.md` (this file) to weaken rules. Agents may propose strengthening them to the user.
+- Never edit `AGENTS.md` (this file) to weaken rules. Agents may propose strengthening them to the user.
 
 ### 3.1 A worktree installs its own `node_modules`
 

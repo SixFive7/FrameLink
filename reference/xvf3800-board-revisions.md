@@ -26,7 +26,7 @@ The short version, before the evidence:
   Safe Mode work is never written by an upgrade.
 
 This is reference material, not a build guide: the seven-block step structure of
-[CLAUDE.md §2.1](../CLAUDE.md) does not apply here. The link and honesty rules do.
+[AGENTS.md §2.1](../AGENTS.md) does not apply here. The link and honesty rules do.
 
 ---
 

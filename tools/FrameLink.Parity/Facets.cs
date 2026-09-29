@@ -13,7 +13,7 @@ namespace FrameLink.Parity;
 /// limit and a silent one.
 /// </para>
 /// <para>
-/// <b>Every probe is read-only and, with one named exception, unprivileged.</b> CLAUDE.md §1.8
+/// <b>Every probe is read-only and, with one named exception, unprivileged.</b> AGENTS.md §1.8
 /// makes inspection the default and every class of mutation a separate ask; a parity check that
 /// wrote anything would be measuring a frame it had just changed. Exactly one is marked
 /// <see cref="ParityFacet.Elevated"/> and is skipped unless the operator asks for it: the array
@@ -372,7 +372,7 @@ public static class ParityFacets
                 ["<addresses>"] =
                     "IPv4 and IPv6 addresses are handed out by the household router and differ "
                     + "between two frames that are both correct, so they cannot be a parity criterion. "
-                    + "CLAUDE.md §2.3 also requires them garbled in anything committed.",
+                    + "AGENTS.md §2.3 also requires them garbled in anything committed.",
             },
             Limitation =
                 "Interface names and link states only. The hostname is compared and is expected to "

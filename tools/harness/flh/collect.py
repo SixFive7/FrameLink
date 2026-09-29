@@ -21,7 +21,7 @@ That matters for v2, because two things changed:
 
 1. **The mule is now bare Raspberry Pi OS Lite Trixie.** grim is almost certainly not
    installed, and installing it is a system mutation this harness must not perform
-   unasked (CLAUDE.md section 1.8).
+   unasked (AGENTS.md section 1.8).
 2. **The agent's console stage writes directly to /dev/tty8** before any graphical stack
    exists (section 2.7). grim is a Wayland client; it cannot see a console at all. Screenshotting
    the console stage - the thing M0 most needs to see - is inherently a framebuffer read.
@@ -264,7 +264,7 @@ def screenshot(mule: ssh.Mule, destination: Path, *, method: str = "auto",
             "On a bare frame with no compositor the framebuffer path is the one that should "
             "work; a missing /dev/fb0 on a Pi 5 points at the vc4-kms-v3d overlay not being "
             "loaded. grim needs both `apt install grim` and a live Wayland session - neither "
-            "is installed by the harness, because that is a system mutation (CLAUDE.md section 1.8)."
+            "is installed by the harness, because that is a system mutation (AGENTS.md section 1.8)."
         ),
     )
 

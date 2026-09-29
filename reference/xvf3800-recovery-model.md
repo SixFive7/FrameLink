@@ -37,7 +37,7 @@ the case for the kit as it is currently pinned:
    [section 5](#5-what-dropping-safe-mode-support-would-cost).
 
 This is reference material, not a build guide: the seven-block step structure of
-[CLAUDE.md §2.1](../CLAUDE.md) does not apply here. The link and honesty rules do.
+[AGENTS.md §2.1](../AGENTS.md) does not apply here. The link and honesty rules do.
 
 ---
 

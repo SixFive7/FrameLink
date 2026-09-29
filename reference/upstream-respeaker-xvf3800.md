@@ -9,7 +9,7 @@ each of them dictates a specific rule in the code. This file is the record of wh
 the rules it forces, so that the next person does not rediscover them.
 
 This is reference material, not a build guide: the seven-block step structure of
-[CLAUDE.md §2.1](../CLAUDE.md) does not apply here. The link and honesty rules do.
+[AGENTS.md §2.1](../AGENTS.md) does not apply here. The link and honesty rules do.
 
 ---
 

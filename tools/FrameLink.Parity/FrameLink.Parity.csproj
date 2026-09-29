@@ -9,7 +9,7 @@
 
     Split the same way tools/FrameLink.Upstream is split, for the same reason. Everything
     that reaches the frame lives outside the suite (tools/harness/flh/parity.py, paramiko
-    per CLAUDE.md §1.3); everything that decides what an observation *means* lives here and
+    per AGENTS.md §1.3); everything that decides what an observation *means* lives here and
     runs inside the ordinary suite against fixtures. tests/FrameLink.Tests references this
     project, which is what makes the whole verdict path testable with no hardware.
 

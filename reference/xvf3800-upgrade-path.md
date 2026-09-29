@@ -36,7 +36,7 @@ upgrade path.** They are in [section 9](#9-real-risks-that-are-not-upgrade-path-
    happened; the transcript was not kept. Details in [section 7](#7-multi-version-jumps-observed).
 
 This is reference material, not a build guide: the seven-block step structure of
-[CLAUDE.md §2.1](../CLAUDE.md) does not apply here. The link and honesty rules do.
+[AGENTS.md §2.1](../AGENTS.md) does not apply here. The link and honesty rules do.
 
 ---
 

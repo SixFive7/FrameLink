@@ -18,7 +18,7 @@ touches the mule and refuses a deploy the feed will undo, naming which side is s
 deploy continues and says so - an unchecked feed is reported as unchecked rather than as
 agreement (:mod:`flh.feed`).
 
-Idempotency (CLAUDE.md section 0.1)
+Idempotency (AGENTS.md section 0.1)
 -----------------------------------
 A second run with the same binary and the same unit does nothing at all - no upload, no
 ``daemon-reload``, no restart - and says so. Each of the three mutations is guarded by a

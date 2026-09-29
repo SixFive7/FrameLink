@@ -8,7 +8,7 @@
     "Two words mean different things and are never blended. 'proven' is earned: some fl.py subcommand ran, succeeded, and wrote that transition itself - see provenBy and provenUtc. 'witnessed' is observed on real hardware by a person and recorded in tools/harness/flh/progress.py with its evidence, because no command in this harness can perform an adoption or read a physical panel. Nothing here is ever true because somebody typed it into the JSON: save() rewrites every derived section, so a hand-edit lasts until the next fl.py invocation and no longer.",
     "To record a new hardware observation, add it to _MILESTONES, _HARDWARE_VERIFIED_RESOURCES or _HARDWARE_FINDINGS in tools/harness/flh/progress.py with what was seen, when, on which host and where the evidence lives. Use _HARDWARE_FINDINGS when the reading settles a question rather than converging a resource, and say what it rules out. That is a reviewable commit, which is the point. Do not write it into this file.",
     "If inFlight is not null a previous session died in the middle of that command and whatever it was changing is unverified - which matters most for `deploy` and `power`, the two subcommands that change something outside this repository.",
-    "Credentials are supplied inline per session and never stored, logged or defaulted (CLAUDE.md section 1.2). The environment block names which variable unlocks what; it holds no values and must never be made to."
+    "Credentials are supplied inline per session and never stored, logged or defaulted (AGENTS.md section 1.2). The environment block names which variable unlocks what; it holds no values and must never be made to."
   ],
   "currentMilestone": "M2.5",
   "inFlight": null,
@@ -338,7 +338,7 @@
     "parityHarness": "tools/harness/fl.py parity - the first of Mn+3's three bars. It runs read-only probes over SSH, then tools/FrameLink.Parity judges the result against the parity target, an expected-difference ledger (tools/FrameLink.Parity/expected-differences.json) and the catalog. `fl.py parity --coverage` needs no frame and prints what a state diff can and cannot answer. Exit 0 at parity, 2 differences found, 3 the comparison could not be completed.",
     "cardRegister": "tools/harness/cards.json - which of the three unmarked microSD cards is where, what is on each one, when it last moved and what must not be disturbed. Read it before touching a card, and read it rather than trusting this sentence: one of the three carries the only running v1 system, and reference/v1-state-inventory.txt was captured from the machine that booted it. A full byte-for-byte image of that card was taken on 2026-08-23 and is recorded in the register as image 'v1-card-2026-08-23', so it is no longer irrecoverable - but the register also records that the image exists in exactly one place, which is a copy and not yet a backup. The register's own `handling` text is the current answer and this one is not. `fl.py cards check` reads whatever is in the workstation's reader and compares it against what the register claims is in there - exit 2 means they disagree and the register is not to be trusted until someone finds out which of the two is wrong.",
     "reasoningRecord": "git log - every commit message carries why, not what. `git log --oneline` is the cheapest orientation available and the only place some findings exist at all (the debugfs-exits-0-on-failure trap is ba5a873; the StartLimitIntervalSec section trap is bebf34c).",
-    "repoRules": "CLAUDE.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
+    "repoRules": "AGENTS.md - binding operational rules. Section 1.2 on credentials is absolute, section 1.8 requires explicit per-class authorisation before any mutation of the mule.",
     "harness": "tools/harness/fl.py - this harness. `--help` on any subcommand explains what it does and what it refuses to do; flh/config.py holds every host, path and default in one place.",
     "openItems": "TODO.md is v1's outstanding work and is gitignored; version2.md Appendix B holds v2's open items."
   },
@@ -379,7 +379,7 @@
         "howToObtain": "Ask the user. An instance started without it still runs and serves a setup page naming the variable, and answers connecting frames 'not-configured'."
       }
     ],
-    "credentialRule": "CLAUDE.md section 1.2, absolute: supplied in-session by environment variable only. Never a file, a log, a shell history, a config, a keychain or a default. Never echoed, never summarised back, never written into this file.",
+    "credentialRule": "AGENTS.md section 1.2, absolute: supplied in-session by environment variable only. Never a file, a log, a shell history, a config, a keychain or a default. Never echoed, never summarised back, never written into this file.",
     "measurements": {
       "rebootToSshReadySeconds": 22.3,
       "rebootMeasurement": "Measured twice on the mule 2026-08-15 with loss of tcp/22 confirmed in between. Every wait ceiling in the harness is a margin over this number, not an estimate of it - power.on(wait_s=120) is roughly five boots.",

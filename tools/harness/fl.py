@@ -27,7 +27,7 @@ has lost its context finds out where the build stands.
 Credentials
 -----------
 The mule password comes from ``FL_PW`` and nowhere else - never a file, a log, a shell
-history, a config or a default (CLAUDE.md section 1.2), and there is deliberately no key-based
+history, a config or a default (AGENTS.md section 1.2), and there is deliberately no key-based
 fallback. Every mule-touching subcommand fails in its first second with a named error when
 ``FL_PW`` is absent, rather than hanging on a prompt or quietly authenticating as someone
 else. ``FL_HA_TOKEN`` is held to the same rule.

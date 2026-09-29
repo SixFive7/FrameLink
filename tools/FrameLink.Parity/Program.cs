@@ -9,7 +9,7 @@ namespace FrameLink.Parity;
 /// <remarks>
 /// <para>
 /// <b>Nothing here touches a frame.</b> Reaching the frame is <c>tools/harness/fl.py parity</c>'s
-/// job, over paramiko, per CLAUDE.md §1.3 — this reads an observation somebody already collected
+/// job, over paramiko, per AGENTS.md §1.3 — this reads an observation somebody already collected
 /// and says what it means. The split is what lets the entire verdict path run inside the ordinary
 /// test suite with no hardware, and it is the same split
 /// <c>tools/FrameLink.Upstream</c> uses for the same reason.

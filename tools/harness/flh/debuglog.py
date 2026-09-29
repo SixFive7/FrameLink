@@ -39,7 +39,7 @@ Three properties, and each one is a reaction to a measured failure
    before it is written. The harness already keeps the password off command lines entirely
    (it goes on ``sudo``'s stdin — see :mod:`flh.ssh`), so this is a second net under a
    design that should never drop anything into it, and it is cheap enough to be
-   unconditional. CLAUDE.md section 1.2 is absolute and a debug facility is exactly the
+   unconditional. AGENTS.md section 1.2 is absolute and a debug facility is exactly the
    kind of thing that quietly violates it.
 
 What it captures

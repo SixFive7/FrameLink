@@ -25,7 +25,7 @@ Module map
 :mod:`flh.ui`        console output
 :mod:`flh.xvf`       the bench measurement of the XVF3800 amplifier pin (open question 13)
 
-Everything that touches the mule is Python with paramiko, per CLAUDE.md section 1.3. The
+Everything that touches the mule is Python with paramiko, per AGENTS.md section 1.3. The
 non-mule parts are Python too, for one reason worth stating: the progress file is written
 by every subcommand, so a second language would mean a second implementation of the one
 artifact whose correctness the whole resume story depends on.
